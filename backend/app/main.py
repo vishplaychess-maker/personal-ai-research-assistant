@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from app.config import settings
 from app.database import init_db, SessionLocal
 from app.models.models import User
+from app.routes.sessions import router as sessions_router
+from app.routes.messages import router as messages_router
 
 
 @asynccontextmanager
@@ -42,9 +44,13 @@ def _create_default_user():
 
 app = FastAPI(
     title="Personal AI Research Assistant",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
+
+# ── Register routers ─────────────────────────────────────
+app.include_router(sessions_router)
+app.include_router(messages_router)
 
 
 @app.get("/api/health")
