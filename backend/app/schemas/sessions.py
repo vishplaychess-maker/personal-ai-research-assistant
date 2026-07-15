@@ -25,31 +25,4 @@ class SessionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Message schemas ────────────────────────────────────────
 
-
-class MessageCreate(BaseModel):
-    role: str = Field(default="user", pattern="^(user|assistant|system)$")
-    content: str = Field(..., min_length=1)
-
-
-class MessageResponse(BaseModel):
-    id: int
-    session_id: int
-    role: str
-    content: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-# ── Chat request / response ────────────────────────────────
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=10000)
-
-
-class ChatResponse(BaseModel):
-    user_message: MessageResponse
-    assistant_message: MessageResponse

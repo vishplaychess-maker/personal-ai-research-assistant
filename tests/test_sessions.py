@@ -244,39 +244,50 @@ def test_sessions_ordered_by_updated_at_desc():
 # ── Mock Ollama test ───────────────────────────────────────
 
 
-def test_send_message_with_mocked_ollama(monkeypatch):
+def test_send_message_with_mocked_ollama():
     """
     Mock the Ollama generate_response function to return a deterministic
     response, verifying the full LangGraph pipeline produces correct output.
 
+    Uses TestClient (in-process) and direct setattr (which is more reliable
+    than monkeypatch.setattr when TestClient is involved in the same process).
+
     This test does NOT require Ollama to be running.
     """
-    # Patch at the point of use — langgraph_workflow keeps its own reference
-    # via `from app.services.ollama_client import generate_response`.
-    # We patch the workflow module so the mock actually intercepts calls.
+    from fastapi.testclient import TestClient
+    from app.main import app
     import app.services.langgraph_workflow as workflow
+
+    original = workflow.generate_response
 
     def mock_generate_response(messages, system_prompt=None):
         return "This is a mocked response from Ollama."
 
-    monkeypatch.setattr(workflow, "generate_response", mock_generate_response)
+    try:
+        workflow.generate_response = mock_generate_response
 
-    with client() as c:
-        session = c.post("/api/sessions", json={"title": "Mock Test"}).json()
-        sid = session["id"]
+        with TestClient(app) as c:
+            # Create session via TestClient
+            resp = c.post("/api/sessions", json={"title": "Mock Test"})
+            assert resp.status_code == 201
+            session = resp.json()
+            sid = session["id"]
 
-        resp = c.post(
-            f"/api/sessions/{sid}/messages",
-            json={"message": "This is a test message"},
-        )
+            # Send message — the mock should intercept the Ollama call
+            resp = c.post(
+                f"/api/sessions/{sid}/messages",
+                json={"message": "This is a test message"},
+            )
 
-    assert resp.status_code == 200
-    data = resp.json()
+        assert resp.status_code == 200
+        data = resp.json()
 
-    # User message is correct
-    assert data["user_message"]["role"] == "user"
-    assert data["user_message"]["content"] == "This is a test message"
+        # User message is correct
+        assert data["user_message"]["role"] == "user"
+        assert data["user_message"]["content"] == "This is a test message"
 
-    # Assistant message matches our mock
-    assert data["assistant_message"]["role"] == "assistant"
-    assert data["assistant_message"]["content"] == "This is a mocked response from Ollama."
+        # Assistant message matches our mock
+        assert data["assistant_message"]["role"] == "assistant"
+        assert data["assistant_message"]["content"] == "This is a mocked response from Ollama."
+    finally:
+        workflow.generate_response = original

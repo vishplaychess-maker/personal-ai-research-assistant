@@ -2,9 +2,14 @@ from app.schemas.sessions import (
     SessionCreate,
     SessionUpdate,
     SessionResponse,
-    MessageCreate,
+)
+
+from app.schemas.documents import (
+    Citation,
+    DocumentResponse,
+    DocumentListResponse,
+    UploadResponse,
     MessageResponse,
-    ChatRequest,
     ChatResponse,
 )
 
@@ -16,4 +21,8 @@ __all__ = [
     "MessageResponse",
     "ChatRequest",
     "ChatResponse",
+    "Citation",
+    "DocumentResponse",
+    "DocumentListResponse",
+    "UploadResponse",
 ]

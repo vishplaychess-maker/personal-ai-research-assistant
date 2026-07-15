@@ -20,6 +20,12 @@ class MemoryType(str, enum.Enum):
     fact = "fact"
 
 
+class DocumentStatus(str, enum.Enum):
+    processing = "processing"
+    ready = "ready"
+    failed = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -70,6 +76,7 @@ class Message(Base):
     session_id = Column(Integer, ForeignKey("research_sessions.id"), nullable=False)
     role = Column(SAEnum(MessageRole), nullable=False)
     content = Column(Text, nullable=False)
+    citations = Column(Text, nullable=True)  # JSON-serialized list of citation dicts
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     session = relationship("ResearchSession", back_populates="messages")
@@ -86,13 +93,17 @@ class Document(Base):
     filename = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=True)
     file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=True)  # bytes
+    status = Column(String(20), nullable=False, default=DocumentStatus.processing.value)
+    chunk_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     session = relationship("ResearchSession", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Document(id={self.id}, filename='{self.filename}')>"
+        return f"<Document(id={self.id}, filename='{self.filename}', status='{self.status}')>"
 
 
 class DocumentChunk(Base):
@@ -102,7 +113,9 @@ class DocumentChunk(Base):
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
+    page_number = Column(Integer, nullable=True)
     embedding = Column(Text, nullable=True)  # JSON-serialized vector placeholder
+    chroma_id = Column(String(100), nullable=True, index=True)  # ID in ChromaDB collection
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     document = relationship("Document", back_populates="chunks")

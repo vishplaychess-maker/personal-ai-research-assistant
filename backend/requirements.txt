@@ -8,3 +8,7 @@ chromadb==1.5.9
 langgraph==0.3.2
 langgraph-checkpoint==2.0.16
 langchain-core==0.3.41
+pypdf==5.4.0
+python-multipart==0.0.20
+reportlab==4.3.1
+

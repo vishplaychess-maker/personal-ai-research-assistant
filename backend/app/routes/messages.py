@@ -5,8 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Message, ResearchSession, MessageRole
-from app.schemas.sessions import (
-    MessageCreate,
+from app.schemas.documents import (
     MessageResponse,
     ChatRequest,
     ChatResponse,
@@ -36,7 +35,7 @@ def list_messages(session_id: int, db: Session = Depends(get_db)):
         .order_by(Message.created_at.asc())
         .all()
     )
-    return messages
+    return [MessageResponse.model_validate(m) for m in messages]
 
 
 @router.post(
@@ -52,8 +51,8 @@ def create_message(
     Send a user message and get an AI response via the LangGraph workflow.
 
     1. Saves the user message
-    2. Runs the research workflow (load_context → generate_answer → save_output)
-    3. Returns both messages
+    2. Runs the research workflow (load_context → retrieve_context → generate_answer → save_output)
+    3. Returns both messages with citations if documents were used
     """
     session = _get_session_or_404(db, session_id)
 
@@ -85,15 +84,16 @@ def create_message(
         db.commit()
         db.refresh(assistant_msg)
     else:
-        # 3. Save assistant response (saved inside the workflow)
+        # Assistant message saved inside the workflow
         assistant_msg = result["assistant_message"]
 
     # Update session timestamp
-    from datetime import datetime
-    session.updated_at = datetime.utcnow()
+    session.updated_at = __import__("datetime").datetime.utcnow()
     db.commit()
 
     return ChatResponse(
         user_message=MessageResponse.model_validate(user_msg),
         assistant_message=MessageResponse.model_validate(assistant_msg),
+        citations=result.get("citations", []),
+        sources_used=result.get("sources_used", False),
     )
