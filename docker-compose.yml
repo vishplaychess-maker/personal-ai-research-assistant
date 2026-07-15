@@ -1,0 +1,63 @@
+services:
+  # ── ChromaDB (vector database, internal only) ─────────────
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    container_name: research-assistant-chromadb
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - research-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r = urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat'); assert r.status == 200, f'unexpected status {r.status}'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI backend ─────────────────────────────────────
+  backend:
+    build: ./backend
+    container_name: research-assistant-backend
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - app_data:/data
+    environment:
+      - DATABASE_URL=sqlite:////data/app.db
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_PORT=11434
+    depends_on:
+      chromadb:
+        condition: service_started
+    networks:
+      - research-network
+    restart: unless-stopped
+
+  # ── React frontend (Vite dev server) ────────────────────
+  frontend:
+    build: ./frontend
+    container_name: research-assistant-frontend
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - research-network
+    restart: unless-stopped
+
+networks:
+  research-network:
+    driver: bridge
+
+volumes:
+  app_data:
+  chromadb_data:
