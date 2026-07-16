@@ -690,6 +690,73 @@
 
 .typing-text { font-size: 0.75rem; color: var(--text-secondary); }
 
+/* ── Streaming Message ────────────────────────────────── */
+.message-bubble.streaming {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.15);
+  animation: streamPulse 2s ease-in-out infinite;
+}
+
+@keyframes streamPulse {
+  0%, 100% { border-color: var(--accent-blue); }
+  50% { border-color: rgba(59, 130, 246, 0.4); }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  animation: blink 0.8s step-end infinite;
+  color: var(--accent-blue);
+  font-weight: 300;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+.streaming-badge {
+  font-size: 0.6rem; color: var(--accent-blue); font-weight: 600;
+  background: rgba(59, 130, 246, 0.08);
+  padding: 1px 6px; border-radius: 3px;
+}
+
+/* ── Stop Button ───────────────────────────────────────── */
+.stop-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.3rem;
+  padding: 0 1rem; height: 44px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-md);
+  color: #fca5a5; font-size: 0.8rem; font-weight: 600;
+  cursor: pointer; transition: all var(--transition); flex-shrink: 0;
+  white-space: nowrap;
+}
+.stop-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.streaming-hint {
+  font-size: 0.62rem; color: var(--text-secondary); opacity: 0.6;
+  text-align: center; padding: 0.25rem 0 0;
+}
+
+.streaming-text {
+  white-space: pre-wrap;
+}
+
+/* ── Generation Stopped Indicator ──────────────────────── */
+.generation-stopped {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary); font-size: 0.72rem;
+  align-self: center;
+  animation: fadeIn 0.2s ease;
+}
+
 /* ── Error Banner ──────────────────────────────────────── */
 .error-message {
   display: flex; align-items: flex-start; gap: 0.5rem;

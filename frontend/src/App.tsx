@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useStreaming } from "./useStreaming";
 import "./App.css";
 
 // ── Types ─────────────────────────────────────────────────
@@ -218,6 +219,11 @@ function App() {
   // Health state
   const [health, setHealth] = useState<HealthStatus | null>(null);
 
+  // Streaming state
+  const { isStreaming, streamedContent, startStream, cancelStream } = useStreaming();
+  const [generationStopped, setGenerationStopped] = useState(false);
+  const streamingEndRef = useRef<HTMLDivElement>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -420,11 +426,11 @@ function App() {
     } catch { /* ignore */ }
   };
 
-  // ── Send message ───────────────────────────────────────
+  // ── Send message (streaming) ───────────────────────────
 
-  const handleSend = async () => {
+  const handleSend = () => {
     const text = input.trim();
-    if (!text || !activeSessionId || sending || togglePending) return;
+    if (!text || !activeSessionId || isStreaming || togglePending) return;
 
     setSending(true);
     setChatError(null);
@@ -439,32 +445,55 @@ function App() {
     setMessages((prev) => [...prev, tempUserMsg]);
     setInput("");
 
-    try {
-      const response = await API.sendMessage(activeSessionId, text);
-      setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== tempUserMsg.id);
-        return [...filtered, response.user_message, response.assistant_message];
-      });
-      if (response.sources_used) {
-        setSourcesUsedIds((prev) => new Set(prev).add(response.assistant_message.id));
-      }
-      if (response.memories_used) {
-        setMemoriesUsedIds((prev) => new Set(prev).add(response.assistant_message.id));
-      }
-      // Reload memories after message in case a new one was extracted
-      loadMemories();
-    } catch (err) {
-      setChatError(err instanceof Error ? err.message : "Failed to send message");
-      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
-    } finally {
-      setSending(false);
-    }
+    startStream(activeSessionId, text, {
+      onStart: () => {
+        setGenerationStopped(false);
+      },
+      onToken: (_token: string) => {
+        // Content updated via streamedContent state in the hook
+      },
+      onComplete: (result) => {
+        setGenerationStopped(false);
+        // Set badges from the complete event metadata
+        if (result.sourcesUsed && result.messageId) {
+          setSourcesUsedIds((prev) => new Set(prev).add(result.messageId));
+        }
+        if (result.memoriesUsed && result.messageId) {
+          setMemoriesUsedIds((prev) => new Set(prev).add(result.messageId));
+        }
+        // Refresh messages from server to get proper persisted IDs
+        loadMessages(activeSessionId);
+        loadMemories();
+        setSending(false);
+      },
+      onError: (error) => {
+        setChatError(error.detail || "Failed to send message");
+        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+        setSending(false);
+        setGenerationStopped(false);
+      },
+      onCancelled: () => {
+        // Remove the temp user message — backend did not persist anything
+        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+        setSending(false);
+        setGenerationStopped(true);
+        // Auto-dismiss the stopped message after 3 seconds
+        setTimeout(() => setGenerationStopped(false), 3000);
+      },
+    });
   };
 
   // Scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Scroll during streaming (when new tokens arrive)
+  useEffect(() => {
+    if (isStreaming && streamedContent) {
+      streamingEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [streamedContent, isStreaming]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -880,12 +909,25 @@ function App() {
                 ))
               )}
 
-              {sending && (
-                <div className="typing-indicator">
-                  <div className="typing-dots">
-                    <div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" />
+              {isStreaming && (
+                <div className="message-wrapper assistant">
+                  <div className="message-bubble streaming">
+                    <div className="message-content streaming-text">
+                      {streamedContent ? (
+                        <>{streamedContent}<span className="streaming-cursor">▊</span></>
+                      ) : (
+                        <span className="streaming-cursor">▊</span>
+                      )}
+                    </div>
+                    <div className="message-time">
+                      <span className="streaming-badge">⏳ Generating…</span>
+                    </div>
                   </div>
-                  <span className="typing-text">AI is thinking…</span>
+                </div>
+              )}
+              {generationStopped && (
+                <div className="generation-stopped">
+                  ⏹ Generation stopped — partial response was not saved
                 </div>
               )}
 
@@ -897,6 +939,7 @@ function App() {
               )}
 
               <div ref={messagesEndRef} />
+              <div ref={streamingEndRef} />
             </div>
 
             {/* Input */}
@@ -905,17 +948,28 @@ function App() {
                 <textarea
                   ref={inputRef}
                   className="input-field"
-                  placeholder={sending ? "Waiting for response…" : "Type your message…"}
+                  placeholder={isStreaming ? "Generating response…" : "Type your message…"}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  disabled={sending}
+                  disabled={isStreaming}
                   rows={1}
                 />
-                <button className="send-btn" onClick={handleSend} disabled={!input.trim() || sending} title="Send message">
-                  {sending ? "…" : "➤"}
-                </button>
+                {isStreaming ? (
+                  <button className="stop-btn" onClick={cancelStream} title="Stop generation">
+                    ⏹ Stop
+                  </button>
+                ) : (
+                  <button className="send-btn" onClick={handleSend} disabled={!input.trim() || isStreaming} title="Send message">
+                    ➤
+                  </button>
+                )}
               </div>
+              {isStreaming && (
+                <div className="streaming-hint">
+                  Click Stop to cancel — partial response will not be saved
+                </div>
+              )}
             </div>
           </>
         )}
