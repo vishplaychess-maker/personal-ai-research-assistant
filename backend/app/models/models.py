@@ -14,10 +14,24 @@ class MessageRole(str, enum.Enum):
     system = "system"
 
 
-class MemoryType(str, enum.Enum):
-    tag = "tag"
-    note = "note"
+class MemoryCategory(str, enum.Enum):
     fact = "fact"
+    preference = "preference"
+    research_interest = "research_interest"
+    project_context = "project_context"
+
+
+class AppSetting(Base):
+    """Persistent key-value settings stored in SQLite."""
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(String(500), nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<AppSetting(key='{self.key}', value='{self.value}')>"
 
 
 class DocumentStatus(str, enum.Enum):
@@ -129,11 +143,13 @@ class Memory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("research_sessions.id"), nullable=True, index=True)
     content = Column(Text, nullable=False)
-    type = Column(SAEnum(MemoryType), nullable=False, default=MemoryType.note)
+    category = Column(String(30), nullable=False, default=MemoryCategory.fact.value)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="memories")
 
     def __repr__(self):
-        return f"<Memory(id={self.id}, type='{self.type}')>"
+        return f"<Memory(id={self.id}, category='{self.category}')>"

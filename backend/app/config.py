@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     upload_dir: str = "/data/uploads"
     data_dir: str = "/data"
 
+    # ── Memory settings ─────────────────────────────────
+    enable_memory: bool = True
+    memory_max_results: int = 5
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

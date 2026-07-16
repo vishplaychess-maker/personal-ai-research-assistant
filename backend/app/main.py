@@ -11,6 +11,8 @@ from app.models.models import User
 from app.routes.sessions import router as sessions_router
 from app.routes.messages import router as messages_router
 from app.routes.documents import router as documents_router
+from app.routes.memories import router as memories_router
+from app.routes.settings import router as settings_router
 
 
 def _migrate_database():
@@ -39,6 +41,33 @@ def _migrate_database():
         existing_msg_cols = {c["name"] for c in inspector.get_columns("messages")}
         if "citations" not in existing_msg_cols:
             conn.execute(sa_text("ALTER TABLE messages ADD COLUMN citations TEXT"))
+
+        # Migrate memories table columns
+        existing_mem_cols = {c["name"] for c in inspector.get_columns("memories")}
+        if "session_id" not in existing_mem_cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN session_id INTEGER REFERENCES research_sessions(id)"))
+        if "category" not in existing_mem_cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN category VARCHAR(30) NOT NULL DEFAULT 'fact'"))
+        if "last_used_at" not in existing_mem_cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN last_used_at TIMESTAMP"))
+        # Update existing memories' last_used_at
+        conn.execute(sa_text("UPDATE memories SET last_used_at = created_at WHERE last_used_at IS NULL"))
+        # Refresh column info after ALTER TABLE ADD COLUMN
+        existing_mem_cols = {c["name"] for c in inspector.get_columns("memories")}
+        # Migrate old 'type' column → new 'category' column
+        if "type" in existing_mem_cols and "category" in existing_mem_cols:
+            # Copy existing type values to category where possible
+            try:
+                conn.execute(sa_text(
+                    "UPDATE memories SET category = 'fact' WHERE type IN ('fact', 'note', 'tag')"
+                ))
+            except Exception:
+                pass
+            # Drop the old type column (SQLite 3.35.0+ supports this)
+            try:
+                conn.execute(sa_text("ALTER TABLE memories DROP COLUMN type"))
+            except Exception:
+                pass  # If drop fails, column remains but won't be used
 
         conn.commit()
 
@@ -85,6 +114,8 @@ app = FastAPI(
 app.include_router(sessions_router)
 app.include_router(messages_router)
 app.include_router(documents_router)
+app.include_router(memories_router)
+app.include_router(settings_router)
 
 
 @app.get("/api/health")

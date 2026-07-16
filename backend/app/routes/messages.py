@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from app.schemas.documents import (
     MessageResponse,
     ChatRequest,
     ChatResponse,
+    MemoryExtractionStatus,
 )
 from app.services.langgraph_workflow import run_research_workflow
 
@@ -84,16 +85,39 @@ def create_message(
         db.commit()
         db.refresh(assistant_msg)
     else:
-        # Assistant message saved inside the workflow
-        assistant_msg = result["assistant_message"]
+        # Assistant message was saved inside the workflow. The workflow
+        # returns the message ID to avoid ORM session-detach issues
+        # caused by subsequent db.commit() calls in the extract_memory node.
+        assistant_msg_id = result.get("assistant_message_id")
+        if assistant_msg_id is None:
+            raise HTTPException(status_code=500, detail="Workflow did not produce an assistant message")
+        assistant_msg = db.query(Message).filter(Message.id == assistant_msg_id).first()
+        if assistant_msg is None:
+            raise HTTPException(status_code=500, detail=f"Assistant message {assistant_msg_id} not found after workflow")
 
-    # Update session timestamp
+    # Refresh the session object (may have been expired by workflow commits)
+    # before updating its timestamp, then commit.
+    db.refresh(session)
     session.updated_at = __import__("datetime").datetime.utcnow()
     db.commit()
+
+    # Build extraction status if the workflow ran memory extraction
+    extract_raw = result.get("extraction_result")
+    extraction_status: Optional[MemoryExtractionStatus] = None
+    if extract_raw is not None:
+        extraction_status = MemoryExtractionStatus(
+            saved=extract_raw.get("saved", False),
+            memory_id=extract_raw.get("memory_id"),
+            reason=extract_raw.get("reason", "unknown"),
+            content=extract_raw.get("content"),
+            category=extract_raw.get("category"),
+        )
 
     return ChatResponse(
         user_message=MessageResponse.model_validate(user_msg),
         assistant_message=MessageResponse.model_validate(assistant_msg),
         citations=result.get("citations", []),
         sources_used=result.get("sources_used", False),
+        memories_used=result.get("memories_used", False),
+        memory_extraction=extraction_status,
     )

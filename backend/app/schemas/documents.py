@@ -65,8 +65,29 @@ class MessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MemoryExtractionStatus(BaseModel):
+    """
+    Outcome of the automatic memory extraction step.
+
+    Fields:
+        saved:      Whether a memory was actually persisted.
+        memory_id:  The database ID of the saved memory (None if nothing saved).
+        reason:     Coded reason string (e.g. "saved", "nothing_to_save",
+                    "ollama_unavailable", "disabled", "sensitive_input").
+        content:    The extracted memory content (None if nothing extracted).
+        category:   The extracted memory category (None if nothing extracted).
+    """
+    saved: bool = False
+    memory_id: Optional[int] = None
+    reason: str = "nothing_to_save"
+    content: Optional[str] = None
+    category: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     user_message: MessageResponse
     assistant_message: MessageResponse
     citations: List[Citation] = Field(default_factory=list)
     sources_used: bool = False  # Whether retrieved documents were included
+    memories_used: bool = False  # Whether saved memories were included
+    memory_extraction: Optional[MemoryExtractionStatus] = None  # Memory extraction outcome

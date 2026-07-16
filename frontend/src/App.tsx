@@ -40,6 +40,7 @@ interface ChatResponse {
   assistant_message: Message;
   citations: Citation[];
   sources_used: boolean;
+  memories_used: boolean;
 }
 
 interface Document {
@@ -52,6 +53,16 @@ interface Document {
   chunk_count: number;
   error_message: string | null;
   created_at: string;
+}
+
+interface Memory {
+  id: number;
+  user_id: number;
+  session_id: number | null;
+  content: string;
+  category: string;
+  created_at: string;
+  last_used_at: string;
 }
 
 // ── API helper ────────────────────────────────────────────
@@ -69,8 +80,8 @@ const API = {
         const detail = await res.json().catch(() => ({ detail: "Not found" }));
         throw new Error(detail.detail || "Not found");
       }
-      const text = await res.text().catch(() => "Unknown error");
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+      const detail = await res.json().catch(() => ({ detail: "Unknown error" }));
+      throw new Error(detail.detail || `HTTP ${res.status}`);
     }
     if (res.status === 204) return undefined as T;
     return res.json();
@@ -96,6 +107,19 @@ const API = {
     return this.request<{ document: Document; message: string }>(`/api/sessions/${sessionId}/documents`, { method: "POST", body: form });
   },
   deleteDocument(id: number) { return this.request<void>(`/api/documents/${id}`, { method: "DELETE" }); },
+  listMemories() { return this.request<Memory[]>("/api/memories"); },
+  createMemory(content: string, category: string) {
+    return this.request<Memory>("/api/memories", { method: "POST", body: JSON.stringify({ content, category }) });
+  },
+  updateMemory(id: number, content: string, category: string) {
+    return this.request<Memory>(`/api/memories/${id}`, { method: "PATCH", body: JSON.stringify({ content, category }) });
+  },
+  deleteMemory(id: number) { return this.request<void>(`/api/memories/${id}`, { method: "DELETE" }); },
+  clearAllMemories() { return this.request<void>("/api/memories", { method: "DELETE", body: JSON.stringify({ confirm: true }) }); },
+  getMemorySetting() { return this.request<{ enabled: boolean }>("/api/settings/memory"); },
+  setMemorySetting(enabled: boolean) {
+    return this.request<{ enabled: boolean }>("/api/settings/memory", { method: "PATCH", body: JSON.stringify({ enabled }) });
+  },
 };
 
 // ── Helpers ───────────────────────────────────────────────
@@ -161,7 +185,10 @@ function App() {
 
   // Citation popup state
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
-  const [sourcesUsed, setSourcesUsed] = useState(false);
+
+  // Per-message flags: which message IDs have sources/memories associated
+  const [sourcesUsedIds, setSourcesUsedIds] = useState<Set<number>>(new Set());
+  const [memoriesUsedIds, setMemoriesUsedIds] = useState<Set<number>>(new Set());
 
   // Rename state
   const [renamingId, setRenamingId] = useState<number | null>(null);
@@ -172,6 +199,21 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showDocs, setShowDocs] = useState(false);
+
+  // Memory state
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [showMemories, setShowMemories] = useState(false);
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
+  const [memorySettingLoaded, setMemorySettingLoaded] = useState(false);
+  const [togglePending, setTogglePending] = useState(false);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
+  const [addingMemory, setAddingMemory] = useState(false);
+  const [newMemoryContent, setNewMemoryContent] = useState("");
+  const [newMemoryCategory, setNewMemoryCategory] = useState("fact");
+  const [editingMemoryId, setEditingMemoryId] = useState<number | null>(null);
+  const [editMemoryContent, setEditMemoryContent] = useState("");
+  const [editMemoryCategory, setEditMemoryCategory] = useState("fact");
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Health state
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -210,6 +252,8 @@ function App() {
       setMessages([]);
       setChatError(null);
       setDocuments([]);
+      setSourcesUsedIds(new Set());
+      setMemoriesUsedIds(new Set());
     } catch { /* ignore */ }
   };
 
@@ -241,6 +285,26 @@ function App() {
     try { setDocuments(await API.listDocuments(sessionId)); } catch { /* ignore */ }
   }, []);
 
+  // ── Memory loading ─────────────────────────────────────
+
+  const loadMemories = useCallback(async () => {
+    try { setMemories(await API.listMemories()); } catch { /* ignore */ }
+  }, []);
+
+  // ── Load memory setting from backend on mount ─────────
+  useEffect(() => {
+    API.getMemorySetting()
+      .then((r) => {
+        setMemoryEnabled(r.enabled);
+      })
+      .catch(() => {
+        /* backend might not be ready yet */
+      })
+      .finally(() => {
+        setMemorySettingLoaded(true);
+      });
+  }, []);
+
   // ── Message loading ────────────────────────────────────
 
   const loadMessages = useCallback(async (sessionId: number) => {
@@ -256,7 +320,8 @@ function App() {
     setChatError(null);
     loadMessages(id);
     loadDocuments(id);
-    setSourcesUsed(false);
+    setSourcesUsedIds(new Set());
+    setMemoriesUsedIds(new Set());
   };
 
   // ── Document upload ────────────────────────────────────
@@ -267,7 +332,7 @@ function App() {
     setUploading(true);
     setUploadError(null);
     try {
-      const result = await API.uploadDocument(activeSessionId, file);
+      await API.uploadDocument(activeSessionId, file);
       loadDocuments(activeSessionId);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -293,11 +358,73 @@ function App() {
     return () => clearInterval(id);
   }, [activeSessionId, documents]);
 
+  // ── Memory CRUD ────────────────────────────────────────
+
+  // Toggle memory on/off — persists to backend immediately
+  const handleToggleMemory = async () => {
+    const newValue = !memoryEnabled;
+    setTogglePending(true);
+    try {
+      const result = await API.setMemorySetting(newValue);
+      setMemoryEnabled(result.enabled);
+      // When disabling memory, clear any stale memory badges
+      if (!result.enabled) {
+        setMemoriesUsedIds(new Set());
+      }
+    } catch {
+      setMemoryError("Failed to update memory setting — toggle was not saved");
+    } finally {
+      setTogglePending(false);
+    }
+  };
+
+  const handleAddMemory = async () => {
+    const text = newMemoryContent.trim();
+    if (!text) return;
+    try {
+      await API.createMemory(text, newMemoryCategory);
+      setNewMemoryContent("");
+      setAddingMemory(false);
+      loadMemories();
+      setMemoryError(null);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Failed to add memory");
+    }
+  };
+
+  const handleEditMemory = async (id: number) => {
+    const text = editMemoryContent.trim();
+    if (!text) return;
+    try {
+      await API.updateMemory(id, text, editMemoryCategory);
+      setEditingMemoryId(null);
+      loadMemories();
+      setMemoryError(null);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Failed to update memory");
+    }
+  };
+
+  const handleDeleteMemory = async (id: number) => {
+    try {
+      await API.deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } catch { /* ignore */ }
+  };
+
+  const handleClearAllMemories = async () => {
+    try {
+      await API.clearAllMemories();
+      setMemories([]);
+      setShowClearConfirm(false);
+    } catch { /* ignore */ }
+  };
+
   // ── Send message ───────────────────────────────────────
 
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || !activeSessionId || sending) return;
+    if (!text || !activeSessionId || sending || togglePending) return;
 
     setSending(true);
     setChatError(null);
@@ -318,7 +445,14 @@ function App() {
         const filtered = prev.filter((m) => m.id !== tempUserMsg.id);
         return [...filtered, response.user_message, response.assistant_message];
       });
-      setSourcesUsed(response.sources_used);
+      if (response.sources_used) {
+        setSourcesUsedIds((prev) => new Set(prev).add(response.assistant_message.id));
+      }
+      if (response.memories_used) {
+        setMemoriesUsedIds((prev) => new Set(prev).add(response.assistant_message.id));
+      }
+      // Reload memories after message in case a new one was extracted
+      loadMemories();
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "Failed to send message");
       setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
@@ -347,14 +481,13 @@ function App() {
   // Process message content to render citations as clickable
   const renderContent = (msg: Message) => {
     if (msg.role !== "assistant" || !msg.citations) {
-      return <div>{msg.content}</div>;
+      return <div className="message-content">{msg.content}</div>;
     }
 
     let parsedCitations: Citation[] = [];
-    try { parsedCitations = JSON.parse(msg.citations); } catch { return <div>{msg.content}</div>; }
-    if (!parsedCitations.length) return <div>{msg.content}</div>;
+    try { parsedCitations = JSON.parse(msg.citations); } catch { return <div className="message-content">{msg.content}</div>; }
+    if (!parsedCitations.length) return <div className="message-content">{msg.content}</div>;
 
-    // Split content by citation markers and build React fragments
     const parts: (string | { marker: string; citation: Citation })[] = [];
     const pattern = /\[(\d+)\]/g;
     let lastIndex = 0;
@@ -369,7 +502,6 @@ function App() {
       if (citation) {
         parts.push({ marker: match[0], citation });
       } else {
-        // Marker not in citations list — render as plain text
         parts.push(match[0]);
       }
       lastIndex = match.index + match[0].length;
@@ -380,7 +512,7 @@ function App() {
     }
 
     return (
-      <div>
+      <div className="message-content">
         {parts.map((part, i) => {
           if (typeof part === "string") {
             return <span key={i}>{part}</span>;
@@ -398,6 +530,22 @@ function App() {
         })}
       </div>
     );
+  };
+
+  // ── Category helpers ───────────────────────────────────
+
+  const categoryIcon: Record<string, string> = {
+    fact: "💡",
+    preference: "⭐",
+    research_interest: "🔬",
+    project_context: "📋",
+  };
+
+  const categoryLabel: Record<string, string> = {
+    fact: "Fact",
+    preference: "Preference",
+    research_interest: "Interest",
+    project_context: "Context",
   };
 
   // ── Derived state ──────────────────────────────────────
@@ -496,6 +644,27 @@ function App() {
               >
                 📄 {docCount > 0 && <span className="doc-count-badge">{docCount}</span>}
               </button>
+              <div className="mem-toggle-group">
+                <span className={`mem-status ${memorySettingLoaded ? (memoryEnabled ? "enabled" : "disabled") : "loading"}`}>
+                  {!memorySettingLoaded ? "⏳ Sync…" : memoryEnabled ? "🧠 On" : "🧠 Off"}
+                </span>
+                <button
+                  className="mem-power-btn"
+                  onClick={handleToggleMemory}
+                  disabled={togglePending || !memorySettingLoaded}
+                  title={!memorySettingLoaded ? "Loading…" : memoryEnabled ? "Disable memory" : "Enable memory"}
+                >
+                  {togglePending ? "⏳" : !memorySettingLoaded ? "⋯" : memoryEnabled ? "⏻" : "⏼"}
+                </button>
+                <button
+                  className={`mem-toggle-btn ${showMemories ? "active" : ""}`}
+                  onClick={() => { setShowMemories(!showMemories); loadMemories(); }}
+                  title="Open memory panel"
+                  disabled={!memorySettingLoaded || !memoryEnabled}
+                >
+                  📝 {memories.length > 0 && <span className="mem-count-badge">{memories.length}</span>}
+                </button>
+              </div>
             </div>
 
             {/* Document panel */}
@@ -559,6 +728,135 @@ function App() {
               </div>
             )}
 
+            {/* Memory panel */}
+            {showMemories && (
+              <div className="mem-panel">
+                <div className="mem-panel-header">
+              <span className="mem-panel-title">🧠 Long-Term Memory</span>
+              <span className="mem-panel-subtitle">{memories.length} saved · Stored locally in SQLite</span>
+              <span className={`mem-toggle-label ${memorySettingLoaded ? (memoryEnabled ? "enabled" : "disabled") : "loading"}`}>
+                {!memorySettingLoaded ? "⏳ Syncing…" : memoryEnabled ? "🟢 Memory enabled" : "🔴 Memory disabled"}
+              </span>
+                </div>
+
+                {memoryError && <div className="mem-error">{memoryError}</div>}
+
+                {/* Add memory form */}
+                {addingMemory ? (
+                  <div className="mem-add-form">
+                    <select
+                      className="mem-category-select"
+                      value={newMemoryCategory}
+                      onChange={(e) => setNewMemoryCategory(e.target.value)}
+                    >
+                      <option value="fact">💡 Fact</option>
+                      <option value="preference">⭐ Preference</option>
+                      <option value="research_interest">🔬 Research Interest</option>
+                      <option value="project_context">📋 Project Context</option>
+                    </select>
+                    <input
+                      className="mem-add-input"
+                      placeholder="What should I remember?"
+                      value={newMemoryContent}
+                      onChange={(e) => setNewMemoryContent(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAddMemory(); }
+                        if (e.key === "Escape") { setAddingMemory(false); setNewMemoryContent(""); }
+                      }}
+                      autoFocus
+                    />
+                    <div className="mem-add-actions">
+                      <button className="mem-save-btn" onClick={handleAddMemory}>Save</button>
+                      <button className="mem-cancel-btn" onClick={() => { setAddingMemory(false); setNewMemoryContent(""); }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mem-add-row">
+                    <button className="mem-add-btn" onClick={() => setAddingMemory(true)}>✚ Add Memory</button>
+                    {memories.length > 0 && (
+                      <>
+                        {showClearConfirm ? (
+                          <div className="mem-clear-confirm">
+                            <span>Clear all memories?</span>
+                            <button className="mem-confirm-yes" onClick={handleClearAllMemories}>Yes</button>
+                            <button className="mem-confirm-no" onClick={() => setShowClearConfirm(false)}>No</button>
+                          </div>
+                        ) : (
+                          <button className="mem-clear-btn" onClick={() => setShowClearConfirm(true)}>🗑 Clear All</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="mem-list">
+                  {memories.length === 0 ? (
+                    <div className="mem-empty">No saved memories yet. Memories are automatically saved when you share durable facts or preferences.</div>
+                  ) : memories.map((mem) => (
+                    <div key={mem.id} className="mem-item">
+                      {editingMemoryId === mem.id ? (
+                        <div className="mem-edit-form">
+                          <select
+                            className="mem-category-select"
+                            value={editMemoryCategory}
+                            onChange={(e) => setEditMemoryCategory(e.target.value)}
+                          >
+                            <option value="fact">💡 Fact</option>
+                            <option value="preference">⭐ Preference</option>
+                            <option value="research_interest">🔬 Research Interest</option>
+                            <option value="project_context">📋 Project Context</option>
+                          </select>
+                          <input
+                            className="mem-edit-input"
+                            value={editMemoryContent}
+                            onChange={(e) => setEditMemoryContent(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleEditMemory(mem.id); }
+                              if (e.key === "Escape") { setEditingMemoryId(null); }
+                            }}
+                            autoFocus
+                          />
+                          <div className="mem-edit-actions">
+                            <button className="mem-save-btn" onClick={() => handleEditMemory(mem.id)}>Save</button>
+                            <button className="mem-cancel-btn" onClick={() => setEditingMemoryId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mem-icon">{categoryIcon[mem.category] || "💡"}</div>
+                          <div className="mem-details">
+                            <span className="mem-content">{mem.content}</span>
+                            <span className="mem-meta">
+                              <span className={`mem-category-tag mem-cat-${mem.category}`}>
+                                {categoryLabel[mem.category] || mem.category}
+                              </span>
+                              <span> · Saved {formatDate(mem.created_at)}</span>
+                            </span>
+                          </div>
+                          <div className="mem-actions">
+                            <button
+                              className="mem-action-btn"
+                              title="Edit"
+                              onClick={() => {
+                                setEditingMemoryId(mem.id);
+                                setEditMemoryContent(mem.content);
+                                setEditMemoryCategory(mem.category);
+                              }}
+                            >✎</button>
+                            <button
+                              className="mem-action-btn delete"
+                              title="Delete"
+                              onClick={() => handleDeleteMemory(mem.id)}
+                            >✕</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Messages */}
             <div className="messages-container">
               {messages.length === 0 ? (
@@ -574,7 +872,8 @@ function App() {
                       {renderContent(msg)}
                       <div className="message-time">
                         {formatTime(msg.created_at)}
-                        {msg.role === "assistant" && sourcesUsed && <span className="rag-badge">📄 RAG</span>}
+                        {msg.role === "assistant" && sourcesUsedIds.has(msg.id) && <span className="badge rag-badge">📄 RAG</span>}
+                        {msg.role === "assistant" && memoriesUsedIds.has(msg.id) && <span className="badge mem-badge">🧠 Memory</span>}
                       </div>
                     </div>
                   </div>

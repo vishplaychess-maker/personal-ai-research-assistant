@@ -12,5 +12,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    // Force polling for file changes — required for Docker Desktop on Windows
+    // where OS-level file events don't propagate through bind mounts.
+    watch: {
+      usePolling: true,
+    },
   },
 });

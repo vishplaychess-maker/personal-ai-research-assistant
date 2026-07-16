@@ -5,8 +5,10 @@ from app.models.models import (
     Document,
     DocumentChunk,
     Memory,
+    AppSetting,
     MessageRole,
-    MemoryType,
+    MemoryCategory,
+    DocumentStatus,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "Memory",
+    "AppSetting",
     "MessageRole",
-    "MemoryType",
+    "MemoryCategory",
+    "DocumentStatus",
 ]

@@ -71,7 +71,6 @@ def generate_response(
         TimeoutError: If the generation times out.
         RuntimeError: If the API returns an error.
     """
-    # Build prompt from messages
     full_messages = list(messages)
     if system_prompt:
         full_messages.insert(0, {"role": "system", "content": system_prompt})
@@ -102,6 +101,57 @@ def generate_response(
         raise TimeoutError(
             "Ollama did not respond in time. The model might still be loading "
             "or the prompt was too long."
+        )
+
+    if resp.status_code != 200:
+        detail = resp.text[:200]
+        raise RuntimeError(f"Ollama returned HTTP {resp.status_code}: {detail}")
+
+    data = resp.json()
+    return data.get("response", "").strip()
+
+
+def generate_json_response(
+    messages: List[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+) -> str:
+    """
+    Call Ollama and request a JSON response.
+
+    Uses a lower temperature and explicit JSON formatting instruction.
+    Returns the raw response string (caller should parse as JSON).
+
+    Raises same exceptions as generate_response.
+    """
+    full_messages = list(messages)
+    if system_prompt:
+        full_messages.insert(0, {"role": "system", "content": system_prompt})
+
+    prompt = _build_prompt(full_messages)
+
+    request_body = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "num_predict": 512,
+            "temperature": 0.1,  # low temp for structured output
+        },
+    }
+
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(GENERATE_TIMEOUT, connect=CONNECT_TIMEOUT)
+        ) as client:
+            resp = client.post(OLLAMA_GENERATE_URL, json=request_body)
+    except httpx.ConnectError:
+        raise ConnectionError(
+            "Cannot connect to Ollama. Make sure Ollama is running on Windows "
+            "and llama3.2:3b is installed (`ollama pull llama3.2:3b`)."
+        )
+    except httpx.TimeoutException:
+        raise TimeoutError(
+            "Ollama did not respond in time."
         )
 
     if resp.status_code != 200:

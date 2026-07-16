@@ -11,6 +11,13 @@ from app.schemas.documents import (
     UploadResponse,
     MessageResponse,
     ChatResponse,
+    MemoryExtractionStatus,
+)
+
+from app.schemas.memories import (
+    MemoryCreate,
+    MemoryUpdate,
+    MemoryResponse,
 )
 
 __all__ = [
@@ -25,4 +32,8 @@ __all__ = [
     "DocumentResponse",
     "DocumentListResponse",
     "UploadResponse",
+    "MemoryCreate",
+    "MemoryUpdate",
+    "MemoryResponse",
+    "MemoryExtractionStatus",
 ]

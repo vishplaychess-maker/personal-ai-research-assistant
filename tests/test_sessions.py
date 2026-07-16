@@ -206,15 +206,21 @@ def test_messages_persist_across_requests():
     Messages survive across requests (no in-memory loss).
     This tests SQLite persistence.
     """
-    with client() as c:
+    # Use separate clients to avoid httpx connection-pool reuse after long requests
+    def _send(sid: int, msg: str):
+        with httpx.Client(base_url=BASE_URL, timeout=30.0) as c:
+            return c.post(f"/api/sessions/{sid}/messages", json={"message": msg})
+
+    with httpx.Client(base_url=BASE_URL, timeout=15.0) as c:
         session = c.post("/api/sessions", json={"title": "Persist Test"}).json()
         sid = session["id"]
 
-        # Send two messages
-        c.post(f"/api/sessions/{sid}/messages", json={"message": "Q1"})
-        c.post(f"/api/sessions/{sid}/messages", json={"message": "Q2"})
+    # Send two messages using separate clients
+    _send(sid, "Q1")
+    _send(sid, "Q2")
 
-        # Fetch all messages
+    # Fetch all messages
+    with httpx.Client(base_url=BASE_URL, timeout=15.0) as c:
         resp = c.get(f"/api/sessions/{sid}/messages")
     data = resp.json()
     assert len(data) >= 4  # 2 user + 2 assistant
