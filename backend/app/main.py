@@ -13,6 +13,7 @@ from app.routes.messages import router as messages_router
 from app.routes.documents import router as documents_router
 from app.routes.memories import router as memories_router
 from app.routes.settings import router as settings_router
+from app.routes.models import router as models_router
 
 
 def _migrate_database():
@@ -69,6 +70,13 @@ def _migrate_database():
             except Exception:
                 pass  # If drop fails, column remains but won't be used
 
+        # Add Phase 5B columns: model and system_prompt
+        existing_sess_cols = {c["name"] for c in inspector.get_columns("research_sessions")}
+        if "model" not in existing_sess_cols:
+            conn.execute(sa_text("ALTER TABLE research_sessions ADD COLUMN model VARCHAR(100)"))
+        if "system_prompt" not in existing_sess_cols:
+            conn.execute(sa_text("ALTER TABLE research_sessions ADD COLUMN system_prompt TEXT"))
+
         conn.commit()
 
 
@@ -116,6 +124,7 @@ app.include_router(messages_router)
 app.include_router(documents_router)
 app.include_router(memories_router)
 app.include_router(settings_router)
+app.include_router(models_router)
 
 
 @app.get("/api/health")

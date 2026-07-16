@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     enable_memory: bool = True
     memory_max_results: int = 5
 
+    # ── Model settings ──────────────────────────────────
+    default_model: str = "llama3.2:3b"
+    ollama_tags_timeout: int = 5
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

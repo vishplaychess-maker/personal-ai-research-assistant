@@ -269,7 +269,7 @@ def test_send_message_with_mocked_ollama():
 
     original = workflow.generate_response
 
-    def mock_generate_response(messages, system_prompt=None):
+    def mock_generate_response(messages, system_prompt=None, **kwargs):
         return "This is a mocked response from Ollama."
 
     try:

@@ -58,6 +58,8 @@ class WorkflowState(TypedDict):
     extraction_result: Optional[Dict[str, Any]]  # Latest memory extraction outcome
     error: Optional[str]
     db: Optional[Any]
+    model_name: Optional[str]  # Per-session model name (None = use config default)
+    system_prompt: Optional[str]  # Per-session system prompt (None = use default)
 
 
 # ── Node: load_context ─────────────────────────────────────
@@ -66,7 +68,10 @@ MAX_HISTORY_MESSAGES = 20
 
 
 def load_context(state: WorkflowState) -> WorkflowState:
-    """Load the session and its recent messages from SQLite."""
+    """Load the session and its recent messages from SQLite.
+
+    Also loads the per-session model name and system prompt.
+    """
     db: DBSession = state["db"]
     session_id = state["session_id"]
 
@@ -76,6 +81,10 @@ def load_context(state: WorkflowState) -> WorkflowState:
     ).first()
     if not session:
         return {**state, "error": f"Session {session_id} not found"}
+
+    # Load per-session model name and system prompt (can be None = use defaults)
+    state["model_name"] = session.model
+    state["system_prompt"] = session.system_prompt
 
     # Fetch the most recent messages (oldest first for context ordering)
     recent_messages = (
@@ -177,16 +186,23 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
 
     history = state.get("messages", [])
     user_input = state.get("user_input", "")
+    model_name = state.get("model_name", None)
+    custom_system_prompt = state.get("system_prompt", None)
 
     # Ensure the latest user message is included
     if not history or history[-1].get("content") != user_input:
         history.append({"role": "user", "content": user_input})
 
-    # Build system prompt with memories and RAG context
-    system_parts = [
-        "You are a helpful research assistant. Answer the user's questions "
-        "clearly and concisely."
-    ]
+    # Use the per-session custom system prompt if set, otherwise use default
+    base_prompt = (
+        custom_system_prompt
+        if custom_system_prompt
+        else "You are a helpful research assistant. Answer the user's questions "
+             "clearly and concisely."
+    )
+
+    # Build full system prompt with memories and RAG context
+    system_parts = [base_prompt]
 
     # Add memory context if available
     memory_context = state.get("memory_context", "")
@@ -208,6 +224,7 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         response = generate_response(
             messages=history,
             system_prompt=system_prompt,
+            model_name=model_name,
         )
         state["response"] = response
     except (ConnectionError, TimeoutError, RuntimeError) as exc:

@@ -339,7 +339,7 @@ def test_memories_used_flag_with_memory():
 
     original = workflow.generate_response
 
-    def mock_generate_response(messages, system_prompt=None):
+    def mock_generate_response(messages, system_prompt=None, **kwargs):
         return "This is a mocked response."
 
     try:
@@ -376,7 +376,7 @@ def test_memories_not_used_without_memories():
 
     original = workflow.generate_response
 
-    def mock_generate_response(messages, system_prompt=None):
+    def mock_generate_response(messages, system_prompt=None, **kwargs):
         return "No memories needed."
 
     try:
@@ -468,7 +468,7 @@ def test_memory_disabled_no_new_memories_from_chat():
 
     original = workflow.generate_response
 
-    def mock_generate_response(messages, system_prompt=None):
+    def mock_generate_response(messages, system_prompt=None, **kwargs):
         return "Short and simple answers work best."
 
     try:
@@ -506,7 +506,7 @@ def test_memory_disabled_does_not_inject_existing():
 
     original = workflow.generate_response
 
-    def mock_generate_response(messages, system_prompt=None):
+    def mock_generate_response(messages, system_prompt=None, **kwargs):
         return "Memory-disabled response."
 
     try:

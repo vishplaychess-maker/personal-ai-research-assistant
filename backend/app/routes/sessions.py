@@ -10,8 +10,13 @@ from app.schemas.sessions import (
     SessionCreate,
     SessionUpdate,
     SessionResponse,
+    ModelUpdate,
+    SystemPromptUpdate,
+    SystemPromptResponse,
+    SessionModelResponse,
 )
 from app.services.chromadb_client import delete_chunks, delete_collection
+from app.config import settings
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -112,3 +117,73 @@ def delete_session(session_id: int, db: Session = Depends(get_db)):
     db.delete(session)
     db.commit()
     return None
+
+
+# ── Model selection ────────────────────────────────────────
+
+
+@router.patch("/{session_id}/model", response_model=SessionModelResponse)
+def update_session_model(
+    session_id: int,
+    payload: ModelUpdate,
+    db: Session = Depends(get_db),
+):
+    """Set the model for a session (or null to use default)."""
+    session = _get_session_or_404(db, session_id)
+    session.model = payload.model
+    db.commit()
+    db.refresh(session)
+    return SessionModelResponse(id=session.id, model=session.model)
+
+
+# ── System prompt ──────────────────────────────────────────
+
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful research assistant. Answer the user's questions "
+    "clearly and concisely."
+)
+
+
+@router.get("/{session_id}/system-prompt", response_model=SystemPromptResponse)
+def get_system_prompt(
+    session_id: int,
+    db: Session = Depends(get_db),
+):
+    """Get the system prompt for a session.
+
+    Returns the custom prompt if set, or indicates the default is being used.
+    """
+    session = _get_session_or_404(db, session_id)
+    if session.system_prompt:
+        return SystemPromptResponse(
+            system_prompt=session.system_prompt,
+            using_default=False,
+        )
+    return SystemPromptResponse(
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        using_default=True,
+    )
+
+
+@router.patch("/{session_id}/system-prompt", response_model=SystemPromptResponse)
+def update_system_prompt(
+    session_id: int,
+    payload: SystemPromptUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update the system prompt for a session (or null to reset to default)."""
+    session = _get_session_or_404(db, session_id)
+    session.system_prompt = payload.system_prompt
+    db.commit()
+    db.refresh(session)
+
+    if session.system_prompt:
+        return SystemPromptResponse(
+            system_prompt=session.system_prompt,
+            using_default=False,
+        )
+    return SystemPromptResponse(
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        using_default=True,
+    )

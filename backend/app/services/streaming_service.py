@@ -70,6 +70,7 @@ class ChatContext:
         citations: List[Dict[str, Any]],
         sources_used: bool,
         memories_used: bool,
+        model_name: Optional[str] = None,
     ):
         self.session_id = session_id
         self.user_message = user_message
@@ -78,6 +79,7 @@ class ChatContext:
         self.citations = citations
         self.sources_used = sources_used
         self.memories_used = memories_used
+        self.model_name = model_name
 
 
 def prepare_chat_context(
@@ -100,6 +102,10 @@ def prepare_chat_context(
     session = db.query(ResearchSession).filter(ResearchSession.id == session_id).first()
     if not session:
         raise ValueError(f"Session {session_id} not found")
+
+    # Load per-session model name and custom system prompt
+    session_model = session.model
+    session_system_prompt = session.system_prompt
 
     # 2. Save user message
     user_msg = Message(
@@ -130,7 +136,13 @@ def prepare_chat_context(
     history.append({"role": "user", "content": user_input})
 
     # 4. Build system prompt parts
-    system_parts = [DEFAULT_SYSTEM_PROMPT]
+    # Use per-session custom system prompt if set, otherwise use default
+    base_prompt = (
+        session_system_prompt
+        if session_system_prompt
+        else DEFAULT_SYSTEM_PROMPT
+    )
+    system_parts = [base_prompt]
 
     # 5. Retrieve memories (if enabled)
     memories_used = False
@@ -170,6 +182,7 @@ def prepare_chat_context(
         citations=citations,
         sources_used=sources_used,
         memories_used=memories_used,
+        model_name=session_model,
     )
 
 
@@ -208,6 +221,7 @@ async def stream_chat_response(
         async for chunk in generate_stream_async(
             messages=context.history,
             system_prompt=context.system_prompt,
+            model_name=context.model_name,
         ):
             if chunk["type"] == "token":
                 full_response.append(chunk["token"])

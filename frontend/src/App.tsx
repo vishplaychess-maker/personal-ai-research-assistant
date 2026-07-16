@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useStreaming } from "./useStreaming";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { ModelSelector } from "./ModelSelector";
+import { SystemPromptEditor } from "./SystemPromptEditor";
 import "./App.css";
 
 // ── Types ─────────────────────────────────────────────────
@@ -15,6 +17,8 @@ interface Session {
   id: number;
   title: string;
   user_id: number;
+  model: string | null;
+  system_prompt: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -206,6 +210,10 @@ function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showDocs, setShowDocs] = useState(false);
 
+  // Model & system prompt state
+  const [sessionModel, setSessionModel] = useState<string | null>(null);
+  const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
+
   // Memory state
   const [memories, setMemories] = useState<Memory[]>([]);
   const [showMemories, setShowMemories] = useState(false);
@@ -333,6 +341,16 @@ function App() {
     loadDocuments(id);
     setSourcesUsedIds(new Set());
     setMemoriesUsedIds(new Set());
+    // Load model from session data
+    const sess = sessions.find((s) => s.id === id);
+    if (sess) setSessionModel(sess.model);
+  };
+
+  // Update session model when user selects from dropdown
+  const handleModelChange = (model: string | null) => {
+    setSessionModel(model);
+    // Reload sessions to get updated data
+    loadSessions();
   };
 
   // ── Document upload ────────────────────────────────────
@@ -653,6 +671,20 @@ function App() {
               <span className="chat-header-icon">💬</span>
               <span className="chat-header-title">{activeSession.title}</span>
               <span className="chat-header-count">{messages.length} msg{messages.length !== 1 ? "s" : ""}</span>
+              <ModelSelector
+                sessionId={activeSession.id}
+                currentModel={sessionModel}
+                onModelChange={handleModelChange}
+              />
+
+              <button
+                className={`sp-toggle-btn ${showSystemPromptEditor ? "active" : ""}`}
+                onClick={() => setShowSystemPromptEditor(true)}
+                title="Edit system prompt"
+              >
+                ⚙
+              </button>
+
               <button
                 className={`doc-toggle-btn ${showDocs ? "active" : ""}`}
                 onClick={() => setShowDocs(!showDocs)}
@@ -975,6 +1007,14 @@ function App() {
         {/* Citation popup */}
         {selectedCitation && (
           <CitationPopup citation={selectedCitation} onClose={() => setSelectedCitation(null)} />
+        )}
+
+        {/* System prompt editor modal */}
+        {showSystemPromptEditor && activeSession && (
+          <SystemPromptEditor
+            sessionId={activeSession.id}
+            onClose={() => setShowSystemPromptEditor(false)}
+          />
         )}
       </main>
     </div>

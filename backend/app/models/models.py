@@ -67,6 +67,8 @@ class ResearchSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(255), nullable=False, default="New Research Session")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    model = Column(String(100), nullable=True)  # NULL = use config default
+    system_prompt = Column(Text, nullable=True)  # NULL = use default prompt
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
