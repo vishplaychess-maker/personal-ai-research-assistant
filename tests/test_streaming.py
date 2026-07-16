@@ -556,7 +556,21 @@ def test_stream_memory_disabled_returns_correct_flag():
     )
 
 
-# ── Message size validation ────────────────────────────────
+# ── Message size and content validation ───────────────────
+
+
+def test_stream_message_empty_rejected():
+    """Empty messages must be rejected with 422 (min_length=1 validation)."""
+    with _client() as c:
+        sid = _create_session()
+        try:
+            resp = c.post(
+                f"/api/sessions/{sid}/messages/stream",
+                json={"message": ""},
+            )
+            assert resp.status_code == 422
+        finally:
+            _delete_session(sid)
 
 
 def test_stream_message_size_exceeded():

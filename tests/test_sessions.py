@@ -21,7 +21,10 @@ BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
 
 def client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=15.0)
+    # 15s is too tight for Ollama cold starts (model loading can take 20-30s).
+    # The non-streaming endpoint has a 120s server timeout.
+    # Use 30s to match the streaming tests.
+    return httpx.Client(base_url=BASE_URL, timeout=30.0)
 
 
 @pytest.fixture(autouse=True)
