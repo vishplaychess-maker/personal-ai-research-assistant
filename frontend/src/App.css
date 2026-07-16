@@ -757,13 +757,263 @@
   animation: fadeIn 0.2s ease;
 }
 
+/* ── Retry Button ──────────────────────────────────────── */
+.retry-btn {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius-sm);
+  color: #fca5a5; font-size: 0.72rem; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.retry-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+}
+
+/* ── Markdown Body ───────────────────────────────────── */
+.markdown-body {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.markdown-body .md-h1 {
+  font-size: 1.3rem; font-weight: 700;
+  margin: 1.2rem 0 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.markdown-body .md-h2 {
+  font-size: 1.1rem; font-weight: 700;
+  margin: 1rem 0 0.5rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.markdown-body .md-h3 {
+  font-size: 0.95rem; font-weight: 600;
+  margin: 0.8rem 0 0.4rem;
+  color: var(--text-primary);
+}
+.markdown-body .md-h4,
+.markdown-body .md-h5,
+.markdown-body .md-h6 {
+  font-size: 0.875rem; font-weight: 600;
+  margin: 0.6rem 0 0.3rem;
+  color: var(--text-primary);
+}
+
+/* Paragraphs */
+.markdown-body .md-paragraph {
+  margin: 0.4rem 0;
+  color: var(--text-primary);
+}
+
+/* Lists */
+.markdown-body .md-ul {
+  margin: 0.4rem 0;
+  padding-left: 1.5rem;
+  list-style: disc;
+}
+.markdown-body .md-ol {
+  margin: 0.4rem 0;
+  padding-left: 1.5rem;
+  list-style: decimal;
+}
+.markdown-body .md-li {
+  margin: 0.2rem 0;
+  line-height: 1.6;
+}
+.markdown-body .md-li > p {
+  margin: 0;
+}
+
+/* Inline formatting */
+.markdown-body .md-strong {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.markdown-body .md-em {
+  font-style: italic;
+}
+.markdown-body .md-del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* Inline code */
+.markdown-body .md-inline-code {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.8em;
+  color: #93c5fd;
+}
+
+/* Blockquotes */
+.markdown-body .md-blockquote {
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.8rem;
+  border-left: 3px solid var(--accent-blue);
+  background: rgba(59, 130, 246, 0.04);
+  border-radius: 0 4px 4px 0;
+  color: var(--text-secondary);
+}
+.markdown-body .md-blockquote > p {
+  margin: 0;
+}
+
+/* Horizontal rules */
+.markdown-body .md-hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 1rem 0;
+}
+
+/* Links */
+.markdown-body .markdown-link {
+  color: var(--accent-blue);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--transition);
+}
+.markdown-body .markdown-link:hover {
+  border-bottom-color: var(--accent-blue);
+  opacity: 0.85;
+}
+
+.unsafe-link {
+  color: #fca5a5;
+  text-decoration: line-through;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Tables */
+.markdown-body .md-table-wrapper {
+  overflow-x: auto;
+  margin: 0.6rem 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.markdown-body .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.markdown-body .md-thead {
+  background: rgba(255, 255, 255, 0.04);
+}
+.markdown-body .md-th {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 700;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+}
+.markdown-body .md-td {
+  padding: 0.4rem 0.75rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+.markdown-body .md-tr:last-child .md-td {
+  border-bottom: none;
+}
+.markdown-body .md-tr:nth-child(even) .md-td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ── Code Blocks ──────────────────────────────────────── */
+.code-block-wrapper {
+  margin: 0.6rem 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-lang {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.05em;
+}
+
+.code-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.code-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.code-copy-icon {
+  font-size: 0.7rem;
+}
+
+.code-copy-label {
+  font-weight: 500;
+}
+
+.code-block-plain {
+  margin: 0.4rem 0;
+  padding: 0.75rem 1rem;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #e2e8f0;
+}
+
 /* ── Error Banner ──────────────────────────────────────── */
 .error-message {
-  display: flex; align-items: flex-start; gap: 0.5rem;
-  padding: 0.75rem 1rem; background: rgba(239, 68, 68, 0.08);
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.6rem 1rem; background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.2); border-radius: var(--radius-md);
   color: #fca5a5; font-size: 0.8rem; animation: fadeIn 0.3s ease;
   align-self: center; max-width: 100%;
+}
+.error-message-content {
+  display: flex; align-items: flex-start; gap: 0.5rem;
 }
 .error-message-icon { font-size: 1rem; flex-shrink: 0; }
 

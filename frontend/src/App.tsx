@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useStreaming } from "./useStreaming";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import "./App.css";
 
 // ── Types ─────────────────────────────────────────────────
@@ -183,6 +184,10 @@ function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [retryTarget, setRetryTarget] = useState<{
+    message: string;
+    errorDetail: string;
+  } | null>(null);
 
   // Citation popup state
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
@@ -428,12 +433,15 @@ function App() {
 
   // ── Send message (streaming) ───────────────────────────
 
-  const handleSend = () => {
-    const text = input.trim();
+  const handleSend = (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || !activeSessionId || isStreaming || togglePending) return;
+
+    const originalText = text;
 
     setSending(true);
     setChatError(null);
+    setRetryTarget(null);
 
     const tempUserMsg: Message = {
       id: -Date.now(),
@@ -443,7 +451,7 @@ function App() {
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, tempUserMsg]);
-    setInput("");
+    if (!overrideText) setInput("");
 
     startStream(activeSessionId, text, {
       onStart: () => {
@@ -469,6 +477,10 @@ function App() {
       onError: (error) => {
         setChatError(error.detail || "Failed to send message");
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+        setRetryTarget({
+          message: originalText,
+          errorDetail: error.detail || "Failed to send message",
+        });
         setSending(false);
         setGenerationStopped(false);
       },
@@ -482,6 +494,11 @@ function App() {
       },
     });
   };
+
+  const handleRetry = useCallback(() => {
+    if (!retryTarget || !activeSessionId || isStreaming) return;
+    handleSend(retryTarget.message);
+  }, [retryTarget, activeSessionId, isStreaming]);
 
   // Scroll on new messages
   useEffect(() => {
@@ -507,56 +524,26 @@ function App() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  // Process message content to render citations as clickable
+  // Process message content to render with Markdown and citations
   const renderContent = (msg: Message) => {
-    if (msg.role !== "assistant" || !msg.citations) {
+    if (msg.role !== "assistant") {
       return <div className="message-content">{msg.content}</div>;
     }
 
     let parsedCitations: Citation[] = [];
-    try { parsedCitations = JSON.parse(msg.citations); } catch { return <div className="message-content">{msg.content}</div>; }
-    if (!parsedCitations.length) return <div className="message-content">{msg.content}</div>;
-
-    const parts: (string | { marker: string; citation: Citation })[] = [];
-    const pattern = /\[(\d+)\]/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = pattern.exec(msg.content)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(msg.content.slice(lastIndex, match.index));
-      }
-      const markerNum = parseInt(match[1], 10);
-      const citation = parsedCitations.find((c) => c.marker === `[${markerNum}]`);
-      if (citation) {
-        parts.push({ marker: match[0], citation });
-      } else {
-        parts.push(match[0]);
-      }
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < msg.content.length) {
-      parts.push(msg.content.slice(lastIndex));
+    try {
+      parsedCitations = msg.citations ? JSON.parse(msg.citations) : [];
+    } catch {
+      parsedCitations = [];
     }
 
     return (
       <div className="message-content">
-        {parts.map((part, i) => {
-          if (typeof part === "string") {
-            return <span key={i}>{part}</span>;
-          }
-          return (
-            <button
-              key={i}
-              className="citation-btn"
-              onClick={() => setSelectedCitation(part.citation)}
-              title={`View source: ${part.citation.filename}`}
-            >
-              {part.marker}
-            </button>
-          );
-        })}
+        <MarkdownRenderer
+          content={msg.content}
+          citations={parsedCitations}
+          onCitationClick={(citation) => setSelectedCitation(citation)}
+        />
       </div>
     );
   };
@@ -933,8 +920,19 @@ function App() {
 
               {chatError && (
                 <div className="error-message">
-                  <span className="error-message-icon">⚠️</span>
-                  <span>{chatError}</span>
+                  <div className="error-message-content">
+                    <span className="error-message-icon">⚠️</span>
+                    <span>{chatError}</span>
+                  </div>
+                  {retryTarget && !isStreaming && (
+                    <button
+                      className="retry-btn"
+                      onClick={() => handleRetry()}
+                      title="Retry with the same message"
+                    >
+                      🔄 Retry
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -960,7 +958,7 @@ function App() {
                     ⏹ Stop
                   </button>
                 ) : (
-                  <button className="send-btn" onClick={handleSend} disabled={!input.trim() || isStreaming} title="Send message">
+                  <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || isStreaming} title="Send message">
                     ➤
                   </button>
                 )}
