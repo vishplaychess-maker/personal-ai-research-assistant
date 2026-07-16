@@ -3,9 +3,13 @@ Sync client for calling Ollama's generate API.
 
 Uses httpx.Client (synchronous) since the entire LangGraph workflow
 and message route are synchronous. This avoids fragile asyncio.run() patterns.
+
+The async streaming function generate_stream_async uses httpx.AsyncClient
+and is designed for the SSE streaming endpoint.
 """
 
-from typing import List, Dict, Optional
+import json
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -21,7 +25,6 @@ OLLAMA_MODEL = "llama3.2:3b"
 CONNECT_TIMEOUT = 10.0
 # Total timeout for the full generation (3b model should complete within 60s)
 GENERATE_TIMEOUT = 120.0
-
 
 def _build_prompt(messages: List[Dict[str, str]]) -> str:
     """
@@ -55,6 +58,7 @@ def check_ollama_health() -> bool:
 def generate_response(
     messages: List[Dict[str, str]],
     system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
 ) -> str:
     """
     Call Ollama to generate a response given recent conversation history.
@@ -62,6 +66,7 @@ def generate_response(
     Args:
         messages: List of dicts with 'role' and 'content' keys.
         system_prompt: Optional system instruction prepended to the prompt.
+        model_name: Optional model name (defaults to OLLAMA_MODEL).
 
     Returns:
         The generated text response.
@@ -76,9 +81,10 @@ def generate_response(
         full_messages.insert(0, {"role": "system", "content": system_prompt})
 
     prompt = _build_prompt(full_messages)
+    model = model_name or OLLAMA_MODEL
 
     request_body = {
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": False,
         "options": {
@@ -114,6 +120,7 @@ def generate_response(
 def generate_json_response(
     messages: List[Dict[str, str]],
     system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
 ) -> str:
     """
     Call Ollama and request a JSON response.
@@ -128,9 +135,10 @@ def generate_json_response(
         full_messages.insert(0, {"role": "system", "content": system_prompt})
 
     prompt = _build_prompt(full_messages)
+    model = model_name or OLLAMA_MODEL
 
     request_body = {
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": False,
         "options": {
@@ -160,3 +168,91 @@ def generate_json_response(
 
     data = resp.json()
     return data.get("response", "").strip()
+
+
+# ── Async streaming (for SSE endpoint) ────────────────────
+
+
+async def generate_stream_async(
+    messages: List[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    Call Ollama's generate API with streaming and yield tokens as they arrive.
+
+    Uses httpx.AsyncClient for non-blocking HTTP. Yields dicts:
+
+      {"type": "token", "token": "Hello"}
+      {"type": "done", "response": "Hello world"}
+      {"type": "error", "error": "Cannot connect to Ollama..."}
+
+    Args:
+        messages: Conversation history (list of {"role": ..., "content": ...}).
+        system_prompt: Optional system instruction prepended to the prompt.
+        model_name: Optional model name (defaults to OLLAMA_MODEL).
+
+    Yields:
+        Dicts with streaming events as described above.
+    """
+    full_messages = list(messages)
+    if system_prompt:
+        full_messages.insert(0, {"role": "system", "content": system_prompt})
+
+    prompt = _build_prompt(full_messages)
+    model = model_name or OLLAMA_MODEL
+
+    request_body = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "options": {
+            "num_predict": 2048,
+            "temperature": 0.7,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(GENERATE_TIMEOUT, connect=CONNECT_TIMEOUT)
+        ) as client:
+            async with client.stream("POST", OLLAMA_GENERATE_URL, json=request_body) as response:
+                if response.status_code != 200:
+                    detail = await response.aread()
+                    detail_text = detail.decode("utf-8", errors="replace")[:200]
+                    yield {
+                        "type": "error",
+                        "error": f"Ollama returned HTTP {response.status_code}: {detail_text}",
+                    }
+                    return
+
+                full_response = []
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    token = chunk.get("response", "")
+                    full_response.append(token)
+
+                    if chunk.get("done"):
+                        yield {"type": "done", "response": "".join(full_response)}
+                        return
+
+                    yield {"type": "token", "token": token}
+
+    except httpx.ConnectError:
+        yield {
+            "type": "error",
+            "error": "Cannot connect to Ollama. Make sure Ollama is running and "
+                     "the model is installed (`ollama pull llama3.2:3b`).",
+        }
+    except httpx.TimeoutException:
+        yield {
+            "type": "error",
+            "error": "Ollama did not respond in time. The model might still be "
+                     "loading or the prompt was too long.",
+        }
