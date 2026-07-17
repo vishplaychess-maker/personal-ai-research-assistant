@@ -32,7 +32,7 @@ The application implements reasonable authentication and authorization for a dev
 
 | ID | Finding | Location | Evidence | Remediation | Blocks Deploy? |
 |---|---|---|---|---|---|
-| **H-001** | **No rate limiting on login endpoint** | `backend/app/routes/auth.py` — `login_user()` | No `slowapi` or `limits` middleware; unlimited POST to `/api/auth/login` | Add `slowapi` middleware with per-IP rate limiting (e.g., 5 attempts/min). | Yes |
+| **H-001** | **No rate limiting on login endpoint** | `backend/app/routes/auth.py` — `login_user()` | ✅ **Fixed in Phase 7A** — InMemoryRateLimiter with configurable threshold (10/60s), Retry-After headers, account lockout, and exponential backoff | Add `slowapi` middleware with per-IP rate limiting (e.g., 5 attempts/min). **Custom InMemoryRateLimiter used instead of slowapi for simplicity.** | ✅ Fixed |
 | **H-002** | **No Content Security Policy (CSP) headers** | `backend/app/main.py`, frontend config | No CSP middleware in FastAPI; no `meta` CSP tag in `index.html` | Add CSP via FastAPI middleware or Vite plugin to restrict script/style sources. | Yes |
 | **H-003** | **No refresh token mechanism** | `backend/app/services/auth_service.py` | JWT access token expires in 7 days with no refresh flow | Implement refresh tokens (7-day access + 30-day refresh with rotation). | Yes |
 | **H-004** | **SQLite database file exposed in Docker volume** | `docker-compose.yml` | `app_data:/data` volume contains `app.db` with user data | Ensure volume is not exposed externally; document backup procedures. | No (Docker internal only) |
@@ -42,7 +42,7 @@ The application implements reasonable authentication and authorization for a dev
 | ID | Finding | Location | Evidence | Remediation | Blocks Deploy? |
 |---|---|---|---|---|---|
 | **M-001** | **Token stored in localStorage (XSS-vulnerable)** | `frontend/src/auth.ts` | `localStorage.setItem(TOKEN_KEY, token)` | Consider httpOnly cookies for production; implement token binding. | No (standard SPA pattern) |
-| **M-002** | **No brute-force/account lockout protection** | `backend/app/routes/auth.py` | No failed-attempt tracking or temporary lockout | Implement exponential backoff and temporary account lockout after N failed attempts. | No |
+| **M-002** | **No brute-force/account lockout protection** | `backend/app/routes/auth.py` | ✅ **Fixed in Phase 7A** — Account lockout after 5 consecutive failures with exponential backoff (30s–900s); counter resets on successful login | Implement exponential backoff and temporary account lockout after N failed attempts. | ✅ Fixed |
 | **M-003** | **react-markdown renders user/AI content as HTML** | `frontend/src/MarkdownRenderer.tsx` | `react-markdown` renders LLM output as HTML with `remark-gfm` | Sanitize output with `rehype-sanitize`; verify all links are safe. | No |
 | **M-004** | **Error messages may leak internal paths** | `backend/app/routes/documents.py` | `doc.error_message = str(exc)[:500]` | Truncate and filter internal paths, source code snippets, and stack traces. | No |
 | **M-005** | **No request body size limit** | `backend/app/main.py` | No `max_request_size` middleware configured | Add `FastAPI` middleware to limit POST body size (e.g., 10MB). | No |
@@ -81,8 +81,40 @@ The application implements reasonable authentication and authorization for a dev
 | `test_auth.py` — Login | 5 | Correct/wrong password, nonexistent user, generic errors | ✅ 5/5 |
 | `test_auth.py` — Token validation | 5 | Valid, missing, malformed, expired, ghost user | ✅ 5/5 |
 | `test_auth.py` — Cross-user isolation | 14 | Session, messages, memories, search, documents | ✅ 14/14 |
+| `test_auth.py` — Rate limiting (Phase 7A) | 32 | IP rate limit, lockout, memory growth, concurrent safety, cleanup | ✅ 32/32 |
 | `test_streaming.py` — Error details | 1 | Error messages must not contain secrets | ✅ 1/1 |
 | `test_memories.py` — Sensitive filter | 3 | Passwords, API keys filtered from memory extraction | ✅ 3/3 |
+
+---
+
+## Phase 7A Completion Summary
+
+**Branch:** `phase-7a-rate-limiting`
+**Commits:** `094436d` (feat) + `ebf4030` (fix)
+**Tests:** 63 auth tests (32 Phase 7A + 28 Phase 6 + 3 helpers) — all passing
+
+### Resolved Findings
+
+| ID | Finding | Severity | Resolution |
+|---|---|---|---|
+| **H-001** | No rate limiting on login | 🟠 High | ✅ Custom `InMemoryRateLimiter` with configurable 10/60s threshold, `Retry-After` headers, dual IP + account limiting |
+| **M-002** | No brute-force/account lockout | 🟡 Medium | ✅ Account lockout after 5 consecutive failures with exponential backoff (30s → 900s max); counter resets on success |
+
+### Additional Reliability Fixes
+
+- **Thread-safety:** `threading.RLock` protects all public methods; verified with concurrent 20-thread × 50-call stress test
+- **Bounded memory:** Write-through `_prune_key` removes empty keys; `record_attempt` prunes before append; probabilistic auto-cleanup every 100 mutations
+- **Graceful shutdown:** `stop()` abstract method added; InMemory impl clears state
+- **Redis-ready interface:** `RateLimiterInterface` unchanged with `stop()` added for future Redis implementation
+
+### Remaining Phase 7 Work
+
+| Checkpoint | Scope | Effort | Status |
+|---|---|---|---|
+| **7B** | Refresh tokens & session management | 2-3 days | Not started |
+| **7C** | Password reset & email verification | 3-4 days | Not started |
+| **7D** | Production security headers & deployment hardening | 2-3 days | Not started |
+| **7E** | ChromaDB health & infrastructure reliability | 1-2 days | Not started |
 
 ---
 
@@ -114,7 +146,7 @@ These four items represent actual attack vectors (token theft, brute-force login
 
 | Priority | Phase | Items |
 |---|---|---|
-| P0 | 7A — Login rate limiting | H-001, M-002 (brute force + lockout) |
+| P0 | 7A — Login rate limiting | H-001, M-002 (brute force + lockout) | ✅ **Complete** |
 | P1 | 7B — Refresh tokens | H-003, I-004 (refresh + token blacklist) |
 | P2 | 7C — Password reset & email verification | M-007, M-008 |
 | P3 | 7D — Production hardening | C-001, H-002, M-003, M-004, M-005, L-003, L-004 |

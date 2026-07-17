@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 168  # 7 days
 
+    # ── Rate limiting (Phase 7A) ──────────────────────────
+    rate_limit_max_attempts: int = 10
+    rate_limit_window_seconds: int = 60
+    rate_limit_lockout_threshold: int = 5
+    rate_limit_lockout_base_seconds: int = 30
+    rate_limit_lockout_max_seconds: int = 900  # 15 min
+    production_mode: bool = False
+
     # ── Model settings ──────────────────────────────────
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5

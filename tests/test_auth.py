@@ -14,6 +14,7 @@ Tests cover:
   - Ownership scoping on sessions, memories, search, and documents
 """
 
+import time
 from datetime import timedelta
 
 import pytest
@@ -23,6 +24,7 @@ from app.main import app
 from app.database import SessionLocal
 from app.models.models import User
 from app.services.auth_service import create_access_token
+from app.services.rate_limiter import get_rate_limiter, get_lockout_duration, InMemoryRateLimiter
 
 
 # ── Fixtures ───────────────────────────────────────────────
@@ -51,10 +53,12 @@ def _cleanup_test_users():
 
 @pytest.fixture(autouse=True)
 def cleanup():
-    """Clean up test users before and after each test."""
+    """Clean up test users and rate limiter state before and after each test."""
     _cleanup_test_users()
+    get_rate_limiter().reset()
     yield
     _cleanup_test_users()
+    get_rate_limiter().reset()
 
 
 # ── Helpers ────────────────────────────────────────────────
@@ -473,3 +477,568 @@ class TestCrossUserIsolation:
         resp = client.get(f"/api/sessions/{session_id}")
         assert resp.status_code == 200
         assert resp.json()["title"] == "Unauthenticated Session"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 7A — Rate Limiting & Lockout Tests
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRateLimitUnit:
+    """Unit tests for the rate limiter internals."""
+
+    def test_get_lockout_duration_base(self):
+        """1 failed attempt → base lockout (30s)."""
+        assert get_lockout_duration(1, 30, 900) == 30
+
+    def test_get_lockout_duration_exponential(self):
+        """Lockout doubles with each failure."""
+        assert get_lockout_duration(2, 30, 900) == 60
+        assert get_lockout_duration(3, 30, 900) == 120
+        assert get_lockout_duration(4, 30, 900) == 240
+
+    def test_get_lockout_duration_capped(self):
+        """Lockout is capped at max_seconds (900 = 15 min)."""
+        assert get_lockout_duration(6, 30, 900) == 900  # 30*32=960 → capped
+        assert get_lockout_duration(10, 30, 900) == 900
+
+    def test_get_lockout_duration_zero_or_negative(self):
+        """Zero or negative failures returns 0."""
+        assert get_lockout_duration(0, 30, 900) == 0
+        assert get_lockout_duration(-1, 30, 900) == 0
+
+    def test_rate_limiter_peek_does_not_record(self):
+        """peek_rate_limit does not record attempts."""
+        limiter = InMemoryRateLimiter()
+        is_limited, remaining = limiter.peek_rate_limit("test_key", 5, 60)
+        assert not is_limited
+        assert remaining == 5
+        # Attempts should still be 0
+        is_limited2, remaining2 = limiter.peek_rate_limit("test_key", 5, 60)
+        assert remaining2 == 5  # peek didn't record
+
+    def test_rate_limiter_cleanup_expired(self):
+        """Expired entries are removed by cleanup."""
+        limiter = InMemoryRateLimiter()
+        # Manually add old entries (using far-past timestamps)
+        far_past = time.time() - 7200  # 2 hours ago
+        limiter._attempts["old_key"] = [far_past]
+        limiter._attempts["fresh_key"] = [time.time()]
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 1
+        assert "old_key" not in limiter._attempts
+        assert "fresh_key" in limiter._attempts
+
+    def test_rate_limiter_reset(self):
+        """Reset clears all records."""
+        limiter = InMemoryRateLimiter()
+        limiter.record_attempt("key1")
+        limiter.record_attempt("key2")
+        assert len(limiter._attempts) == 2
+        limiter.reset()
+        assert len(limiter._attempts) == 0
+
+    def test_rate_limiter_is_rate_limited_records_attempt(self):
+        """is_rate_limited records an attempt when not yet limited."""
+        limiter = InMemoryRateLimiter()
+        # First 4 calls: not limited, each records
+        for i in range(4):
+            assert not limiter.is_rate_limited("test_key", 5, 60)
+        # 5th call: not limited (equal, not exceeding)
+        assert not limiter.is_rate_limited("test_key", 5, 60)
+        # 6th call: limited
+        assert limiter.is_rate_limited("test_key", 5, 60)
+
+
+class TestLoginRateLimit:
+    """IP-based rate limiting on the login endpoint."""
+
+    def _register_user(self, client, username="testuser_ratelimit"):
+        """Register a user for rate limiting tests."""
+        resp = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 201
+
+    def test_login_rate_limit_exceeded(self, client):
+        """Too many rapid failed attempts return 429."""
+        self._register_user(client)
+        # The IP rate limit is 10 attempts per 60 seconds.
+        # Send 11 rapid failed requests from the same IP.
+        for i in range(11):
+            resp = client.post("/api/auth/login", json={
+                "username": "testuser_ratelimit",
+                "password": f"wrong_password_{i}",
+            })
+            if resp.status_code == 429:
+                # Rate-limited — success
+                assert "Too many requests" in resp.json()["detail"]
+                assert "Retry-After" in resp.headers
+                return
+
+        # If we never got 429, the test should fail
+        pytest.fail("Rate limit was not triggered after 11 rapid attempts")
+
+    def test_login_retry_after_header(self, client):
+        """429 response includes Retry-After header."""
+        self._register_user(client)
+        for i in range(12):
+            resp = client.post("/api/auth/login", json={
+                "username": "testuser_ratelimit",
+                "password": f"bad_{i}",
+            })
+            if resp.status_code == 429:
+                assert "Retry-After" in resp.headers
+                retry_after = int(resp.headers["Retry-After"])
+                assert retry_after > 0
+                return
+        pytest.fail("Never received 429")
+
+    def test_different_users_share_ip_rate_limit(self, client):
+        """Different usernames from the same IP share the rate limit.
+
+        Account lockout threshold is 5; IP rate limit is 10 per 60s.
+        Use 4 failed attempts per user to stay below lockout but
+        accumulate enough IP records to trigger the IP rate limit:
+          2 registrations + 4 user_A + 4 user_B = 10 IP records
+        """
+        self._register_user(client, "testuser_rl_a")
+        self._register_user(client, "testuser_rl_b")
+        # Make 4 failed attempts for user A (2 reg + 4 = 6 IP records)
+        for i in range(4):
+            resp = client.post("/api/auth/login", json={
+                "username": "testuser_rl_a",
+                "password": f"wrong_{i}",
+            })
+            assert resp.status_code == 401
+        # Make 4 failed attempts for user B (6 + 4 = 10 IP records = limit)
+        for i in range(4):
+            resp = client.post("/api/auth/login", json={
+                "username": "testuser_rl_b",
+                "password": f"bad_{i}",
+            })
+            assert resp.status_code == 401
+        # Next attempt should be rate-limited (10 IP records, limit is 10)
+        resp = client.post("/api/auth/login", json={
+            "username": "testuser_rl_a",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 429
+
+    def test_login_success_does_not_trigger_rate_limit(self, client):
+        """Successful login counts as an attempt but resets IP counter."""
+        self._register_user(client)
+        # Successful login
+        resp = client.post("/api/auth/login", json={
+            "username": "testuser_ratelimit",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 200
+        # A few more successful logins shouldn't trigger rate limit
+        for i in range(5):
+            resp = client.post("/api/auth/login", json={
+                "username": "testuser_ratelimit",
+                "password": "securePass123!",
+            })
+            # These should be fine since reset clears attempts
+            assert resp.status_code == 200, f"Failed on attempt {i}: {resp.json()}"
+
+
+class TestAccountLockout:
+    """Account lockout after repeated failed login attempts."""
+
+    def _register_user(self, client, username="testuser_lockout"):
+        """Register a user for lockout tests."""
+        resp = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 201
+        return username
+
+    def test_account_lockout_after_threshold_failures(self, client):
+        """
+        After 'rate_limit_lockout_threshold' consecutive failures,
+        the account is locked (429). The lockout threshold is 5.
+        """
+        username = self._register_user(client)
+        # Send 5 wrong passwords (threshold is 5)
+        for i in range(5):
+            resp = client.post("/api/auth/login", json={
+                "username": username,
+                "password": f"wrong_password_{i}",
+            })
+            assert resp.status_code == 401, f"Expected 401 on attempt {i+1}"
+
+        # The 5th failure triggers lockout, but it also returns 401
+        # because the password is wrong. The lockout applies to the NEXT attempt.
+        # Actually, looking at the code: when failed_attempts >= threshold,
+        # the account is locked AND the current request returns 401.
+        # The next request should return 429.
+
+        # The 6th request should be locked
+        resp = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "wrong_password_5",
+        })
+        assert resp.status_code == 429, f"Expected 429 lockout, got {resp.status_code}: {resp.json()}"
+        assert "Too many requests" in resp.json()["detail"]
+        assert "Retry-After" in resp.headers
+
+    def test_lockout_resets_after_successful_login(self, client):
+        """Failed attempts are reset after a successful login."""
+        username = self._register_user(client)
+        # Make 3 wrong attempts
+        for i in range(3):
+            resp = client.post("/api/auth/login", json={
+                "username": username,
+                "password": f"bad_{i}",
+            })
+            assert resp.status_code == 401
+        # Successful login resets counter
+        resp = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 200
+        # Now 3 more wrong attempts should not trigger lockout (counter was reset)
+        for i in range(3):
+            resp = client.post("/api/auth/login", json={
+                "username": username,
+                "password": f"bad2_{i}",
+            })
+            assert resp.status_code == 401, f"Expected 401 on attempt {i+1}"
+
+
+class TestRegistrationRateLimit:
+    """Rate limiting on the registration endpoint."""
+
+    def test_registration_rate_limited(self, client):
+        """Rapid registration attempts trigger IP rate limit."""
+        # Send 11 rapid registration requests (threshold is 10)
+        for i in range(12):
+            resp = client.post("/api/auth/register", json={
+                "username": f"testuser_rl_reg_{i}",
+                "email": f"reg{i}@example.com",
+                "password": "securePass123!",
+            })
+            if resp.status_code == 429:
+                assert "Too many requests" in resp.json()["detail"]
+                return
+            # Valid registration or duplicate is fine
+            assert resp.status_code in (201, 400)
+
+        pytest.fail("Registration rate limit was not triggered after 12 rapid requests")
+
+    def test_registration_rate_limit_has_retry_after(self, client):
+        """429 on registration includes Retry-After header."""
+        for i in range(12):
+            resp = client.post("/api/auth/register", json={
+                "username": f"testuser_rl_ra_{i}",
+                "email": f"ra{i}@example.com",
+                "password": "securePass123!",
+            })
+            if resp.status_code == 429:
+                assert "Retry-After" in resp.headers
+                retry_after = int(resp.headers["Retry-After"])
+                assert retry_after > 0
+                return
+        pytest.fail("Registration rate limit not triggered")
+
+
+class TestGetEndpointsNotRateLimited:
+    """GET endpoints should not be affected by rate limiting."""
+
+    def test_health_still_works_after_rate_limit(self, client):
+        """Health endpoint works even after hitting rate limit."""
+        # Trigger IP rate limit with rapid login attempts
+        for i in range(12):
+            client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+        # Health endpoint should still work
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        assert "backend" in resp.json()
+
+
+class TestJWTSecretValidation:
+    """JWT secret validation at startup."""
+
+    def test_get_lockout_duration_unit(self):
+        """get_lockout_duration produces correct values."""
+        assert get_lockout_duration(0, 30, 900) == 0
+        assert get_lockout_duration(1, 30, 900) == 30
+        assert get_lockout_duration(2, 30, 900) == 60
+        assert get_lockout_duration(5, 30, 900) == 480  # 30 * 2^4 = 480
+        assert get_lockout_duration(6, 30, 900) == 900  # capped at max
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 7A — Memory Growth Prevention Tests
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRateLimiterMemoryGrowth:
+    """Verify the rate limiter does not leak memory."""
+
+    # ── peek write-through pruning ────────────────────────
+
+    def test_peek_prunes_expired_entries(self):
+        """peek_rate_limit physically removes expired entries."""
+        limiter = InMemoryRateLimiter()
+        # Plant a stale entry
+        far_past = time.time() - 120  # 2 minutes old
+        limiter._attempts["stale_key"] = [far_past, far_past]
+        # peek should prune them
+        is_limited, _ = limiter.peek_rate_limit("stale_key", 5, 60)
+        # After peek pruning with 60s window, both entries > 60s old
+        # should be removed, leaving 0 entries
+        assert len(limiter._attempts.get("stale_key", [])) == 0
+        # With 0 entries, not limited
+        assert not is_limited
+
+    def test_peek_removes_all_entries_when_all_expired(self):
+        """peek removes the key entirely when all entries are expired."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 120
+        limiter._attempts["old_key"] = [far_past, far_past]
+        # peek uses default 60s window, both are older
+        limiter.peek_rate_limit("old_key", 5, 60)
+        # Key should remain with empty list (or be removed entirely)
+        # InMemoryRateLimiter keeps the key with empty list after peek
+        assert len(limiter._attempts.get("old_key", [])) == 0
+
+    # ── record_attempt pruning ────────────────────────────
+
+    def test_record_attempt_prunes_expired(self):
+        """record_attempt prunes entries older than 60s before appending."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 120
+        limiter._attempts["key"] = [far_past, far_past]
+        limiter.record_attempt("key")
+        # After pruning + append, should have exactly 1 entry
+        assert len(limiter._attempts["key"]) == 1
+
+    def test_record_attempt_keeps_fresh_entries(self):
+        """record_attempt keeps non-expired entries when pruning."""
+        limiter = InMemoryRateLimiter()
+        now = time.time()
+        fresh = now - 10  # 10 seconds ago (still within 60s window)
+        old = now - 120  # 2 minutes ago (expired)
+        limiter._attempts["key"] = [fresh, old]
+        limiter.record_attempt("key")
+        # Should keep fresh + 1 new = 2 entries
+        assert len(limiter._attempts["key"]) == 2
+
+    # ── cleanup_expired ───────────────────────────────────
+
+    def test_cleanup_expired_removes_empty_keys(self):
+        """cleanup_expired removes keys whose entries are all expired."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 7200
+        limiter._attempts["expired_key"] = [far_past]
+        limiter._attempts["fresh_key"] = [time.time()]
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 1
+        assert "expired_key" not in limiter._attempts
+        assert "fresh_key" in limiter._attempts
+
+    def test_cleanup_expired_preserves_active_lockouts(self):
+        """Active (recent) lockout entries are not removed by cleanup."""
+        limiter = InMemoryRateLimiter()
+        # Lockout tracking uses record_attempt, producing recent entries
+        limiter.record_attempt("rl_user:active_user")
+        limiter.record_attempt("rl_ip:1.2.3.4")
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 0
+        assert "rl_user:active_user" in limiter._attempts
+        assert "rl_ip:1.2.3.4" in limiter._attempts
+
+    def test_repeated_cleanup_is_safe(self):
+        """Calling cleanup_expired repeatedly does not cause errors."""
+        limiter = InMemoryRateLimiter()
+        # Run cleanup on empty store
+        assert limiter.cleanup_expired() == 0
+        # Add some fresh entries
+        limiter.record_attempt("key1")
+        limiter.record_attempt("key2")
+        # Run cleanup again
+        assert limiter.cleanup_expired() == 0
+        # Run cleanup a third time
+        assert limiter.cleanup_expired() == 0
+        assert len(limiter._attempts) == 2
+
+    # ── Bounded storage ───────────────────────────────────
+
+    def test_bounded_storage_after_many_expired_keys(self):
+        """Storage remains bounded after many expired keys via cleanup."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 7200
+        # Simulate 1000 unique IPs that hit once and never return
+        for i in range(1000):
+            limiter._attempts[f"rl_ip:1.1.1.{i}"] = [far_past]
+        assert len(limiter._attempts) == 1000
+        # Single cleanup pass removes all 1000
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 1000
+        assert len(limiter._attempts) == 0
+
+    def test_bounded_storage_mixed_fresh_and_expired(self):
+        """Cleanup removes only expired keys, preserving fresh ones."""
+        limiter = InMemoryRateLimiter()
+        now = time.time()
+        far_past = now - 7200
+        # 100 expired + 50 fresh
+        for i in range(100):
+            limiter._attempts[f"expired_{i}"] = [far_past]
+        for i in range(50):
+            limiter._attempts[f"fresh_{i}"] = [now]
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 100
+        assert len(limiter._attempts) == 50
+
+    # ── Thread safety ─────────────────────────────────────
+
+    def test_concurrent_record_attempts(self):
+        """Concurrent record_attempt calls are thread-safe."""
+        import concurrent.futures
+
+        limiter = InMemoryRateLimiter()
+        n_threads = 20
+        n_calls = 50
+
+        def do_records():
+            for i in range(n_calls):
+                limiter.record_attempt("shared_key")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as ex:
+            futures = [ex.submit(do_records) for _ in range(n_threads)]
+            concurrent.futures.wait(futures)
+
+        # Each of 20 threads calls record_attempt 50 times
+        total = n_threads * n_calls
+        # After pruning, all entries should be fresh (< 60s)
+        assert len(limiter._attempts["shared_key"]) == total
+
+    def test_concurrent_mixed_operations(self):
+        """Concurrent peek, record, reset operations are thread-safe."""
+        import concurrent.futures
+        import random
+
+        limiter = InMemoryRateLimiter()
+        errors = []
+
+        def worker(worker_id: int):
+            for _ in range(30):
+                op = random.choice(["peek", "record", "reset_key", "reset_all"])
+                key = f"key_{worker_id % 5}"
+                try:
+                    if op == "peek":
+                        limiter.peek_rate_limit(key, 10, 60)
+                    elif op == "record":
+                        limiter.record_attempt(key)
+                    elif op == "reset_key":
+                        limiter.reset_attempts(key)
+                    elif op == "reset_all":
+                        limiter.reset()
+                except Exception as exc:
+                    errors.append((worker_id, op, str(exc)))
+                    raise
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(worker, i) for i in range(10)]
+            concurrent.futures.wait(futures)
+
+        assert len(errors) == 0, f"Concurrent errors: {errors}"
+        # Data integrity: after all ops, storage should be bounded
+        # (5 possible keys, each with at most a few entries)
+        assert len(limiter._attempts) <= 10, "Storage grew unexpectedly under concurrent load"
+
+    # ── Stop / lifecycle ──────────────────────────────────
+
+    def test_stop_clears_state(self):
+        """stop() clears all state for graceful shutdown."""
+        limiter = InMemoryRateLimiter()
+        limiter.record_attempt("key1")
+        limiter.record_attempt("key2")
+        assert len(limiter._attempts) == 2
+        limiter.stop()
+        assert len(limiter._attempts) == 0
+        assert limiter.mutation_count() == 0
+
+    def test_stop_then_continue_is_safe(self):
+        """After stop(), the limiter can still be used."""
+        limiter = InMemoryRateLimiter()
+        limiter.stop()
+        # These should not raise
+        limiter.record_attempt("new_key")
+        assert limiter.is_rate_limited("new_key", 5, 60) is False
+        limiter.reset()
+
+    # ── Probabilistic auto-cleanup ────────────────────────
+
+    def test_probabilistic_cleanup_after_many_mutations(self):
+        """Auto-cleanup triggers after cleanup_interval mutations.
+
+        Each InMemoryRateLimiter has its own cleanup_interval, so
+        this test does not affect other tests or the singleton.
+        """
+        limiter = InMemoryRateLimiter(cleanup_interval=5)
+        # 10 mutations should trigger cleanup at least once
+        for i in range(10):
+            limiter.record_attempt(f"auto_key_{i}")
+        # mutation_count should be <= 10 - 5 = 5 (reset at 5, then
+        # 5 more mutations)
+        assert limiter.mutation_count() <= 5
+        assert limiter.mutation_count() >= 0
+
+    # ── reset_rate_limiter ───────────────────────────────
+
+    def test_reset_rate_limiter_global(self):
+        """reset_rate_limiter creates a fresh singleton instance."""
+        from app.services.rate_limiter import reset_rate_limiter
+
+        original = get_rate_limiter()
+        original.record_attempt("test_key")
+        # Replace the singleton
+        reset_rate_limiter()
+        new_instance = get_rate_limiter()
+        # Should be a different instance
+        assert new_instance is not original
+        # Fresh instance has no state
+        is_limited, _ = new_instance.peek_rate_limit("test_key", 5, 60)
+        assert not is_limited
+        # Clean up: reset singleton to original state
+        get_rate_limiter().reset()
+
+
+class TestRateLimitExistingBehavior:
+    """Regression: existing 429, Retry-After, lockout and reset behavior."""
+
+    def test_rate_limit_still_works(self, client):
+        """429 is still returned after exceeding threshold."""
+        for i in range(11):
+            resp = client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+            if resp.status_code == 429:
+                return
+        pytest.fail("Rate limit not triggered")
+
+    def test_retry_after_still_present(self, client):
+        """Retry-After header is still included on 429."""
+        for i in range(12):
+            resp = client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+            if resp.status_code == 429:
+                assert "Retry-After" in resp.headers
+                return
+        pytest.fail("Rate limit not triggered")

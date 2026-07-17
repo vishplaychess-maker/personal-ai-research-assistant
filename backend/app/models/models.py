@@ -55,6 +55,10 @@ class User(Base):
         nullable=False,
     )
 
+    # Phase 7A: account lockout tracking
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+
     sessions = relationship("ResearchSession", back_populates="user", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
 
