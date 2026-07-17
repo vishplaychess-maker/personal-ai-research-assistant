@@ -109,6 +109,38 @@ export interface SearchResult {
   created_at: string;
 }
 
+// ── Auth Types (Phase 6C) ────────────────────────────────
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface UserInfo {
+  id: number;
+  username: string;
+  email: string | null;
+  created_at: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface RegisterRequest {
+  username: string;
+  email: string;
+  password: string;
+}
+
+export interface AuthState {
+  user: UserInfo | null;
+  token: string | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+}
+
 // ── Utility Types ─────────────────────────────────────────
 
 export interface RetryTarget {

@@ -29,6 +29,7 @@ interface SidebarProps {
   onCreateSession: () => void;
   onDeleteSession: (id: number) => void;
   onRenameSession: (id: number, title: string) => void;
+  onLogout?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -42,6 +43,7 @@ export function Sidebar({
   onCreateSession,
   onDeleteSession,
   onRenameSession,
+  onLogout,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -313,9 +315,14 @@ export function Sidebar({
           <span className="health-dot" />
           LLM
         </span>
-        <span style={{ marginLeft: "auto", fontSize: "0.65rem", color: "var(--text-secondary)" }}>
+        <span className="sidebar-footer-status">
           {healthOk === 3 ? "All OK" : `${healthOk}/3`}
         </span>
+        {onLogout && (
+          <button className="sidebar-logout-btn" onClick={onLogout} title="Sign out">
+            🚪
+          </button>
+        )}
       </div>
     </aside>
   );

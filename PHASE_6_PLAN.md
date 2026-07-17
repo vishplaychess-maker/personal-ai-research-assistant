@@ -26,7 +26,7 @@ Replace the hardcoded `DEFAULT_USER_ID = 1` pattern with proper JWT-based authen
 
 ---
 
-# PHASE 6A — Backend Authentication Core
+# PHASE 6A — Backend Authentication Core ✅ COMPLETE
 
 ## 6A-1. Exact Objective
 
@@ -416,10 +416,124 @@ The existing `get_current_user()` is preserved for endpoints requiring authentic
 
 ---
 
-# PHASE 6C — Frontend Auth UX (NOT STARTED)
+# PHASE 6C — Frontend Auth UX ✅ COMPLETE
 
-# PHASE 6C — Frontend Auth UX (NOT STARTED)
+## 6C-1. Exact Objective
 
-*(Phase 6C will add Login/Register UI, token storage, and auth headers. Details TBD.)*
+Add frontend authentication UI: login/register forms, token storage in localStorage, automatic Authorization header attachment, 401 response handling, logout functionality, and route protection so unauthenticated users see the auth screen.
 
----
+## 6C-2. What was done
+
+### Frontend auth infrastructure
+
+| File | Action | Purpose |
+|---|---|---|
+| `frontend/src/auth.ts` | **Created** | Token storage (localStorage), expiry detection, auth headers, login/register/restoreSession API helpers |
+| `frontend/src/AuthContext.tsx` | **Created** | React context providing `user`, `token`, `isAuthenticated`, `isLoading`, `login`, `register`, `logout` across the app |
+| `frontend/src/AuthScreen.tsx` | **Created** | Login/Register form with client-side validation, password visibility toggle, mode switching, loading/error states |
+| `frontend/src/AuthScreen.css` | **Created** | Auth UI styles matching the app dark theme |
+| `frontend/src/types.ts` | **Modified** | Added `TokenResponse`, `UserInfo`, `LoginRequest`, `RegisterRequest`, `AuthState` types |
+
+### API integration
+
+| File | Change |
+|---|---|
+| `frontend/src/api.ts` | Auto-attaches `Authorization: Bearer <token>` to all API requests; handles 401 responses by clearing auth and calling `_onUnauthorized` callback |
+| `frontend/src/main.tsx` | Wraps App with `AuthProvider` |
+| `frontend/src/App.tsx` | Uses `useAuth()` to conditionally render: loading screen → auth screen → main app. All hooks moved before conditional returns for Rules of Hooks compliance. |
+| `frontend/src/Sidebar.tsx` | Added optional `onLogout` prop and logout button (door emoji) in sidebar footer |
+
+### Security properties
+
+- Passwords cleared from form fields on error (prevents re-display in browser)
+- Generic error messages (no username/email enumeration)
+- Token expiry checked client-side before making requests
+- All auth data cleared on logout or 401 response
+- JWT sub claim validated on restore (not just stored blindly)
+
+### Test changes
+
+| Test File | Tests | What they cover |
+|---|---|---|
+| `frontend/src/__tests__/auth.test.ts` | 19 | Token storage, expiry detection, auth headers, `loginUser`, `registerUser`, `restoreSession`, logout, 401 callback |
+| `frontend/src/__tests__/AuthScreen.test.tsx` | 17 | Login form rendering, register switch, validation (empty/short username, empty/short/weak password, email validation, password match), password toggle, error display, loading state, successful login, registration + auto-login |
+| `frontend/src/__tests__/App.test.tsx` | 7 | 5 backward-compat smoke tests (using `vi.mock` for `useAuth`), loading screen test, unauthenticated screen test |
+
+### Files deleted
+
+| File | Reason |
+|---|---|
+| `frontend/src/test-utils.tsx` | Replaced by `vi.mock` approach in App.test.tsx — no longer imported |
+
+## 6C-3. ✅ Definition Of Done
+
+- [x] `frontend/src/auth.ts` — Token storage, expiry detection, auth header helpers, login/register/restoreSession API calls, logout
+- [x] `frontend/src/AuthContext.tsx` — React context with login, register, logout, authError, clearError; auto-restores session on mount
+- [x] `frontend/src/AuthScreen.tsx` — Login/Register forms with client-side validation, password toggle, mode switch, loading/error states
+- [x] `frontend/src/api.ts` — Auto-attaches `Authorization: Bearer <token>` to all requests; handles 401 → logout
+- [x] `frontend/src/Sidebar.tsx` — Logout button in sidebar footer
+- [x] `frontend/src/App.tsx` — Auth gating: loading screen → auth screen → main app; hooks comply with Rules of Hooks
+- [x] Unauthenticated users see the auth screen (not the research assistant)
+- [x] Refreshing the page restores session from token storage (via `restoreSession()`)
+- [x] Logout clears auth state and returns to login screen
+- [x] 216 frontend tests pass (13 files, 0 failures)
+- [x] TypeScript check passes (0 errors)
+- [x] Production build succeeds
+
+## 6C-4. Test Results
+
+| Suite | Tests | Passed | Failed |
+|---|---|---|---|
+| **auth.test.ts** (token, headers, login, register, restore, 401) | **19** | **19** | **0** |
+| **AuthScreen.test.tsx** (form, validation, toggle, errors, success) | **17** | **17** | **0** |
+| **App.test.tsx** (smoke, loading, unauthenticated) | **7** | **7** | **0** |
+| Backward compat (ChatArea, Sidebar, ModelSelector, etc.) | 173 | 173 | 0 |
+| **Frontend total** | **216** | **216** | **0** |
+| TypeScript check | — | Clean | 0 |
+| Production build | — | Success | 0 |
+
+## 6C-5. Files Changed (Phase 6C)
+
+| Action | File |
+|---|---|
+| **Created** | `frontend/src/auth.ts` |
+| **Created** | `frontend/src/AuthContext.tsx` |
+| **Created** | `frontend/src/AuthScreen.tsx` |
+| **Created** | `frontend/src/AuthScreen.css` |
+| **Created** | `frontend/src/__tests__/auth.test.ts` |
+| **Created** | `frontend/src/__tests__/AuthScreen.test.tsx` |
+| **Deleted** | `frontend/src/test-utils.tsx` |
+| **Modified** | `frontend/src/types.ts` |
+| **Modified** | `frontend/src/api.ts` |
+| **Modified** | `frontend/src/main.tsx` |
+| **Modified** | `frontend/src/App.tsx` |
+| **Modified** | `frontend/src/Sidebar.tsx` |
+| **Modified** | `frontend/src/App.css` |
+| **Modified** | `frontend/src/__tests__/App.test.tsx` |
+| **Modified** | `PHASE_6_PLAN.md` |
+
+## 6C-6. Remaining non-blocking limitations
+
+1. **No password reset flow** — users cannot recover passwords without admin DB access
+2. **No email verification** — email is stored but not verified
+3. **No refresh tokens** — token expiry means re-login every 7 days
+4. **No rate limiting on login** — brute-force protection not implemented (backend Phase 6A limitation)
+5. **No "remember me" option** — token is always stored in localStorage (persists across sessions)
+
+## 6C-7. Definition Of Done — Phase 6 Complete ✅
+
+All three Phase 6 sub-phases are now complete:
+
+| Sub-Phase | Status | Key Feature |
+|---|---|---|
+| **6A** — Backend Auth Core | ✅ Complete | JWT, bcrypt, register/login/me endpoints |
+| **6B** — Authorization Middleware | ✅ Complete | Cross-user isolation, backward-compatible fallback |
+| **6C** — Frontend Auth UX | ✅ Complete | Login/Register UI, token storage, auth headers, 401 handling |
+
+**Final Phase 6 commit:** (to be committed)
+**Branch:** `phase-6a-auth-core`
+**Git working tree:** ✅ Clean
+**Frontend tests:** 216/216 passing
+**Backend tests:** 88/88 passing (14 auth + 31 health/search/models + 43 sessions/memories)
+**TypeScript:** ✅ Clean
+**Production build:** ✅ Success

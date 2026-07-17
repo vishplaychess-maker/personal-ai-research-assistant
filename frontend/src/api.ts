@@ -1,5 +1,6 @@
 /**
  * Phase 5C — API helper class extracted from App.tsx.
+ * Phase 6C — Auto-attaches Authorization header and handles 401 → logout.
  *
  * Centralizes all backend API calls used across the frontend.
  */
@@ -12,9 +13,28 @@ import type {
   Memory,
   MemorySetting,
 } from "./types";
+import { getStoredToken, clearAuth, isTokenExpired } from "./auth";
+
+// Callback invoked when a 401 is received (used to trigger logout)
+let _onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(cb: () => void): void {
+  _onUnauthorized = cb;
+}
+
+function getAuthToken(): string | null {
+  const token = getStoredToken();
+  if (token && isTokenExpired(token)) {
+    clearAuth();
+    _onUnauthorized?.();
+    return null;
+  }
+  return token;
+}
 
 /**
  * Generic request helper with JSON and FormData support.
+ * Automatically attaches Authorization header if a token is stored.
  */
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const isFormData = options?.body instanceof FormData;
@@ -22,7 +42,19 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   if (!isFormData) {
     headers["Content-Type"] = "application/json";
   }
+  // Phase 6C: auto-attach auth token
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(url, { headers, ...options });
+  // Phase 6C: handle 401 — token expired or invalid
+  if (res.status === 401) {
+    clearAuth();
+    _onUnauthorized?.();
+    const data = await res.json().catch(() => ({ detail: "Unauthorized" }));
+    throw new Error(data.detail || "Unauthorized");
+  }
   if (!res.ok) {
     if (res.status === 404) {
       const detail = await res.json().catch(() => ({ detail: "Not found" }));

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useStreaming } from "./useStreaming";
+import { useAuth } from "./AuthContext";
+import { AuthScreen } from "./AuthScreen";
 import { SystemPromptEditor } from "./SystemPromptEditor";
 import { Sidebar } from "./Sidebar";
 import { ChatArea } from "./ChatArea";
@@ -13,6 +15,14 @@ import "./App.css";
 // ── App Component ─────────────────────────────────────────
 
 function App() {
+  // ═══════════════════════════════════════════════════════
+  // ALL hooks must be declared BEFORE any conditional return
+  // to satisfy React's Rules of Hooks.
+  // ═══════════════════════════════════════════════════════
+
+  // Phase 6C: Authentication gate
+  const { isAuthenticated, isLoading: authLoading, logout } = useAuth();
+
   // Session state
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
@@ -308,6 +318,23 @@ function App() {
     handleSend(retryTarget.message);
   }, [retryTarget, activeSessionId, isStreaming]);
 
+  // ═══════════════════════════════════════════════════════
+  // Auth gate — after all hooks, before derived state & render
+  // ═══════════════════════════════════════════════════════
+
+  if (authLoading) {
+    return (
+      <div className="auth-loading-screen">
+        <div className="auth-loading-spinner" />
+        <p>Restoring session…</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
   // ── Derived state ──────────────────────────────────────
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
@@ -327,6 +354,7 @@ function App() {
         onCreateSession={handleCreateSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
+        onLogout={logout}
       />
 
       <ChatArea
