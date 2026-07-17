@@ -125,3 +125,17 @@ class SSEErrorEvent(BaseModel):
 class SSECancelledEvent(BaseModel):
     """Event sent when the client disconnects during streaming."""
     detail: str = "Generation cancelled by client"
+
+
+# ── Search schemas (Phase 5C) ──────────────────────────────
+
+
+class SearchResult(BaseModel):
+    """A single search result from the conversation search endpoint."""
+    session_id: int
+    session_title: str
+    message_id: int
+    role: str
+    content: str
+    snippet: str  # First 150 chars
+    created_at: datetime
