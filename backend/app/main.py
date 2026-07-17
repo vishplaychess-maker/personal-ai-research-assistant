@@ -1,3 +1,5 @@
+import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,6 +10,8 @@ from sqlalchemy import inspect, text as sa_text
 from app.config import settings
 from app.database import init_db, engine, SessionLocal
 from app.models.models import User
+
+logger = logging.getLogger(__name__)
 from app.routes.sessions import router as sessions_router
 from app.routes.messages import router as messages_router
 from app.routes.documents import router as documents_router
@@ -84,7 +88,40 @@ def _migrate_database():
         if "hashed_password" not in existing_user_cols:
             conn.execute(sa_text("ALTER TABLE users ADD COLUMN hashed_password VARCHAR(255)"))
 
+        # Add Phase 7A columns: failed_login_attempts, locked_until
+        if "failed_login_attempts" not in existing_user_cols:
+            conn.execute(sa_text("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0"))
+        if "locked_until" not in existing_user_cols:
+            conn.execute(sa_text("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP"))
+
         conn.commit()
+
+
+def _validate_jwt_secret():
+    """
+    Validate JWT secret at startup.
+
+    In production mode (PRODUCTION_MODE=true), refuse to start with
+    the default secret. In development/test mode, allow with a warning.
+    """
+    default_secret = "change-me-in-production"
+    if settings.jwt_secret == default_secret:
+        if settings.production_mode:
+            logger.critical(
+                "Default JWT secret detected in production mode! "
+                "Set JWT_SECRET environment variable to a secure random key.\n"
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+            sys.exit(1)
+        else:
+            logger.warning(
+                "Using default JWT secret '%s'. "
+                "Set JWT_SECRET environment variable for production.\n"
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\"",
+                default_secret,
+            )
+    else:
+        logger.info("JWT secret configured (custom value, not default)")
 
 
 @asynccontextmanager
@@ -94,6 +131,7 @@ async def lifespan(app: FastAPI):
     Path("/data").mkdir(parents=True, exist_ok=True)
     Path("/data/uploads").mkdir(parents=True, exist_ok=True)
 
+    _validate_jwt_secret()
     init_db()
     _migrate_database()
     _create_default_user()
