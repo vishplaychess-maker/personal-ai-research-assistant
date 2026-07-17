@@ -74,6 +74,106 @@
 
 .sidebar-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
 
+/* ── Search Bar ───────────────────────────────────────── */
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.sidebar-search-icon {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sidebar-search-input {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  outline: none;
+  min-width: 0;
+  transition: border-color var(--transition);
+}
+.sidebar-search-input:focus {
+  border-color: var(--accent-blue);
+}
+.sidebar-search-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.sidebar-search-clear {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.55rem;
+  cursor: pointer;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.sidebar-search-clear:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--accent-red);
+}
+
+.sidebar-search-spinner {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.sidebar-search-error {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.65rem;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.06);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Search result items */
+.sidebar-search-result {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 0.1rem;
+}
+
+.sidebar-search-snippet {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.sidebar-search-meta {
+  font-size: 0.55rem;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
 .sidebar-item {
   display: flex;
   align-items: center;
