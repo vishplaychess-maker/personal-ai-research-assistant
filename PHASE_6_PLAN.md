@@ -321,49 +321,102 @@ The existing default user (id=1, username="default") gets `hashed_password = NUL
 
 ---
 
-# PHASE 6B — Authorization Middleware (NOT STARTED)
+# PHASE 6B — Authorization Middleware ✅ COMPLETE
 
 ## 6B-1. Exact Objective
 
 Replace hardcoded `DEFAULT_USER_ID = 1` across all existing routes with the authenticated user from `get_current_user()`. Each user can only access their own sessions, messages, memories, and documents.
 
-## 6B-2. Changes Required
+## 6B-2. What was done
 
-### Routes to modify
+### Backward-compatible auth dependency
+
+Added `get_optional_user()` to `auth_service.py`:
+- If a valid JWT token is provided → returns the authenticated User
+- If no token is provided → returns default user (id=1) for backward compatibility
+- If an invalid/malformed token is provided → raises 401
+
+The existing `get_current_user()` is preserved for endpoints requiring authenticated access (e.g., `/api/auth/me`).
+
+### Routes modified
 
 | Route File | Change |
 |---|---|
-| `backend/app/routes/sessions.py` | Remove `DEFAULT_USER_ID=1`, use `get_current_user()` for CRUD scoping |
-| `backend/app/routes/memories.py` | Remove `DEFAULT_USER_ID=1`, use `get_current_user()` for CRUD scoping |
-| `backend/app/routes/messages.py` | Scope session access to current user |
-| `backend/app/routes/search.py` | Scope search to current user's messages |
-| `backend/app/routes/documents.py` | Scope document access to current user |
-| `backend/app/services/memory_service.py` | Pass `user_id` from caller instead of defaulting to 1 |
-| `backend/app/services/streaming_service.py` | Pass `user_id` from caller |
-| `backend/app/services/langgraph_workflow.py` | Pass `user_id` from caller |
+| `backend/app/routes/sessions.py` | All endpoints use `get_optional_user()`; `_get_session_or_404` consolidated with `user_id` param |
+| `backend/app/routes/memories.py` | All endpoints use `get_optional_user()` and scope to `current_user.id` |
+| `backend/app/routes/messages.py` | Session lookup scoped via `user_id`; streaming accepts `current_user.id` |
+| `backend/app/routes/search.py` | Search scoped via `rs.user_id = current_user.id` in SQL |
+| `backend/app/routes/documents.py` | All document endpoints verify session ownership; `get_document` ownership check added |
+| `backend/app/services/streaming_service.py` | `prepare_chat_context` accepts `user_id` for scoped session validation |
 
-### Tests to add
+### Services updated
 
-| Test | What It Verifies |
+| File | Change |
 |---|---|
-| `test_user_cannot_access_other_users_sessions` | User A cannot list/read/modify User B's sessions |
-| `test_user_cannot_access_other_users_memories` | User A cannot list/read/modify User B's memories |
-| `test_user_cannot_search_other_users_messages` | User A's search excludes User B's messages |
-| `test_unauthenticated_request_rejected` | Missing/token returns 401 on all routes |
+| `backend/app/services/auth_service.py` | Added `get_optional_user()`, `_resolve_user_id()` helper |
+| `backend/app/services/streaming_service.py` | `prepare_chat_context()` accepts `user_id` param |
 
-## 6B-3. Risk Assessment
+### Tests added (Phase 6B)
 
-- **Medium risk** — touches every existing route and service
-- **Mitigation:** Keep existing routes working via the same `get_db()` pattern; token is optional for backward compat through Phase 6C
-- **Backward compatibility:** If no token is provided, default to user_id=1 (single-user mode). This ensures the existing frontend continues to work without modification. Once Phase 6C adds frontend auth, users can log in to get their own isolated data.
+| # | Test | What It Verifies |
+|---|---|---|
+| 1 | `test_user_a_cannot_list_user_b_sessions` | User A cannot see User B's sessions |
+| 2 | `test_user_a_cannot_read_user_b_session` | User A gets 404 on User B's session |
+| 3 | `test_user_a_cannot_update_user_b_session` | User A gets 404 on rename |
+| 4 | `test_user_a_cannot_delete_user_b_session` | User A gets 404 on delete |
+| 5 | `test_user_a_cannot_modify_user_b_session_model` | User A gets 404 on model change |
+| 6 | `test_user_a_cannot_read_user_b_system_prompt` | User A gets 404 on system prompt |
+| 7 | `test_user_a_cannot_update_user_b_system_prompt` | User A gets 404 on prompt change |
+| 8 | `test_user_a_cannot_list_user_b_messages` | User A gets 404 on message list |
+| 9 | `test_user_a_cannot_list_user_b_memories` | User A cannot see User B's memories |
+| 10 | `test_user_a_cannot_read_user_b_memory` | User A gets 404 on memory update |
+| 11 | `test_user_a_cannot_delete_user_b_memory` | User A gets 404 on memory delete |
+| 12 | `test_user_a_cannot_clear_user_b_memories` | User A's clear-all is scoped to own data |
+| 13 | `test_user_a_cannot_search_user_b_messages` | User A's search is scoped to own data |
+| 14 | `test_unauthenticated_requests_fallback_to_default_user` | No-token requests use user id=1 |
 
-## 6B-4. Rollback Plan
+## 6B-3. ✅ Definition Of Done
+
+- [x] `get_optional_user()` dependency with backward-compatible fallback (no token → user id=1)
+- [x] Session CRUD scoped to `current_user.id` (list, read, create, update, delete, model, system-prompt)
+- [x] Memory CRUD scoped to `current_user.id` (list, create, update, delete, clear-all)
+- [x] Message endpoints scoped (list, send, stream)
+- [x] Search scoped via `rs.user_id` filter in SQL
+- [x] Document endpoints scoped (upload, list, get, delete with ownership verification)
+- [x] Streaming service accepts `user_id` for scoped session validation
+- [x] 14 cross-user isolation tests (27 total including Phase 6A)
+- [x] All Phase 5 backend tests still pass
+- [x] Code reviewer issues addressed (consolidated ownership checks, `get_document` gap, syntax errors)
+- [x] No breaking changes to existing frontend
+
+## 6B-4. Risk Assessment
+
+- **Risk:** Medium — touched every existing route
+- **Mitigation:** `get_optional_user()` fallback ensures existing frontend (Phase 6C not deployed) continues to work
+- **Backward compatibility verified:** 14 isolation tests prove cross-user isolation AND unauthenticated fallback
+
+## 6B-5. Rollback Plan
 
 1. `git revert <6B-commit-hash>`
 2. All routes revert to `DEFAULT_USER_ID = 1`
 3. No data loss — all data already belongs to specific users
 
+## 6B-6. Files Changed (Phase 6B)
+
+| Action | File |
+|---|---|
+| **Modified** | `backend/app/services/auth_service.py` — Added `get_optional_user()`, `_resolve_user_id()` |
+| **Modified** | `backend/app/routes/sessions.py` — Auth-scoped CRUD, consolidated `_get_session_or_404` |
+| **Modified** | `backend/app/routes/memories.py` — Auth-scoped CRUD |
+| **Modified** | `backend/app/routes/messages.py` — Auth-scoped session lookup |
+| **Modified** | `backend/app/routes/search.py` — Auth-scoped SQL query |
+| **Modified** | `backend/app/routes/documents.py` — Auth-scoped ops + `get_document` fix |
+| **Modified** | `backend/app/services/streaming_service.py` — `user_id` param |
+| **Modified** | `tests/test_auth.py` — 14 cross-user isolation tests added |
+
 ---
+
+# PHASE 6C — Frontend Auth UX (NOT STARTED)
 
 # PHASE 6C — Frontend Auth UX (NOT STARTED)
 

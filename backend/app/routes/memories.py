@@ -23,11 +23,9 @@ from app.config import settings
 from app.database import get_db
 from app.models.models import Memory, User
 from app.schemas.memories import MemoryCreate, MemoryUpdate, MemoryResponse
+from app.services.auth_service import get_optional_user
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
-
-# TODO (multi-user): Replace with dynamic user resolution from auth context
-DEFAULT_USER_ID = 1
 
 
 # ── Clear-all confirmation schema ──────────────────────────
@@ -51,14 +49,17 @@ def _get_memory_or_404(db: Session, memory_id: int) -> Memory:
 
 
 @router.get("", response_model=List[MemoryResponse])
-def list_memories(db: Session = Depends(get_db)):
+def list_memories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
     """
-    List all memories for the default user, most recently used first.
+    List all memories for the current user, most recently used first.
     Works even when memory is disabled (view-only).
     """
     memories = (
         db.query(Memory)
-        .filter(Memory.user_id == DEFAULT_USER_ID)
+        .filter(Memory.user_id == current_user.id)
         .order_by(Memory.last_used_at.desc())
         .all()
     )
@@ -66,7 +67,11 @@ def list_memories(db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=MemoryResponse, status_code=201)
-def create_memory(payload: MemoryCreate, db: Session = Depends(get_db)):
+def create_memory(
+    payload: MemoryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
     """
     Create a new memory manually.
 
@@ -89,13 +94,8 @@ def create_memory(payload: MemoryCreate, db: Session = Depends(get_db)):
             detail="Cannot save memories containing sensitive information (passwords, keys, tokens, etc.)",
         )
 
-    # Ensure default user exists
-    user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
-    if not user:
-        raise HTTPException(status_code=500, detail="Default user not found")
-
     memory = Memory(
-        user_id=DEFAULT_USER_ID,
+        user_id=current_user.id,
         session_id=payload.session_id,
         content=payload.content,
         category=payload.category,
@@ -111,9 +111,12 @@ def update_memory(
     memory_id: int,
     payload: MemoryUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
 ):
-    """Edit a memory's content and/or category."""
+    """Edit a memory's content and/or category (scoped to current user)."""
     memory = _get_memory_or_404(db, memory_id)
+    if memory.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
 
     # Validate category
     valid_categories = {"fact", "preference", "research_interest", "project_context"}
@@ -139,18 +142,28 @@ def update_memory(
 
 
 @router.delete("/{memory_id}", status_code=204)
-def delete_memory(memory_id: int, db: Session = Depends(get_db)):
-    """Delete a single memory by ID."""
+def delete_memory(
+    memory_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
+    """Delete a single memory by ID (scoped to current user)."""
     memory = _get_memory_or_404(db, memory_id)
+    if memory.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
     db.delete(memory)
     db.commit()
     return None
 
 
 @router.delete("", status_code=204)
-def clear_all_memories(payload: ClearMemoriesRequest, db: Session = Depends(get_db)):
+def clear_all_memories(
+    payload: ClearMemoriesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
     """
-    Delete ALL memories for the default user.
+    Delete ALL memories for the current user.
 
     Requires explicit confirmation via JSON body:
       { "confirm": true }
@@ -161,7 +174,7 @@ def clear_all_memories(payload: ClearMemoriesRequest, db: Session = Depends(get_
             detail="Confirmation required. Set 'confirm' to true to clear all memories.",
         )
 
-    memories = db.query(Memory).filter(Memory.user_id == DEFAULT_USER_ID).all()
+    memories = db.query(Memory).filter(Memory.user_id == current_user.id).all()
     for mem in memories:
         db.delete(mem)
     db.commit()

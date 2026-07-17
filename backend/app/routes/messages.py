@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import Message, ResearchSession, MessageRole
+from app.models.models import Message, ResearchSession, MessageRole, User
 from app.schemas.documents import (
     MessageResponse,
     ChatRequest,
@@ -15,6 +15,7 @@ from app.schemas.documents import (
     MemoryExtractionStatus,
 )
 from app.services.langgraph_workflow import run_research_workflow
+from app.services.auth_service import get_optional_user
 from app.services.streaming_service import (
     prepare_chat_context,
     stream_chat_response,
@@ -28,8 +29,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["messages"])
 
 
-def _get_session_or_404(db: Session, session_id: int) -> ResearchSession:
-    session = db.query(ResearchSession).filter(ResearchSession.id == session_id).first()
+def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchSession:
+    session = db.query(ResearchSession).filter(
+        ResearchSession.id == session_id,
+        ResearchSession.user_id == user_id,
+    ).first()
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return session
@@ -39,9 +43,13 @@ def _get_session_or_404(db: Session, session_id: int) -> ResearchSession:
     "/api/sessions/{session_id}/messages",
     response_model=List[MessageResponse],
 )
-def list_messages(session_id: int, db: Session = Depends(get_db)):
-    """Get all messages for a session, oldest first."""
-    _get_session_or_404(db, session_id)
+def list_messages(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
+    """Get all messages for a session, oldest first (scoped to current user)."""
+    _get_session_or_404(db, session_id, current_user.id)
     messages = (
         db.query(Message)
         .filter(Message.session_id == session_id)
@@ -59,6 +67,7 @@ def create_message(
     session_id: int,
     payload: ChatRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
 ):
     """
     Send a user message and get an AI response via the LangGraph workflow.
@@ -70,7 +79,7 @@ def create_message(
     This is the non-streaming endpoint, kept for backward compatibility.
     For streaming responses, use POST /api/sessions/{id}/messages/stream.
     """
-    session = _get_session_or_404(db, session_id)
+    session = _get_session_or_404(db, session_id, current_user.id)
 
     # 1. Save user message
     user_msg = Message(
@@ -150,6 +159,7 @@ async def stream_chat(
     payload: ChatRequest,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
 ):
     """
     Send a user message and stream the AI response token-by-token via SSE.
@@ -186,6 +196,7 @@ async def stream_chat(
             session_id=session_id,
             user_input=payload.message,
             db=db,
+            user_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

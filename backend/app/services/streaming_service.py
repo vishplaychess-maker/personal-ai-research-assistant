@@ -86,20 +86,30 @@ def prepare_chat_context(
     session_id: int,
     user_input: str,
     db: DBSession,
+    user_id: int = 1,
 ) -> ChatContext:
     """
     Prepare all context needed for a streaming chat response.
 
+    Args:
+        session_id: The session to chat in.
+        user_input: The user's message text.
+        db: Database session.
+        user_id: The user ID (scoped session lookup).
+
     Steps:
-      1. Validate session exists
+      1. Validate session exists and belongs to user
       2. Save user message to database
       3. Load recent conversation history
       4. Retrieve memories (if enabled)
       5. Retrieve RAG document context (if documents exist)
       6. Build combined system prompt with memory and RAG context
     """
-    # 1. Validate session
-    session = db.query(ResearchSession).filter(ResearchSession.id == session_id).first()
+    # 1. Validate session belongs to user
+    session = db.query(ResearchSession).filter(
+        ResearchSession.id == session_id,
+        ResearchSession.user_id == user_id,
+    ).first()
     if not session:
         raise ValueError(f"Session {session_id} not found")
 
