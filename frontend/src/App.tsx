@@ -4,43 +4,11 @@ import { SystemPromptEditor } from "./SystemPromptEditor";
 import { Sidebar } from "./Sidebar";
 import { ChatArea } from "./ChatArea";
 import { CitationPopup } from "./CitationPopup";
+import { DocumentPanel } from "./DocumentPanel";
+import { MemoryPanel } from "./MemoryPanel";
 import { API } from "./api";
 import type { Session, Message, Citation, Document, Memory, HealthStatus } from "./types";
 import "./App.css";
-
-// ── Helpers ───────────────────────────────────────────────
-
-function formatFileSize(bytes: number | null): string {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  if (diff < 86_400_000)
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-// ── Constants ─────────────────────────────────────────────
-
-const CATEGORY_ICON: Record<string, string> = {
-  fact: "💡",
-  preference: "⭐",
-  research_interest: "🔬",
-  project_context: "📋",
-};
-
-const CATEGORY_LABEL: Record<string, string> = {
-  fact: "Fact",
-  preference: "Preference",
-  research_interest: "Interest",
-  project_context: "Context",
-};
 
 // ── App Component ─────────────────────────────────────────
 
@@ -97,7 +65,6 @@ function App() {
   const [generationStopped, setGenerationStopped] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Health polling ─────────────────────────────────────
 
@@ -208,7 +175,6 @@ function App() {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -400,133 +366,44 @@ function App() {
 
       {/* Document panel */}
       {showDocs && activeSession && (
-        <div className="doc-panel">
-          <div className="doc-panel-header">
-            <span className="doc-panel-title">📄 Documents</span>
-            <span className="doc-panel-subtitle">{readyDocs} ready · {documents.filter(d => d.status === "processing").length} processing</span>
-          </div>
-          <div className="doc-upload-row">
-            <input ref={fileInputRef} type="file" accept=".pdf,.txt" onChange={handleFileSelect} style={{ display: "none" }} />
-            <button className="doc-upload-btn" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-              {uploading ? "⏳ Uploading…" : "📤 Upload PDF/TXT"}
-            </button>
-            <span className="doc-upload-hint">Max 20 MB</span>
-          </div>
-          {uploadError && <div className="doc-error">{uploadError}</div>}
-          <div className="doc-list">
-            {documents.length === 0 ? (
-              <div className="doc-empty">No documents uploaded yet</div>
-            ) : documents.map((doc) => (
-              <div key={doc.id} className={`doc-item doc-${doc.status}`}>
-                <div className="doc-info">
-                  <span className="doc-icon">{doc.filename.endsWith(".pdf") ? "📕" : "📄"}</span>
-                  <div className="doc-details">
-                    <span className="doc-name">{doc.filename}</span>
-                    <span className="doc-meta">
-                      {doc.status === "processing" && "⏳ Processing…"}
-                      {doc.status === "ready" && `✅ ${doc.chunk_count} chunks`}
-                      {doc.status === "failed" && `❌ Failed: ${doc.error_message || "Unknown error"}`}
-                      {formatFileSize(doc.file_size) && ` · ${formatFileSize(doc.file_size)}`}
-                    </span>
-                  </div>
-                </div>
-                <button className="doc-delete-btn" onClick={() => handleDeleteDocument(doc.id)} title="Delete document" disabled={doc.status === "processing"}>✕</button>
-              </div>
-            ))}
-          </div>
-        </div>
+        <DocumentPanel
+          documents={documents}
+          uploading={uploading}
+          uploadError={uploadError}
+          readyDocs={readyDocs}
+          onFileSelect={handleFileSelect}
+          onDeleteDocument={handleDeleteDocument}
+        />
       )}
 
       {/* Memory panel */}
       {showMemories && (
-        <div className="mem-panel">
-          <div className="mem-panel-header">
-            <span className="mem-panel-title">🧠 Long-Term Memory</span>
-            <span className="mem-panel-subtitle">{memories.length} saved · Stored locally in SQLite</span>
-            <span className={`mem-toggle-label ${memorySettingLoaded ? (memoryEnabled ? "enabled" : "disabled") : "loading"}`}>
-              {!memorySettingLoaded ? "⏳ Syncing…" : memoryEnabled ? "🟢 Memory enabled" : "🔴 Memory disabled"}
-            </span>
-          </div>
-          {memoryError && <div className="mem-error">{memoryError}</div>}
-
-          {addingMemory ? (
-            <div className="mem-add-form">
-              <select className="mem-category-select" value={newMemoryCategory} onChange={(e) => setNewMemoryCategory(e.target.value)}>
-                <option value="fact">💡 Fact</option>
-                <option value="preference">⭐ Preference</option>
-                <option value="research_interest">🔬 Research Interest</option>
-                <option value="project_context">📋 Project Context</option>
-              </select>
-              <input className="mem-add-input" placeholder="What should I remember?" value={newMemoryContent}
-                onChange={(e) => setNewMemoryContent(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddMemory(); } if (e.key === "Escape") { setAddingMemory(false); setNewMemoryContent(""); }}}
-                autoFocus
-              />
-              <div className="mem-add-actions">
-                <button className="mem-save-btn" onClick={handleAddMemory}>Save</button>
-                <button className="mem-cancel-btn" onClick={() => { setAddingMemory(false); setNewMemoryContent(""); }}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <div className="mem-add-row">
-              <button className="mem-add-btn" onClick={() => setAddingMemory(true)}>✚ Add Memory</button>
-              {memories.length > 0 && (
-                <>{showClearConfirm ? (
-                  <div className="mem-clear-confirm">
-                    <span>Clear all memories?</span>
-                    <button className="mem-confirm-yes" onClick={handleClearAllMemories}>Yes</button>
-                    <button className="mem-confirm-no" onClick={() => setShowClearConfirm(false)}>No</button>
-                  </div>
-                ) : (
-                  <button className="mem-clear-btn" onClick={() => setShowClearConfirm(true)}>🗑 Clear All</button>
-                )}</>
-              )}
-            </div>
-          )}
-
-          <div className="mem-list">
-            {memories.length === 0 ? (
-              <div className="mem-empty">No saved memories yet. Memories are automatically saved when you share durable facts or preferences.</div>
-            ) : memories.map((mem) => (
-              <div key={mem.id} className="mem-item">
-                {editingMemoryId === mem.id ? (
-                  <div className="mem-edit-form">
-                    <select className="mem-category-select" value={editMemoryCategory} onChange={(e) => setEditMemoryCategory(e.target.value)}>
-                      <option value="fact">💡 Fact</option>
-                      <option value="preference">⭐ Preference</option>
-                      <option value="research_interest">🔬 Research Interest</option>
-                      <option value="project_context">📋 Project Context</option>
-                    </select>
-                    <input className="mem-edit-input" value={editMemoryContent} onChange={(e) => setEditMemoryContent(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleEditMemory(mem.id); } if (e.key === "Escape") { setEditingMemoryId(null); }}}
-                      autoFocus
-                    />
-                    <div className="mem-edit-actions">
-                      <button className="mem-save-btn" onClick={() => handleEditMemory(mem.id)}>Save</button>
-                      <button className="mem-cancel-btn" onClick={() => setEditingMemoryId(null)}>Cancel</button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="mem-icon">{CATEGORY_ICON[mem.category] || "💡"}</div>
-                    <div className="mem-details">
-                      <span className="mem-content">{mem.content}</span>
-                      <span className="mem-meta">
-                        <span className={`mem-category-tag mem-cat-${mem.category}`}>{CATEGORY_LABEL[mem.category] || mem.category}</span>
-                        <span> · Saved {formatDate(mem.created_at)}</span>
-                      </span>
-                    </div>
-                    <div className="mem-actions">
-                      <button className="mem-action-btn" title="Edit"
-                        onClick={() => { setEditingMemoryId(mem.id); setEditMemoryContent(mem.content); setEditMemoryCategory(mem.category); }}>✎</button>
-                      <button className="mem-action-btn delete" title="Delete" onClick={() => handleDeleteMemory(mem.id)}>✕</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        <MemoryPanel
+          memories={memories}
+          memoryEnabled={memoryEnabled}
+          memorySettingLoaded={memorySettingLoaded}
+          memoryError={memoryError}
+          togglePending={togglePending}
+          addingMemory={addingMemory}
+          newMemoryContent={newMemoryContent}
+          newMemoryCategory={newMemoryCategory}
+          editingMemoryId={editingMemoryId}
+          editMemoryContent={editMemoryContent}
+          editMemoryCategory={editMemoryCategory}
+          showClearConfirm={showClearConfirm}
+          onToggleMemory={handleToggleMemory}
+          onSetAddingMemory={setAddingMemory}
+          onSetNewMemoryContent={setNewMemoryContent}
+          onSetNewMemoryCategory={setNewMemoryCategory}
+          onAddMemory={handleAddMemory}
+          onEditMemory={handleEditMemory}
+          onSetEditingMemoryId={setEditingMemoryId}
+          onSetEditMemoryContent={setEditMemoryContent}
+          onSetEditMemoryCategory={setEditMemoryCategory}
+          onDeleteMemory={handleDeleteMemory}
+          onClearAllMemories={handleClearAllMemories}
+          onSetShowClearConfirm={setShowClearConfirm}
+        />
       )}
 
       {/* Citation popup */}
