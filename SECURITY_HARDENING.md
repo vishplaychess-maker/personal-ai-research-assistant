@@ -81,8 +81,40 @@ The application implements reasonable authentication and authorization for a dev
 | `test_auth.py` — Login | 5 | Correct/wrong password, nonexistent user, generic errors | ✅ 5/5 |
 | `test_auth.py` — Token validation | 5 | Valid, missing, malformed, expired, ghost user | ✅ 5/5 |
 | `test_auth.py` — Cross-user isolation | 14 | Session, messages, memories, search, documents | ✅ 14/14 |
+| `test_auth.py` — Rate limiting (Phase 7A) | 32 | IP rate limit, lockout, memory growth, concurrent safety, cleanup | ✅ 32/32 |
 | `test_streaming.py` — Error details | 1 | Error messages must not contain secrets | ✅ 1/1 |
 | `test_memories.py` — Sensitive filter | 3 | Passwords, API keys filtered from memory extraction | ✅ 3/3 |
+
+---
+
+## Phase 7A Completion Summary
+
+**Branch:** `phase-7a-rate-limiting`
+**Commits:** `094436d` (feat) + `ebf4030` (fix)
+**Tests:** 63 auth tests (32 Phase 7A + 28 Phase 6 + 3 helpers) — all passing
+
+### Resolved Findings
+
+| ID | Finding | Severity | Resolution |
+|---|---|---|---|
+| **H-001** | No rate limiting on login | 🟠 High | ✅ Custom `InMemoryRateLimiter` with configurable 10/60s threshold, `Retry-After` headers, dual IP + account limiting |
+| **M-002** | No brute-force/account lockout | 🟡 Medium | ✅ Account lockout after 5 consecutive failures with exponential backoff (30s → 900s max); counter resets on success |
+
+### Additional Reliability Fixes
+
+- **Thread-safety:** `threading.RLock` protects all public methods; verified with concurrent 20-thread × 50-call stress test
+- **Bounded memory:** Write-through `_prune_key` removes empty keys; `record_attempt` prunes before append; probabilistic auto-cleanup every 100 mutations
+- **Graceful shutdown:** `stop()` abstract method added; InMemory impl clears state
+- **Redis-ready interface:** `RateLimiterInterface` unchanged with `stop()` added for future Redis implementation
+
+### Remaining Phase 7 Work
+
+| Checkpoint | Scope | Effort | Status |
+|---|---|---|---|
+| **7B** | Refresh tokens & session management | 2-3 days | Not started |
+| **7C** | Password reset & email verification | 3-4 days | Not started |
+| **7D** | Production security headers & deployment hardening | 2-3 days | Not started |
+| **7E** | ChromaDB health & infrastructure reliability | 1-2 days | Not started |
 
 ---
 
