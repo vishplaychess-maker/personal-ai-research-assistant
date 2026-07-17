@@ -10,16 +10,23 @@ Design notes:
 - Tracks by IP address and normalized username
 - Configurable window, max attempts, and lockout durations
 - Exponential backoff on repeated lockouts
-- Automatic cleanup of expired records to prevent memory growth
+- Thread-safe: each public method acquires a reentrant lock
+- Automatic probabilistic cleanup of expired records to prevent memory growth
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Probabilistic cleanup constant ─────────────────────────
+
+_DEFAULT_CLEANUP_INTERVAL: int = 100
+"""Default mutations between auto-cleanup passes. Each instance uses its own copy."""
 
 
 # ── Abstract interface ─────────────────────────────────────
@@ -28,8 +35,8 @@ logger = logging.getLogger(__name__)
 class RateLimiterInterface(ABC):
     """Abstract interface for rate limiting.
 
-    Implementations must be thread-safe (the in-memory version uses
-    a per-call lock). A Redis-backed implementation would replace this
+    Implementations must be thread-safe.
+    A Redis-backed implementation would replace InMemoryRateLimiter
     for multi-instance production deployments.
     """
 
@@ -64,7 +71,23 @@ class RateLimiterInterface(ABC):
     def cleanup_expired(self, max_age_seconds: int = 3600) -> int:
         """Remove entries older than max_age_seconds.
 
-        Returns the number of cleaned entries.
+        Returns the number of keys that were fully cleaned up.
+        """
+
+    @abstractmethod
+    def stop(self) -> None:
+        """Gracefully shut down the rate limiter, releasing any resources.
+
+        Called during application shutdown (lifespan teardown).
+        The InMemory implementation is a lightweight no-op; Redis or
+        other stateful implementations should close connections here.
+        """
+
+    @abstractmethod
+    def mutation_count(self) -> int:
+        """Return the total number of mutations handled.
+
+        Used for probabilistic cleanup scheduling.
         """
 
 
@@ -77,13 +100,53 @@ class InMemoryRateLimiter(RateLimiterInterface):
     NOT suitable for multi-instance or multi-worker deployments.
     Replace with RedisRateLimiter for production multi-instance setups.
 
-    Thread-safety: each public method acquires a lock to protect the
-    internal defaultdict.
+    Thread-safety: a reentrant lock protects all internal state.
     """
 
-    def __init__(self):
+    def __init__(self, cleanup_interval: int = _DEFAULT_CLEANUP_INTERVAL):
         # key -> list of Unix timestamps (attempt times)
         self._attempts: dict[str, list[float]] = defaultdict(list)
+        # Reentrant lock so internal helpers that hold the lock can call
+        # each other without deadlock
+        self._lock = threading.RLock()
+        # Mutation counter used for probabilistic cleanup scheduling
+        self._mutations = 0
+        # How many mutations between auto-cleanup passes (0 = disabled)
+        self.cleanup_interval = cleanup_interval
+
+    # ── Internal helpers ───────────────────────────────────
+
+    def _prune_key(self, key: str, cutoff: float) -> int:
+        """Remove entries older than *cutoff* for a specific key.
+
+        Removes the key entirely if all entries are expired.
+        Caller must hold self._lock.
+
+        Returns:
+            Number of entries removed.
+        """
+        entries = self._attempts.get(key)
+        if entries is None:
+            return 0
+        before = len(entries)
+        valid = [t for t in entries if t > cutoff]
+        if valid:
+            self._attempts[key] = valid
+        else:
+            # All entries expired: remove key entirely
+            self._attempts.pop(key, None)
+        return before - len(valid)
+
+    def _maybe_cleanup(self) -> None:
+        """Probabilistically trigger cleanup_expired after every N mutations.
+
+        Caller does NOT need to hold the lock — cleanup_expired acquires it.
+        """
+        if self.cleanup_interval > 0 and self._mutations >= self.cleanup_interval:
+            self._mutations = 0
+            self.cleanup_expired()
+
+    # ── Public API ─────────────────────────────────────────
 
     def is_rate_limited(self, key: str, max_attempts: int, window_seconds: int) -> bool:
         """Check if key is rate-limited, recording the attempt if not.
@@ -93,40 +156,76 @@ class InMemoryRateLimiter(RateLimiterInterface):
         now = time.time()
         cutoff = now - window_seconds
 
-        # Prune expired entries for this key
-        self._attempts[key] = [t for t in self._attempts[key] if t > cutoff]
+        with self._lock:
+            self._prune_key(key, cutoff)
 
-        if len(self._attempts[key]) >= max_attempts:
-            return True
+            if len(self._attempts[key]) >= max_attempts:
+                self._mutations += 1
+                self._maybe_cleanup()
+                return True
 
-        # Record this attempt
-        self._attempts[key].append(now)
-        return False
+            # Record this attempt
+            self._attempts[key].append(now)
+            self._mutations += 1
+            self._maybe_cleanup()
+            return False
 
     def peek_rate_limit(self, key: str, max_attempts: int, window_seconds: int) -> tuple[bool, int]:
-        """Check rate limit without recording an attempt."""
+        """Check rate limit without recording an attempt, AND prune expired entries.
+
+        Returns (is_limited, remaining_attempts).
+        """
         now = time.time()
         cutoff = now - window_seconds
 
-        recent = [t for t in self._attempts[key] if t > cutoff]
-        is_limited = len(recent) >= max_attempts
-        remaining = max(0, max_attempts - len(recent))
-        return is_limited, remaining
+        with self._lock:
+            # Write-through pruning: remove stale entries from storage
+            removed = self._prune_key(key, cutoff)
 
-    def record_attempt(self, key: str) -> None:
-        """Record an attempt manually (used for username-based tracking)."""
-        self._attempts[key].append(time.time())
+            entries = self._attempts.get(key, [])
+            is_limited = len(entries) >= max_attempts
+            remaining = max(0, max_attempts - len(entries))
+
+            if removed > 0:
+                self._mutations += 1
+                self._maybe_cleanup()
+            return is_limited, remaining
+
+    def record_attempt(self, key: str, window_seconds: int = 60) -> None:
+        """Record an attempt, pruning expired entries first.
+
+        Args:
+            key: The rate-limit key.
+            window_seconds: Prune entries older than this many seconds
+                            (defaults to 60, matching the standard window).
+        """
+        now = time.time()
+
+        with self._lock:
+            cutoff = now - window_seconds
+            self._prune_key(key, cutoff)
+
+            self._attempts[key].append(now)
+            self._mutations += 1
+            self._maybe_cleanup()
 
     def reset_attempts(self, key: str) -> None:
         """Clear all recorded attempts for the given key."""
-        self._attempts.pop(key, None)
+        with self._lock:
+            self._attempts.pop(key, None)
+            self._mutations += 1
 
     def reset(self) -> None:
         """Clear ALL rate limit records. Used for testing."""
-        self._attempts.clear()
+        with self._lock:
+            self._attempts.clear()
+            self._mutations = 0
 
     def cleanup_expired(self, max_age_seconds: int = 3600) -> int:
         """Remove entries older than max_age_seconds.
+
+        Iterates over ALL keys and prunes expired entries. Keys that
+        become empty are removed entirely.
 
         Returns the number of keys that were fully cleaned up.
         """
@@ -134,22 +233,35 @@ class InMemoryRateLimiter(RateLimiterInterface):
         cutoff = now - max_age_seconds
         cleaned = 0
 
-        keys_to_delete = []
-        for key, timestamps in self._attempts.items():
-            valid = [t for t in timestamps if t > cutoff]
-            if not valid:
-                keys_to_delete.append(key)
-                cleaned += 1
-            else:
-                self._attempts[key] = valid
+        with self._lock:
+            keys_to_delete = []
+            for key, timestamps in list(self._attempts.items()):
+                valid = [t for t in timestamps if t > cutoff]
+                if not valid:
+                    keys_to_delete.append(key)
+                    cleaned += 1
+                else:
+                    self._attempts[key] = valid
 
-        for key in keys_to_delete:
-            del self._attempts[key]
+            for key in keys_to_delete:
+                del self._attempts[key]
 
         if cleaned:
             logger.debug("Rate limiter cleanup: removed %d expired keys", cleaned)
 
         return cleaned
+
+    def stop(self) -> None:
+        """Gracefully shut down (no-op for in-memory implementation)."""
+        with self._lock:
+            self._attempts.clear()
+            self._mutations = 0
+            logger.debug("Rate limiter stopped and cleared")
+
+    def mutation_count(self) -> int:
+        """Return the total number of mutations handled."""
+        with self._lock:
+            return self._mutations
 
 
 # ── Singleton instance ─────────────────────────────────────
@@ -171,6 +283,17 @@ def get_rate_limiter() -> RateLimiterInterface:
             "(single-process only; replace with Redis for multi-instance)"
         )
     return _rate_limiter
+
+
+def reset_rate_limiter() -> None:
+    """Replace the global rate limiter with a fresh instance.
+
+    Used during tests to ensure a clean state without relying on
+    the test-only reset() method.
+    """
+    global _rate_limiter
+    _rate_limiter = InMemoryRateLimiter()
+    logger.debug("Rate limiter replaced with fresh instance")
 
 
 # ── Lockout helper ─────────────────────────────────────────

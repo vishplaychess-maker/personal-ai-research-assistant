@@ -88,7 +88,7 @@ ALTER TABLE users ADD COLUMN locked_until TIMESTAMP;
 | `RATE_LIMIT_LOCKOUT_MAX_SECONDS` | `900` | Max lockout duration (15 min) |
 | `PRODUCTION_MODE` | `false` | Enforces JWT secret strength at startup |
 
-## Tests Added (18 new tests)
+## Tests Added (19 new + 15 memory-growth = 34 new tests)
 
 | Class | Tests | What It Verifies |
 |---|---|---|
@@ -101,12 +101,16 @@ ALTER TABLE users ADD COLUMN locked_until TIMESTAMP;
 
 **Existing tests preserved:** All 28 Phase 6 auth tests still pass unchanged.
 
-## Known Limitations
+## Known Limitations (Resolved)
 
-1. **Single-process only** — `InMemoryRateLimiter` is not suitable for multi-worker/multi-instance deployments. The `RateLimiterInterface` abstract class allows replacing with Redis.
-2. **`peek_rate_limit` does not prune stored entries** — `peek` computes the correct answer but leaves stale entries in the dict. `record_attempt` also doesn't prune. Entries are only pruned when `is_rate_limited` is called for that key.
-3. **No automatic `cleanup_expired` scheduling** — The method exists but is never called automatically. Under a sustained distributed attack with many unique IPs, entries could accumulate. `is_rate_limited` prunes on access for the specific key being checked.
-4. **`peek` is read-only** — Designed that way to avoid mutating state during checks, but means the pruning in `peek` is wasted computation (doesn't reduce storage).
+- ~~`peek_rate_limit` does not prune stored entries~~ ✅ Fixed: write-through `_prune_key` now reassigns or removes empty keys
+- ~~`record_attempt` has no pruning~~ ✅ Fixed: accepts optional `window_seconds` parameter (default 60), prunes before appending
+- ~~No automatic `cleanup_expired` scheduling~~ ✅ Fixed: probabilistic auto-cleanup after every 100 mutations (instance-level configurable `cleanup_interval`)
+- ~~No thread-safety~~ ✅ Fixed: `threading.RLock` protects all public methods; safe for concurrent login attempts
+- ~~No graceful shutdown~~ ✅ Fixed: `stop()` abstract method added; InMemory impl clears state
+- ~~No `reset_rate_limiter` helper for tests~~ ✅ Fixed: replaces singleton with fresh instance
+
+**Remaining limitation:** Single-process only — `InMemoryRateLimiter` is not suitable for multi-worker/multi-instance deployments. The `RateLimiterInterface` abstract class allows replacing with Redis.
 
 ## Rollback
 

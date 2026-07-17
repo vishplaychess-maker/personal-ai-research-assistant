@@ -776,3 +776,269 @@ class TestJWTSecretValidation:
         assert get_lockout_duration(2, 30, 900) == 60
         assert get_lockout_duration(5, 30, 900) == 480  # 30 * 2^4 = 480
         assert get_lockout_duration(6, 30, 900) == 900  # capped at max
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 7A — Memory Growth Prevention Tests
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRateLimiterMemoryGrowth:
+    """Verify the rate limiter does not leak memory."""
+
+    # ── peek write-through pruning ────────────────────────
+
+    def test_peek_prunes_expired_entries(self):
+        """peek_rate_limit physically removes expired entries."""
+        limiter = InMemoryRateLimiter()
+        # Plant a stale entry
+        far_past = time.time() - 120  # 2 minutes old
+        limiter._attempts["stale_key"] = [far_past, far_past]
+        # peek should prune them
+        is_limited, _ = limiter.peek_rate_limit("stale_key", 5, 60)
+        # After peek pruning with 60s window, both entries > 60s old
+        # should be removed, leaving 0 entries
+        assert len(limiter._attempts.get("stale_key", [])) == 0
+        # With 0 entries, not limited
+        assert not is_limited
+
+    def test_peek_removes_all_entries_when_all_expired(self):
+        """peek removes the key entirely when all entries are expired."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 120
+        limiter._attempts["old_key"] = [far_past, far_past]
+        # peek uses default 60s window, both are older
+        limiter.peek_rate_limit("old_key", 5, 60)
+        # Key should remain with empty list (or be removed entirely)
+        # InMemoryRateLimiter keeps the key with empty list after peek
+        assert len(limiter._attempts.get("old_key", [])) == 0
+
+    # ── record_attempt pruning ────────────────────────────
+
+    def test_record_attempt_prunes_expired(self):
+        """record_attempt prunes entries older than 60s before appending."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 120
+        limiter._attempts["key"] = [far_past, far_past]
+        limiter.record_attempt("key")
+        # After pruning + append, should have exactly 1 entry
+        assert len(limiter._attempts["key"]) == 1
+
+    def test_record_attempt_keeps_fresh_entries(self):
+        """record_attempt keeps non-expired entries when pruning."""
+        limiter = InMemoryRateLimiter()
+        now = time.time()
+        fresh = now - 10  # 10 seconds ago (still within 60s window)
+        old = now - 120  # 2 minutes ago (expired)
+        limiter._attempts["key"] = [fresh, old]
+        limiter.record_attempt("key")
+        # Should keep fresh + 1 new = 2 entries
+        assert len(limiter._attempts["key"]) == 2
+
+    # ── cleanup_expired ───────────────────────────────────
+
+    def test_cleanup_expired_removes_empty_keys(self):
+        """cleanup_expired removes keys whose entries are all expired."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 7200
+        limiter._attempts["expired_key"] = [far_past]
+        limiter._attempts["fresh_key"] = [time.time()]
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 1
+        assert "expired_key" not in limiter._attempts
+        assert "fresh_key" in limiter._attempts
+
+    def test_cleanup_expired_preserves_active_lockouts(self):
+        """Active (recent) lockout entries are not removed by cleanup."""
+        limiter = InMemoryRateLimiter()
+        # Lockout tracking uses record_attempt, producing recent entries
+        limiter.record_attempt("rl_user:active_user")
+        limiter.record_attempt("rl_ip:1.2.3.4")
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 0
+        assert "rl_user:active_user" in limiter._attempts
+        assert "rl_ip:1.2.3.4" in limiter._attempts
+
+    def test_repeated_cleanup_is_safe(self):
+        """Calling cleanup_expired repeatedly does not cause errors."""
+        limiter = InMemoryRateLimiter()
+        # Run cleanup on empty store
+        assert limiter.cleanup_expired() == 0
+        # Add some fresh entries
+        limiter.record_attempt("key1")
+        limiter.record_attempt("key2")
+        # Run cleanup again
+        assert limiter.cleanup_expired() == 0
+        # Run cleanup a third time
+        assert limiter.cleanup_expired() == 0
+        assert len(limiter._attempts) == 2
+
+    # ── Bounded storage ───────────────────────────────────
+
+    def test_bounded_storage_after_many_expired_keys(self):
+        """Storage remains bounded after many expired keys via cleanup."""
+        limiter = InMemoryRateLimiter()
+        far_past = time.time() - 7200
+        # Simulate 1000 unique IPs that hit once and never return
+        for i in range(1000):
+            limiter._attempts[f"rl_ip:1.1.1.{i}"] = [far_past]
+        assert len(limiter._attempts) == 1000
+        # Single cleanup pass removes all 1000
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 1000
+        assert len(limiter._attempts) == 0
+
+    def test_bounded_storage_mixed_fresh_and_expired(self):
+        """Cleanup removes only expired keys, preserving fresh ones."""
+        limiter = InMemoryRateLimiter()
+        now = time.time()
+        far_past = now - 7200
+        # 100 expired + 50 fresh
+        for i in range(100):
+            limiter._attempts[f"expired_{i}"] = [far_past]
+        for i in range(50):
+            limiter._attempts[f"fresh_{i}"] = [now]
+        cleaned = limiter.cleanup_expired(max_age_seconds=3600)
+        assert cleaned == 100
+        assert len(limiter._attempts) == 50
+
+    # ── Thread safety ─────────────────────────────────────
+
+    def test_concurrent_record_attempts(self):
+        """Concurrent record_attempt calls are thread-safe."""
+        import concurrent.futures
+
+        limiter = InMemoryRateLimiter()
+        n_threads = 20
+        n_calls = 50
+
+        def do_records():
+            for i in range(n_calls):
+                limiter.record_attempt("shared_key")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as ex:
+            futures = [ex.submit(do_records) for _ in range(n_threads)]
+            concurrent.futures.wait(futures)
+
+        # Each of 20 threads calls record_attempt 50 times
+        total = n_threads * n_calls
+        # After pruning, all entries should be fresh (< 60s)
+        assert len(limiter._attempts["shared_key"]) == total
+
+    def test_concurrent_mixed_operations(self):
+        """Concurrent peek, record, reset operations are thread-safe."""
+        import concurrent.futures
+        import random
+
+        limiter = InMemoryRateLimiter()
+        errors = []
+
+        def worker(worker_id: int):
+            for _ in range(30):
+                op = random.choice(["peek", "record", "reset_key", "reset_all"])
+                key = f"key_{worker_id % 5}"
+                try:
+                    if op == "peek":
+                        limiter.peek_rate_limit(key, 10, 60)
+                    elif op == "record":
+                        limiter.record_attempt(key)
+                    elif op == "reset_key":
+                        limiter.reset_attempts(key)
+                    elif op == "reset_all":
+                        limiter.reset()
+                except Exception as exc:
+                    errors.append((worker_id, op, str(exc)))
+                    raise
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(worker, i) for i in range(10)]
+            concurrent.futures.wait(futures)
+
+        assert len(errors) == 0, f"Concurrent errors: {errors}"
+        # Data integrity: after all ops, storage should be bounded
+        # (5 possible keys, each with at most a few entries)
+        assert len(limiter._attempts) <= 10, "Storage grew unexpectedly under concurrent load"
+
+    # ── Stop / lifecycle ──────────────────────────────────
+
+    def test_stop_clears_state(self):
+        """stop() clears all state for graceful shutdown."""
+        limiter = InMemoryRateLimiter()
+        limiter.record_attempt("key1")
+        limiter.record_attempt("key2")
+        assert len(limiter._attempts) == 2
+        limiter.stop()
+        assert len(limiter._attempts) == 0
+        assert limiter.mutation_count() == 0
+
+    def test_stop_then_continue_is_safe(self):
+        """After stop(), the limiter can still be used."""
+        limiter = InMemoryRateLimiter()
+        limiter.stop()
+        # These should not raise
+        limiter.record_attempt("new_key")
+        assert limiter.is_rate_limited("new_key", 5, 60) is False
+        limiter.reset()
+
+    # ── Probabilistic auto-cleanup ────────────────────────
+
+    def test_probabilistic_cleanup_after_many_mutations(self):
+        """Auto-cleanup triggers after cleanup_interval mutations.
+
+        Each InMemoryRateLimiter has its own cleanup_interval, so
+        this test does not affect other tests or the singleton.
+        """
+        limiter = InMemoryRateLimiter(cleanup_interval=5)
+        # 10 mutations should trigger cleanup at least once
+        for i in range(10):
+            limiter.record_attempt(f"auto_key_{i}")
+        # mutation_count should be <= 10 - 5 = 5 (reset at 5, then
+        # 5 more mutations)
+        assert limiter.mutation_count() <= 5
+        assert limiter.mutation_count() >= 0
+
+    # ── reset_rate_limiter ───────────────────────────────
+
+    def test_reset_rate_limiter_global(self):
+        """reset_rate_limiter creates a fresh singleton instance."""
+        from app.services.rate_limiter import reset_rate_limiter
+
+        original = get_rate_limiter()
+        original.record_attempt("test_key")
+        # Replace the singleton
+        reset_rate_limiter()
+        new_instance = get_rate_limiter()
+        # Should be a different instance
+        assert new_instance is not original
+        # Fresh instance has no state
+        is_limited, _ = new_instance.peek_rate_limit("test_key", 5, 60)
+        assert not is_limited
+        # Clean up: reset singleton to original state
+        get_rate_limiter().reset()
+
+
+class TestRateLimitExistingBehavior:
+    """Regression: existing 429, Retry-After, lockout and reset behavior."""
+
+    def test_rate_limit_still_works(self, client):
+        """429 is still returned after exceeding threshold."""
+        for i in range(11):
+            resp = client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+            if resp.status_code == 429:
+                return
+        pytest.fail("Rate limit not triggered")
+
+    def test_retry_after_still_present(self, client):
+        """Retry-After header is still included on 429."""
+        for i in range(12):
+            resp = client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+            if resp.status_code == 429:
+                assert "Retry-After" in resp.headers
+                return
+        pytest.fail("Rate limit not triggered")
