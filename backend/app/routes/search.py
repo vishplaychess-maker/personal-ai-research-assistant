@@ -15,7 +15,9 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.models import User
 from app.schemas.documents import SearchResult
+from app.services.auth_service import get_optional_user
 
 router = APIRouter(tags=["search"])
 
@@ -27,9 +29,10 @@ MAX_RESULTS = 50
 def search_messages(
     q: Optional[str] = Query(None, min_length=1, max_length=MAX_QUERY_LENGTH),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
 ):
     """
-    Search across all messages in all sessions.
+    Search across messages in the current user's sessions.
 
     Uses SQLite LIKE for case-insensitive substring matching.
     Results are ordered by message creation time (most recent first),
@@ -54,12 +57,13 @@ def search_messages(
         FROM messages m
         JOIN research_sessions rs ON rs.id = m.session_id
         WHERE m.content LIKE '%' || :q || '%'
+          AND rs.user_id = :user_id
         ORDER BY m.created_at DESC
         LIMIT :limit
         """
     )
 
-    rows = db.execute(sql, {"q": query_text, "limit": MAX_RESULTS}).fetchall()
+    rows = db.execute(sql, {"q": query_text, "user_id": current_user.id, "limit": MAX_RESULTS}).fetchall()
 
     results: List[SearchResult] = []
     for row in rows:

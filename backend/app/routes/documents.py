@@ -23,12 +23,14 @@ from app.models.models import (
     DocumentChunk,
     DocumentStatus,
     ResearchSession,
+    User,
 )
 from app.schemas.documents import (
     DocumentResponse,
     DocumentListResponse,
     UploadResponse,
 )
+from app.services.auth_service import get_optional_user
 from app.services.document_processor import extract_text, chunk_text
 from app.services.embeddings_client import generate_embeddings_batch
 from app.services.chromadb_client import add_chunks, delete_chunks, delete_collection
@@ -48,8 +50,12 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 # ── Helpers ────────────────────────────────────────────────
 
 
-def _get_session_or_404(db: Session, session_id: int) -> ResearchSession:
-    session = db.query(ResearchSession).filter(ResearchSession.id == session_id).first()
+
+def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchSession:
+    session = db.query(ResearchSession).filter(
+        ResearchSession.id == session_id,
+        ResearchSession.user_id == user_id,
+    ).first()
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return session
@@ -103,9 +109,10 @@ async def upload_document(
     session_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
 ):
     """
-    Upload a PDF or TXT document.
+    Upload a PDF or TXT document (scoped to current user's session).
 
     The file is validated, saved to /data/uploads, then processed:
       1. Text extraction (pypdf for PDF, plain read for TXT)
@@ -113,7 +120,7 @@ async def upload_document(
       3. Embedding generation (nomic-embed-text via Ollama)
       4. Storage in ChromaDB (session_{session_id} collection)
     """
-    session = _get_session_or_404(db, session_id)
+    session = _get_session_or_404(db, session_id, current_user.id)
 
     # Read file content
     file_content = await file.read()
@@ -245,9 +252,13 @@ async def upload_document(
 
 
 @router.get("/api/sessions/{session_id}/documents", response_model=List[DocumentResponse])
-def list_documents(session_id: int, db: Session = Depends(get_db)):
-    """List all documents for a session."""
-    _get_session_or_404(db, session_id)
+def list_documents(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
+    """List all documents for a session (scoped to current user)."""
+    _get_session_or_404(db, session_id, current_user.id)
     docs = (
         db.query(Document)
         .filter(Document.session_id == session_id)
@@ -258,21 +269,43 @@ def list_documents(session_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/documents/{document_id}", response_model=DocumentResponse)
-def get_document(document_id: int, db: Session = Depends(get_db)):
-    """Get details for a single document."""
+def get_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
+    """Get details for a single document (scoped to current user)."""
     doc = _get_document_or_404(db, document_id)
+    # Verify the document belongs to a session owned by the current user
+    session = db.query(ResearchSession).filter(
+        ResearchSession.id == doc.session_id,
+        ResearchSession.user_id == current_user.id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
     return DocumentResponse.model_validate(doc)
 
 
 @router.delete("/api/documents/{document_id}", status_code=204)
-def delete_document(document_id: int, db: Session = Depends(get_db)):
+def delete_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_optional_user),
+):
     """
-    Delete a document and all associated data:
+    Delete a document and all associated data (scoped to current user).
       - Uploaded file
       - SQLite Document and DocumentChunk rows
       - ChromaDB vectors
     """
     doc = _get_document_or_404(db, document_id)
+    # Verify the document belongs to a session owned by the current user
+    session = db.query(ResearchSession).filter(
+        ResearchSession.id == doc.session_id,
+        ResearchSession.user_id == current_user.id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
     session_id = doc.session_id
 
     # Collect ChromaDB IDs to delete

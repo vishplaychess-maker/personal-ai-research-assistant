@@ -60,6 +60,7 @@ class WorkflowState(TypedDict):
     db: Optional[Any]
     model_name: Optional[str]  # Per-session model name (None = use config default)
     system_prompt: Optional[str]  # Per-session system prompt (None = use default)
+    user_id: int  # Authenticated user ID (default 1 for backward compat)
 
 
 # ── Node: load_context ─────────────────────────────────────
@@ -302,6 +303,7 @@ def extract_memory(state: WorkflowState) -> WorkflowState:
     result: MemoryExtractionResult = extract_memory_from_message(
         user_message=user_input,
         db=db,
+        user_id=state.get("user_id", 1),
         session_id=session_id,
     )
 
@@ -401,6 +403,7 @@ def run_research_workflow(
         "extraction_result": None,
         "error": None,
         "db": db,
+        "user_id": 1,
     }
 
     final_state = _workflow_app.invoke(initial_state)
