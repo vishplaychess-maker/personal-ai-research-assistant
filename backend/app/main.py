@@ -15,6 +15,7 @@ from app.routes.memories import router as memories_router
 from app.routes.settings import router as settings_router
 from app.routes.models import router as models_router
 from app.routes.search import router as search_router
+from app.routes.auth import router as auth_router
 
 
 def _migrate_database():
@@ -78,6 +79,11 @@ def _migrate_database():
         if "system_prompt" not in existing_sess_cols:
             conn.execute(sa_text("ALTER TABLE research_sessions ADD COLUMN system_prompt TEXT"))
 
+        # Add Phase 6A column: hashed_password on users
+        existing_user_cols = {c["name"] for c in inspector.get_columns("users")}
+        if "hashed_password" not in existing_user_cols:
+            conn.execute(sa_text("ALTER TABLE users ADD COLUMN hashed_password VARCHAR(255)"))
+
         conn.commit()
 
 
@@ -127,6 +133,7 @@ app.include_router(memories_router)
 app.include_router(settings_router)
 app.include_router(models_router)
 app.include_router(search_router)
+app.include_router(auth_router)
 
 
 @app.get("/api/health")

@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     enable_memory: bool = True
     memory_max_results: int = 5
 
+    # ── Auth settings ───────────────────────────────────
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_hours: int = 168  # 7 days
+
     # ── Model settings ──────────────────────────────────
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5
