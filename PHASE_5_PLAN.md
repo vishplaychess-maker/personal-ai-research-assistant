@@ -1001,9 +1001,13 @@ A future enhancement could add SQLite FTS5 indexes, but this is out of scope for
 | Phase 5C — CitationPopup component | 7 | 7 | 0 | Render, close, backdrop, stopPropagation |
 | Phase 5C — App smoke test | 5 | 5 | 0 | Renders without crashing |
 | **Frontend Phase 5C subtotal** | **89** | **89** | **0** | ✅ Updated with polish fixes |
-| Backend (all excluding documents) | 99 | 99 | 0 | ✅ Includes 9 search tests |
+| Backend (TestClient-based tests) | 30 | 30 | 0 | ✅ health (6), search (9), models (15) |
+| Backend (httpx-based — pre-existing env sensitivity) | 69 | 67 | 2 | ⚠️ 2 tests fail due to live Ollama (not 5C regressions) |
+| **Backend total (excl. documents)** | **99** | **97** | **2** | ⚠️ 2 pre-existing env-sensitive failures |
 | TypeScript | — | Clean | 0 | ✅ |
 | Production build | — | Success | 0 | ✅ |
+
+**Note on backend failures (non-blocking):** Tests `test_list_messages` and `test_memories_not_used_without_memories` use `httpx.Client` against the **live running backend** (port 8080), not in-process `TestClient`. With Ollama running, the live backend's message endpoint attempts real model calls, causing timeouts. These are **pre-existing environmental sensitivities**, not Phase 5C regressions. All Phase 5C-specific tests (`test_search.py`, `test_models.py`) use in-process `TestClient` and pass cleanly.
 
 ### Phase 5C Polish Items Completed
 
