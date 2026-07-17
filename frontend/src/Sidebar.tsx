@@ -175,6 +175,7 @@ export function Sidebar({
         <input
           className="sidebar-search-input"
           type="text"
+          name="search"
           placeholder="Search conversations…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -246,6 +247,7 @@ export function Sidebar({
                   {renamingId === session.id ? (
                     <input
                       className="rename-input"
+                      name="rename"
                       value={renameValue}
                       onChange={(e) => setRenameValue(e.target.value)}
                       onBlur={() => handleRenameSubmit(session.id)}

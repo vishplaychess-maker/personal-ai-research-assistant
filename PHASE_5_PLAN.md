@@ -1179,4 +1179,77 @@ Phase 5C (Search & Refactoring)
 
 ---
 
-*End of Phase 5 Proposal*
+# Phase 5 Release Checkpoint — `phase-5-complete`
+
+## ✅ Final Status: Phase 5 Complete
+
+All three sub-phases (5A Streaming + Markdown + Error Handling, 5B Model & Prompt Controls, 5C Search & Refactoring) have been implemented, tested, verified with real Ollama, and merged into `master`.
+
+### Master Merge Details
+
+| Item | Value |
+|---|---|
+| **Integration branch** | `phase-5a-response-experience` (contains Phases 5A + 5B + 5C) |
+| **Phase 5C branch** | `phase-5c-search-and-refactoring` (preserved) |
+| **Master merge** | Fast-forward, no conflicts |
+| **Previous master** | `2a0fbd9` (Complete Phase 1) |
+| **Final master HEAD** | `3ff7b17e873953430ac72c77647e136426b4ed60` |
+| **Tag** | `phase-5-complete` |
+| **Date** | 2026-07-17 |
+
+### Test Totals (Final)
+
+| Suite | Tests | Passed | Failed |
+|---|---|---|---|
+| **Frontend total** | **178** | **178** | **0** |
+| **Backend (TestClient-based)** | **30** | **30** | **0** |
+| Backend (httpx env-sensitive) | 69 | 67 | 2* |
+| TypeScript | — | Clean | 0 |
+| Production build | — | Success | 0 |
+
+*\*2 pre-existing environment-sensitive failures documented below.*
+
+### Ollama Browser Smoke Test
+
+**Model:** `llama3.2:3b` (3.2B, Q4_K_M, lightweight)
+
+| # | Test | Result |
+|---|---|---|
+| 1 | Page load with health indicators | ✅ All 3 services OK |
+| 2 | Create session | ✅ |
+| 3 | Model selector — list and select | ✅ |
+| 4 | System prompt — edit and save | ✅ |
+| 5 | Send message with streaming | ✅ Tokens streamed |
+| 6 | Markdown rendering (code blocks) | ✅ Syntax-highlighted |
+| 7 | Cancel streaming | ✅ Generation stopped |
+| 8 | Memory status | ✅ "🧠 On" displayed |
+| 9 | Search "sorted" and navigate | ✅ Result found, session opened |
+| 10 | Refresh — persistence | ✅ Session/model persisted |
+| 11 | Console errors | ✅ None (1 a11y warning fixed) |
+| 12 | Backend logs | ✅ Clean |
+
+### Accessibility Warning
+
+**Source:** Sidebar.tsx search `<input>` and rename `<input>` lacked `name` attributes.
+**Fix:** Added `name="search"` and `name="rename"` to the two `<input>` elements.
+**Status:** ✅ Resolved, no remaining warnings.
+
+### Environment-Sensitive Test Failures
+
+**Affected tests (2):**
+- `test_sessions.py::test_list_messages` — uses `httpx.Client` against live backend. Fails intermittently with 404 when server state doesn't match expectations.
+- `test_memories.py::test_memories_not_used_without_memories` — uses `httpx.Client` against live backend. Fails intermittently with 500 when the live message endpoint tries real Ollama calls.
+
+**Root cause:** These tests connect to the running Docker backend via HTTP (port 8080) instead of using in-process `TestClient`. The live backend has Ollama running, causing message endpoints to attempt real model generation rather than using mocks.
+
+**Fix:** Refactor these tests to use `TestClient(app)` (in-process) instead of `httpx.Client`. This is a test-infrastructure change, not a production code change. Not done here because the fix touches many test files and is beyond the scope of a "small, safe" change.
+
+**Recommendation:** Non-blocking follow-up for a future maintenance sprint.
+
+### Files Changed (Entire Phase 5)
+
+64 files changed, 19,765 insertions, 718 deletions. See `git log master --oneline --first-parent` for the full commit history.
+
+---
+
+*End of Phase 5 — `phase-5-complete`*
