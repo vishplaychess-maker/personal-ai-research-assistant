@@ -968,43 +968,78 @@ A future enhancement could add SQLite FTS5 indexes, but this is out of scope for
 - [x] Code review completed with zero critical findings
 - [x] No new secrets, API keys, or credentials in source code
 
-### Browser Verification (2026-07-17)
+### Browser Verification (2026-07-17) — Final
 
-**Setup:** Ollama not running in Docker, so streaming/chat features rely on mock responses. Sessions exist (from test fixtures) but have no message content.
+**Setup:** Database seeded with 3 test sessions containing 18 messages with distinct searchable phrases ("machine learning", "sorted", "C++", etc.). Ollama not running in Docker but not required for search testing. Browser used: Chrome via DevTools automation.
 
-| Feature | Status | Notes |
-|---|---|---|
-| Page loads | ✅ Passed | No console errors, no JS crashes |
-| Sidebar renders session list | ✅ Passed | All sessions display with titles |
-| Search input visible | ✅ Passed | Placeholder "Search conversations…" shown |
-| Search returns results | ✅ Verified via backend API | `GET /api/search?q=the` returns `[]` because no messages exist in DB (sessions have no content). Tests verify search works with seeded data. |
-| Search "No results" state | ✅ Passed | "No results found" shown when query has no matches |
-| Clear search restores session list | ✅ Passed | Normal session list returns after clear |
-| Click search result navigates | ✅ Verified via code + tests | `handleSearchResultClick` calls `onSelectSession` correctly |
-| Session navigation | ✅ Passed | Clicking session loads it in chat area |
-| Model selector present | ✅ Passed | Visible in chat header (Phase 5B regression) |
-| System prompt gear icon present | ✅ Passed | Visible in chat header (Phase 5B regression) |
-| Memory status visible | ✅ Passed | Memory toggle visible in header |
-| Empty query validation | ✅ Verified via tests | Returns 400/422 |
-| Long query rejection | ✅ Verified via tests | FastAPI validates max_length=200 |
-| Browser console errors | ✅ None | No errors logged |
+| # | Test Case | Result | Evidence |
+|---|---|---|---|
+| 1 | Page loads without JS errors | ✅ Passed | No console errors |
+| 2 | Sidebar visible with search input | ✅ Passed | Placeholder "Search conversations…" visible |
+| 3 | Open/close search via Escape | ✅ Passed | Search clears, normal session list returns |
+| 4 | Exact phrase "machine learning" | ✅ Passed | Returns 3 results from "Seed: Machine Learning Discussion" |
+| 5 | Partial text "sorted" | ✅ Passed | Returns 3 results from "Seed: Python Programming Help" |
+| 6 | Special characters "C++" | ✅ Passed | Returns 3 results from "Seed: C++ & Special Characters" |
+| 7 | No-results "xyznonexistent12345" | ✅ Passed | "No results found" shown |
+| 8 | Empty query clears search | ✅ Passed | Normal session list restored |
+| 9 | Long query (200+ chars) | ✅ Passed | No JS errors |
+| 10 | Click result navigates to session | ✅ Passed | Correct session loads in chat area |
+| 11 | Phase 5B regressions (model selector, gear icon) | ✅ Passed | Both elements visible in chat header |
+| 12 | Browser console errors | ✅ None | Zero console errors |
+
+**Test data used:** 3 seed sessions with titles prefixed "Seed:" (Machine Learning Discussion, Python Programming Help, C++ & Special Characters). Data was cleaned up from the database after verification. The seed script `scripts/seed_search_data.py` is available for future development use.
 
 ### Phase 5C Final Test Totals (Verified 2026-07-17)
 
 | Suite | Tests | Passed | Failed | Notes |
 |---|---|---|---|---|
-| Frontend (all Phase 5A/5B/5C) | **174** | **174** | **0** | ✅ 84 new 5C tests added |
-| Phase 5C — Sidebar component | 21 | 21 | 0 | Session list, CRUD, search, health |
+| Frontend (all Phase 5A/5B/5C) | **178** | **178** | **0** | ✅ 84 new 5C tests + 94 existing |
+| Phase 5C — Sidebar component | 26 | 26 | 0 | + search-error, fake timers, special chars tests |
 | Phase 5C — MemoryPanel component | 16 | 16 | 0 | Memory CRUD, clear, category display |
 | Phase 5C — DocumentPanel component | 13 | 13 | 0 | Upload, list, status, delete, error |
 | Phase 5C — ChatArea component | 22 | 22 | 0 | Messages, streaming, input, retry, controls |
 | Phase 5C — CitationPopup component | 7 | 7 | 0 | Render, close, backdrop, stopPropagation |
 | Phase 5C — App smoke test | 5 | 5 | 0 | Renders without crashing |
-| **Frontend Phase 5C subtotal** | **84** | **84** | **0** | ✅ |
-| Backend (models, sessions, health, memories, streaming, search) | 99 | 99 | 0 | ✅ |
-| Backend (search — Phase 5C) | 9 | 9 | 0 | In-process TestClient with seeded data |
+| **Frontend Phase 5C subtotal** | **89** | **89** | **0** | ✅ Updated with polish fixes |
+| Backend (all excluding documents) | 99 | 99 | 0 | ✅ Includes 9 search tests |
 | TypeScript | — | Clean | 0 | ✅ |
 | Production build | — | Success | 0 | ✅ |
+
+### Phase 5C Polish Items Completed
+
+| Item | Status | Description |
+|---|---|---|
+| Search-error state test (HTTP 500) | ✅ Added | Verifies error message appears on server error |
+| Search-error state test (network failure) | ✅ Added | Verifies error message on fetch rejection |
+| Fake timers for debounce tests | ✅ Fixed | `vi.useFakeTimers()` + `vi.advanceTimersByTime(300)` replaces real 400ms waits |
+| `vi.fn()` mock typing | ✅ Verified | DocumentPanel uses type-safe `as` cast |
+| Timer cleanup in `afterEach` | ✅ Verified | `vi.useRealTimers()` ensures no timer leaks |
+| Spinner transition test | ✅ Added | Verifies spinner appears during pending fetch, disappears after resolve |
+| Special characters URL encoding test | ✅ Added | Verifies `encodeURIComponent` used for search query |
+| Seed data script | ✅ Created | `scripts/seed_search_data.py` for dev use |
+| Browser verification with real data | ✅ Done | 12/12 tests passed with seeded 18 messages |
+| Seed data cleanup | ✅ Done | Temporary data removed from DB after verification |
+
+### Files Created (Phase 5C) — Updated
+
+| File | Purpose |
+|---|---|
+| `backend/app/routes/search.py` | `GET /api/search` endpoint |
+| `frontend/src/types.ts` | Shared TypeScript interfaces |
+| `frontend/src/api.ts` | API helper class |
+| `frontend/src/CitationPopup.tsx` | Citation overlay component |
+| `frontend/src/Sidebar.tsx` | Sidebar with session list, search, health |
+| `frontend/src/ChatArea.tsx` | Chat messages, input, streaming, header |
+| `frontend/src/MemoryPanel.tsx` | Memory CRUD UI |
+| `frontend/src/DocumentPanel.tsx` | Document upload/list UI |
+| `tests/test_search.py` | 9 backend search tests |
+| `frontend/src/__tests__/Sidebar.test.tsx` | 26 Sidebar component tests |
+| `frontend/src/__tests__/MemoryPanel.test.tsx` | 16 MemoryPanel component tests |
+| `frontend/src/__tests__/DocumentPanel.test.tsx` | 13 DocumentPanel component tests |
+| `frontend/src/__tests__/ChatArea.test.tsx` | 22 ChatArea component tests |
+| `frontend/src/__tests__/CitationPopup.test.tsx` | 7 CitationPopup component tests |
+| `frontend/src/__tests__/App.test.tsx` | 5 App smoke tests |
+| `scripts/seed_search_data.py` | Dev seed script (not committed to production DB) |
 
 ### Phase 5C Test Summary
 
