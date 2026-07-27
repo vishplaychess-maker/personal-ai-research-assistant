@@ -68,11 +68,15 @@ def create_session(c: httpx.Client) -> dict:
 def _cleanup():
     with client() as c:
         sessions = c.get("/api/sessions").json()
+        if not isinstance(sessions, list):
+            return
         for s in sessions:
-            if s["id"] > 10:
+            if isinstance(s, dict) and s.get("id", 0) > 10:
                 docs = c.get(f"/api/sessions/{s['id']}/documents").json()
-                for d in docs:
-                    c.delete(f"/api/documents/{d['id']}")
+                if isinstance(docs, list):
+                    for d in docs:
+                        if isinstance(d, dict) and "id" in d:
+                            c.delete(f"/api/documents/{d['id']}")
                 c.delete(f"/api/sessions/{s['id']}")
 
 

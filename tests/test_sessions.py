@@ -32,9 +32,17 @@ def _cleanup_sessions():
     """Delete any leftover test sessions before each test."""
     with client() as c:
         sessions = c.get("/api/sessions").json()
+        if not isinstance(sessions, list):
+            return
         for s in sessions:
-            if s["id"] > 10:  # Only clean up test-created sessions (safety)
-                c.delete(f"/api/sessions/{s['id']}")
+            if isinstance(s, dict) and isinstance(s.get("id"), int) and s["id"] > 10:
+                try:
+                    c.delete(f"/api/sessions/{s['id']}")
+                except httpx.HTTPStatusError as exc:
+                    # 404 is expected when a session was already deleted
+                    # by a prior test's cleanup — re-raise other errors
+                    if exc.response.status_code != 404:
+                        raise
 
 
 # ── Session CRUD tests ─────────────────────────────────────

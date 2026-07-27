@@ -48,8 +48,10 @@ def _cleanup_sessions():
     """Delete any leftover test sessions before each test."""
     with _client() as c:
         sessions = c.get("/api/sessions").json()
+        if not isinstance(sessions, list):
+            return
         for s in sessions:
-            if s["id"] > 10:
+            if isinstance(s, dict) and s.get("id", 0) > 10:
                 try:
                     c.delete(f"/api/sessions/{s['id']}")
                 except Exception:

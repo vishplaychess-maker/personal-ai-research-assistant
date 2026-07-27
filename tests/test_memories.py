@@ -31,15 +31,38 @@ def _clear_all_memories(c: httpx.Client):
     c.request("DELETE", "/api/memories", json={"confirm": True})
 
 
+def _clear_local_memories():
+    """Delete all Memory rows from the local SQLite database.
+
+    This ensures TestClient-based tests are isolated from each other,
+    since the httpx-based _clear_all_memories only reaches the Docker
+    backend's database (used by httpx-based tests), not the local
+    test.db used by in-process TestClient tests.
+    """
+    from app.database import SessionLocal
+    from app.models.models import Memory
+    db = SessionLocal()
+    try:
+        db.query(Memory).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_memories():
-    """Clean up all test memories and ensure memory is enabled before each test."""
+    """Clean up all test memories and ensure memory is enabled before each test.
+
+    Cleans both the Docker backend database (via httpx for httpx-based tests)
+    and the local test.db (via direct SQLAlchemy for TestClient-based tests).
+    """
     with client() as c:
         try:
             _clear_all_memories(c)
             c.patch("/api/settings/memory", json={"enabled": True})
         except Exception:
             pass
+    _clear_local_memories()
 
 
 # ── Memory CRUD tests ──────────────────────────────────────
@@ -617,13 +640,13 @@ def test_memory_disabled_returns_memories_used_false():
     """
     from sqlalchemy.orm import Session as DBSession
     from app.database import SessionLocal
+    from app.models.models import Memory
     from app.services.memory_service import retrieve_relevant_memories
     from app.services.settings_service import set_memory_enabled
 
     db: DBSession = SessionLocal()
     try:
         # Create a memory first
-        from app.models.models import Memory
         db.add(Memory(user_id=1, content="Test memory", category="fact"))
         db.commit()
 
@@ -641,4 +664,7 @@ def test_memory_disabled_returns_memories_used_false():
         result2 = retrieve_relevant_memories(db)
         assert len(result2) >= 1
     finally:
+        # Clean up the test memory row so it doesn't leak to other tests
+        db.query(Memory).filter(Memory.content == "Test memory").delete()
+        db.commit()
         db.close()
