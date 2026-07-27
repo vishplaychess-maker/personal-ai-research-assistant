@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     # ── Auth settings ───────────────────────────────────
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_expiry_hours: int = 168  # 7 days
+    jwt_expiry_hours: int = 168  # 7 days (backward compat for existing tokens)
+    # Phase 7B: access and refresh token lifetimes
+    jwt_access_expiry_minutes: int = 15
+    jwt_refresh_expiry_days: int = 30
 
     # ── Rate limiting (Phase 7A) ──────────────────────────
     rate_limit_max_attempts: int = 10
@@ -29,6 +32,13 @@ class Settings(BaseSettings):
     rate_limit_lockout_base_seconds: int = 30
     rate_limit_lockout_max_seconds: int = 900  # 15 min
     production_mode: bool = False
+
+    # Phase 7B: refresh endpoint rate limiting
+    refresh_rate_limit_max_attempts: int = 20
+    refresh_rate_limit_window_seconds: int = 60
+
+    # ── Session management (Phase 7B) ─────────────────────
+    max_active_sessions: int = 10
 
     # ── Model settings ──────────────────────────────────
     default_model: str = "llama3.2:3b"

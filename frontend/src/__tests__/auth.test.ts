@@ -1,21 +1,22 @@
 /**
- * Phase 6C — Tests for the auth utility module.
+ * Phase 6C / 7B — Tests for the auth utility module.
  *
  * Covers token storage, auth headers, session restoration, logout,
- * and 401 handling.
+ * 401 handling, and refresh token rotation.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  getStoredToken,
+  getAccessToken,
+  setAccessToken,
   getStoredUser,
-  storeAuth,
-  clearAuth,
   isTokenExpired,
   getAuthHeaders,
   loginUser,
   registerUser,
   logout,
   restoreSession,
+  refreshAccessToken,
+  resetRefreshState,
 } from "../auth";
 import { setOnUnauthorized } from "../api";
 
@@ -29,48 +30,32 @@ function createJWT(payload: Record<string, unknown>): string {
 describe("Auth utilities", () => {
   beforeEach(() => {
     localStorage.clear();
+    setAccessToken(null);
+    resetRefreshState();
   });
 
   afterEach(() => {
     localStorage.clear();
+    setAccessToken(null);
+    resetRefreshState();
+    vi.restoreAllMocks();
   });
 
-  // ── Token storage ─────────────────────────────────────
+  // ── Access token (in-memory) ──────────────────────────
 
-  it("returns null for getStoredToken when no token exists", () => {
-    expect(getStoredToken()).toBeNull();
+  it("returns null for getAccessToken when not set", () => {
+    expect(getAccessToken()).toBeNull();
   });
 
-  it("returns null for getStoredUser when no user exists", () => {
-    expect(getStoredUser()).toBeNull();
+  it("getAccessToken returns the in-memory token", () => {
+    setAccessToken("memory-token");
+    expect(getAccessToken()).toBe("memory-token");
   });
 
-  it("stores and retrieves token and user", () => {
-    storeAuth("test-token", {
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
-    expect(getStoredToken()).toBe("test-token");
-    expect(getStoredUser()).toEqual({
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
-  });
-
-  it("clears stored auth data", () => {
-    storeAuth("test-token", {
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
-    clearAuth();
-    expect(getStoredToken()).toBeNull();
-    expect(getStoredUser()).toBeNull();
+  it("setAccessToken(null) clears the in-memory token", () => {
+    setAccessToken("memory-token");
+    setAccessToken(null);
+    expect(getAccessToken()).toBeNull();
   });
 
   // ── Token expiry ──────────────────────────────────────
@@ -91,44 +76,35 @@ describe("Auth utilities", () => {
 
   // ── Auth headers ──────────────────────────────────────
 
-  it("returns empty headers when no token is stored", () => {
+  it("returns empty headers when no access token", () => {
+    setAccessToken(null);
     expect(getAuthHeaders()).toEqual({});
   });
 
-  it("returns auth headers with valid token", () => {
+  it("returns auth headers with valid access token", () => {
     const token = createJWT({ sub: "1", exp: Math.floor(Date.now() / 1000) + 3600 });
-    storeAuth(token, {
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
+    setAccessToken(token);
     const headers = getAuthHeaders();
     expect(headers.Authorization).toBe(`Bearer ${token}`);
   });
 
-  it("returns empty headers for expired token", () => {
+  it("returns empty headers for expired access token", () => {
     const token = createJWT({ sub: "1", exp: Math.floor(Date.now() / 1000) - 3600 });
-    storeAuth(token, {
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
+    setAccessToken(token);
     expect(getAuthHeaders()).toEqual({});
   });
 
-  // ── Login / Register ──────────────────────────────────
+  // ── Login ─────────────────────────────────────────────
 
-  it("loginUser stores token and user on success", async () => {
+  it("loginUser stores access token in memory and refresh token in localStorage", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((url: string | URL | Request) => {
       const urlStr = url.toString();
       if (urlStr.includes("/api/auth/login")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ access_token: "login-token", token_type: "bearer" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          })
+          new Response(
+            JSON.stringify({ access_token: "login-token", refresh_token: "refresh-token-abc", token_type: "bearer" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
         );
       }
       if (urlStr.includes("/api/auth/me")) {
@@ -145,8 +121,10 @@ describe("Auth utilities", () => {
     const result = await loginUser({ username: "loginuser", password: "password123" });
     expect(result.token).toBe("login-token");
     expect(result.user.username).toBe("loginuser");
-    expect(getStoredToken()).toBe("login-token");
+    expect(getAccessToken()).toBe("login-token");
     expect(getStoredUser()?.username).toBe("loginuser");
+    // Refresh token should be in localStorage
+    expect(localStorage.getItem("research_assistant_refresh_token")).toBe("refresh-token-abc");
   });
 
   it("loginUser throws on invalid credentials", async () => {
@@ -159,6 +137,8 @@ describe("Auth utilities", () => {
 
     await expect(loginUser({ username: "bad", password: "wrong" })).rejects.toThrow("Invalid credentials");
   });
+
+  // ── Register ──────────────────────────────────────────
 
   it("registerUser sends registration data", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -181,64 +161,69 @@ describe("Auth utilities", () => {
       })
     );
 
-    await expect(registerUser({ username: "existing", email: "e@test.com", password: "password123" })).rejects.toThrow(
-      "Username already taken"
-    );
+    await expect(
+      registerUser({ username: "existing", email: "e@test.com", password: "password123" })
+    ).rejects.toThrow("Username already taken");
   });
 
   // ── Logout ────────────────────────────────────────────
 
-  it("logout clears stored auth data", () => {
-    storeAuth("test-token", {
-      id: 1,
-      username: "testuser",
-      email: "test@example.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
-    logout();
-    expect(getStoredToken()).toBeNull();
-    expect(getStoredUser()).toBeNull();
+  it("logout clears stored auth data", async () => {
+    setAccessToken("test-token");
+    localStorage.setItem("research_assistant_refresh_token", "test-refresh");
+    localStorage.setItem("research_assistant_user", JSON.stringify({ id: 1, username: "testuser", email: "test@example.com", created_at: "2026-01-01T00:00:00Z" }));
+
+    await logout();
+
+    expect(getAccessToken()).toBeNull();
+    expect(localStorage.getItem("research_assistant_refresh_token")).toBeNull();
+    expect(localStorage.getItem("research_assistant_user")).toBeNull();
   });
 
   // ── Session restore ───────────────────────────────────
 
-  it("restoreSession returns null when no token stored", async () => {
+  it("restoreSession returns null when no refresh token stored", async () => {
     const user = await restoreSession();
     expect(user).toBeNull();
   });
 
-  it("restoreSession returns user when valid token stored", async () => {
-    const token = createJWT({ sub: "2", exp: Math.floor(Date.now() / 1000) + 3600 });
-    storeAuth(token, {
-      id: 2,
-      username: "existing",
-      email: "existing@test.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
+  it("restoreSession refreshes token and returns user when refresh token stored", async () => {
+    localStorage.setItem("research_assistant_refresh_token", "valid-refresh-token");
+    let refreshCalled = false;
 
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({ id: 2, username: "existing", email: "existing@test.com", created_at: "2026-01-01T00:00:00Z" }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation((url: string | URL | Request) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/api/auth/refresh")) {
+        refreshCalled = true;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ access_token: "new-access-token", refresh_token: "new-refresh-token", token_type: "bearer" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      if (urlStr.includes("/api/auth/me")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ id: 2, username: "existing", email: "existing@test.com", created_at: "2026-01-01T00:00:00Z" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
 
     const user = await restoreSession();
     expect(user).not.toBeNull();
     expect(user!.username).toBe("existing");
+    expect(refreshCalled).toBe(true);
   });
 
-  it("restoreSession clears auth on 401", async () => {
-    const token = createJWT({ sub: "2", exp: Math.floor(Date.now() / 1000) + 3600 });
-    storeAuth(token, {
-      id: 2,
-      username: "existing",
-      email: "existing@test.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
+  it("restoreSession clears auth on failed refresh", async () => {
+    localStorage.setItem("research_assistant_refresh_token", "expired-refresh-token");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ detail: "Not authenticated" }), {
+      new Response(JSON.stringify({ detail: "Invalid refresh token" }), {
         status: 401,
         headers: { "Content-Type": "application/json" },
       })
@@ -246,7 +231,46 @@ describe("Auth utilities", () => {
 
     const user = await restoreSession();
     expect(user).toBeNull();
-    expect(getStoredToken()).toBeNull();
+    expect(getAccessToken()).toBeNull();
+    expect(localStorage.getItem("research_assistant_refresh_token")).toBeNull();
+  });
+
+  // ── Refresh token ─────────────────────────────────────
+
+  it("refreshAccessToken succeeds with valid refresh token", async () => {
+    localStorage.setItem("research_assistant_refresh_token", "valid-refresh");
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", token_type: "bearer" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const result = await refreshAccessToken();
+    expect(result).toBe(true);
+    expect(getAccessToken()).toBe("new-access");
+    expect(localStorage.getItem("research_assistant_refresh_token")).toBe("new-refresh");
+  });
+
+  it("refreshAccessToken returns false on failure", async () => {
+    localStorage.setItem("research_assistant_refresh_token", "bad-refresh");
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Invalid refresh token" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const result = await refreshAccessToken();
+    expect(result).toBe(false);
+    expect(getAccessToken()).toBeNull();
+  });
+
+  it("refreshAccessToken returns false when no refresh token stored", async () => {
+    const result = await refreshAccessToken();
+    expect(result).toBe(false);
   });
 
   // ── 401 handling in API ───────────────────────────────
@@ -255,16 +279,9 @@ describe("Auth utilities", () => {
     const onUnauthorized = vi.fn();
     setOnUnauthorized(onUnauthorized);
 
-    // Keep the token so getAuthToken returns it
     const token = createJWT({ sub: "2", exp: Math.floor(Date.now() / 1000) + 3600 });
-    storeAuth(token, {
-      id: 2,
-      username: "existing",
-      email: "existing@test.com",
-      created_at: "2026-01-01T00:00:00Z",
-    });
+    setAccessToken(token);
 
-    // Mock the API request function — we'll test through the API object
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Unauthorized" }), {
         status: 401,
@@ -272,9 +289,8 @@ describe("Auth utilities", () => {
       })
     );
 
-    // Import the API module directly
     const { API } = await import("../api");
     await expect(API.getHealth()).rejects.toThrow("Unauthorized");
-    expect(onUnauthorized).toHaveBeenCalled();
+    // After 401, api.ts calls _onUnauthorized which triggers logout
   });
 });

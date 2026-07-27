@@ -201,7 +201,7 @@ describe("AuthScreen", () => {
       if (urlStr.includes("/api/auth/login")) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ access_token: "success-token", token_type: "bearer" }),
+            JSON.stringify({ access_token: "success-token", refresh_token: "refresh-abc", token_type: "bearer" }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
         );
@@ -246,7 +246,7 @@ describe("AuthScreen", () => {
         loginCalled = true;
         return Promise.resolve(
           new Response(
-            JSON.stringify({ access_token: "new-token", token_type: "bearer" }),
+            JSON.stringify({ access_token: "new-token", refresh_token: "refresh-xyz", token_type: "bearer" }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
         );

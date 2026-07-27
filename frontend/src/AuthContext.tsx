@@ -1,13 +1,23 @@
 /**
- * Phase 6C — Authentication context.
+ * Phase 6C / 7B — Authentication context.
  *
- * Provides user state, login, register, and logout functionality
- * across the entire application.
+ * Phase 7B: access token is stored in memory (via setAccessToken/getAccessToken),
+ * refresh token is stored in localStorage. The provider restores the session
+ * from the refresh token on mount.
  */
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import type { UserInfo, AuthState } from "./types";
-import { loginUser, registerUser, logout as authLogout, restoreSession, getStoredToken, getStoredUser } from "./auth";
+import {
+  loginUser,
+  registerUser,
+  logout as authLogout,
+  restoreSession,
+  getStoredUserSync,
+  getAccessToken,
+  setAccessToken,
+  setOnInvalidRefresh,
+} from "./auth";
 import { setOnUnauthorized } from "./api";
 
 // ── Context type ──────────────────────────────────────────
@@ -25,8 +35,8 @@ const AuthContext = createContext<AuthContextType | null>(null);
 // ── Provider ──────────────────────────────────────────────
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UserInfo | null>(getStoredUser);
-  const [token, setToken] = useState<string | null>(getStoredToken);
+  const [user, setUser] = useState<UserInfo | null>(getStoredUserSync);
+  const [token, setToken] = useState<string | null>(getAccessToken);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -38,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((u) => {
         if (u) {
           setUser(u);
-          setToken(getStoredToken());
+          setToken(getAccessToken());
         } else {
           setUser(null);
           setToken(null);
@@ -51,9 +61,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false));
   }, []);
 
-  // Register 401 handler in the API module
+  // Register handlers for refresh failure and 401
   useEffect(() => {
     setOnUnauthorized(() => {
+      setUser(null);
+      setToken(null);
+    });
+    setOnInvalidRefresh(() => {
       setUser(null);
       setToken(null);
     });
@@ -85,8 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [login]);
 
-  const logout = useCallback(() => {
-    authLogout();
+  const logout = useCallback(async () => {
+    await authLogout();
     setUser(null);
     setToken(null);
     setAuthError(null);

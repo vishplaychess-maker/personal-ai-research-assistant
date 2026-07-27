@@ -109,10 +109,24 @@ export interface SearchResult {
   created_at: string;
 }
 
-// ── Auth Types (Phase 6C) ────────────────────────────────
+// ── Auth Types (Phase 6C / 7B) ────────────────────────────
 
 export interface TokenResponse {
   access_token: string;
+  token_type: string;
+}
+
+/** Phase 7B: login response now includes refresh_token. */
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+}
+
+/** Phase 7B: refresh endpoint response. */
+export interface RefreshResponse {
+  access_token: string;
+  refresh_token: string;
   token_type: string;
 }
 

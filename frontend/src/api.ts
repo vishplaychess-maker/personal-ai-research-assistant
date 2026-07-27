@@ -13,7 +13,7 @@ import type {
   Memory,
   MemorySetting,
 } from "./types";
-import { getStoredToken, clearAuth, isTokenExpired } from "./auth";
+import { getAccessToken, isTokenExpired, refreshAccessToken } from "./auth";
 
 // Callback invoked when a 401 is received (used to trigger logout)
 let _onUnauthorized: (() => void) | null = null;
@@ -22,19 +22,27 @@ export function setOnUnauthorized(cb: () => void): void {
   _onUnauthorized = cb;
 }
 
-function getAuthToken(): string | null {
-  const token = getStoredToken();
-  if (token && isTokenExpired(token)) {
-    clearAuth();
-    _onUnauthorized?.();
-    return null;
+/**
+ * Get the current auth token, attempting a refresh if expired.
+ * Returns null if no valid token is available after refresh attempt.
+ */
+async function getValidToken(): Promise<string | null> {
+  let token = getAccessToken();
+  if (token && !isTokenExpired(token)) {
+    return token;
   }
-  return token;
+  // Token expired or missing: try to refresh
+  const refreshed = await refreshAccessToken();
+  if (refreshed) {
+    return getAccessToken();
+  }
+  return null;
 }
 
 /**
  * Generic request helper with JSON and FormData support.
- * Automatically attaches Authorization header if a token is stored.
+ * Automatically attaches Authorization header if a token is available.
+ * Phase 7B: auto-refreshes expired access tokens once on 401.
  */
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const isFormData = options?.body instanceof FormData;
@@ -42,15 +50,25 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   if (!isFormData) {
     headers["Content-Type"] = "application/json";
   }
-  // Phase 6C: auto-attach auth token
-  const token = getAuthToken();
+  // Phase 6C / 7B: auto-attach auth token, refresh if expired
+  const token = await getValidToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  const res = await fetch(url, { headers, ...options });
+  let res = await fetch(url, { headers, ...options });
+  // Phase 7B: auto-refresh on 401 (try once)
+  if (res.status === 401 && token) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      const newToken = getAccessToken();
+      if (newToken) {
+        headers["Authorization"] = `Bearer ${newToken}`;
+        res = await fetch(url, { headers, ...options });
+      }
+    }
+  }
   // Phase 6C: handle 401 — token expired or invalid
   if (res.status === 401) {
-    clearAuth();
     _onUnauthorized?.();
     const data = await res.json().catch(() => ({ detail: "Unauthorized" }));
     throw new Error(data.detail || "Unauthorized");

@@ -145,6 +145,33 @@ class DocumentChunk(Base):
         return f"<DocumentChunk(id={self.id}, index={self.chunk_index})>"
 
 
+class RefreshSession(Base):
+    """
+    Phase 7B — Refresh token session tracking.
+
+    Stores a SHA-256 hash of each active refresh token, associated with
+    a user and a token family. Token families enable reuse detection:
+    if a rotated/revoked token is reused, the entire family is revoked
+    (indicating token theft).
+    """
+
+    __tablename__ = "refresh_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Family identifier: all tokens from the same original session share this
+    family_id = Column(String(36), nullable=False, index=True)
+    # SHA-256 hash of the refresh token (never store raw tokens)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)  # NULL = active
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    device_info = Column(String(255), nullable=True)  # Optional client metadata
+
+    def __repr__(self):
+        return f"<RefreshSession(id={self.id}, user_id={self.user_id}, revoked={'Y' if self.revoked_at else 'N'})>"
+
+
 class Memory(Base):
     __tablename__ = "memories"
 
