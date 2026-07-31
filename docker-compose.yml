@@ -13,7 +13,7 @@ services:
       - research-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; r = urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat'); assert r.status == 200, f'unexpected status {r.status}'"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && IFS= read -r status_line <&3 && [[ \"$$status_line\" == *\"200 OK\"* ]] && exec 3>&-"]
       interval: 15s
       timeout: 5s
       retries: 5
