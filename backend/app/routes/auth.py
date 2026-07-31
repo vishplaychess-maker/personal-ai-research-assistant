@@ -305,7 +305,7 @@ def refresh_token(
     refresh_key = _rate_limit_key_refresh(client_ip)
     if limiter.is_rate_limited(
         refresh_key,
-        settings.refresh_rate_limit_max_attempts,
+        settings.refresh_rate_limit_requests,
         settings.refresh_rate_limit_window_seconds,
     ):
         raise HTTPException(
@@ -388,33 +388,41 @@ def list_sessions(
 
     Returns safe metadata only (no token hashes, no raw tokens).
     The current session is identified by `is_current` flag.
-    """
-    # Extract refresh token from Authorization header if present
-    # (the access token is used for auth; the refresh token is in the body
-    # for logout, but we can optionally accept it as a query param or header)
-    raw_token = None
 
-    sessions = get_user_sessions(db, current_user, current_raw_token=raw_token)
+    The frontend sends its current refresh token ONLY to this endpoint via
+    the `X-Refresh-Token` header. The raw token is never stored or logged;
+    it is hashed (constant-time) and matched against stored token_hash values.
+    Only the exact matching ACTIVE session is marked is_current=True.
+    If the header is missing, invalid, expired, or revoked, all sessions
+    return is_current=False. Refresh tokens are never accepted as query params.
+    """
+    raw_token = request.headers.get("X-Refresh-Token")
+
+    sessions = get_user_sessions(db, current_user)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     active_count = sum(
         1 for s in sessions
         if s.revoked_at is None and s.expires_at > now
     )
 
-    # Accurate current-session identification requires a safe session
-    # identifier design (e.g., a short session ID stored alongside the
-    # refresh token). For now, we do not guess which session is current
-    # to avoid misleading the client. All sessions get is_current=False.
     session_infos = []
     for s in sessions:
+        # Mark current only for the exact matching token AND an active
+        # (non-revoked, non-expired) session. Constant-time hash comparison
+        # is performed inside is_current_session().
+        is_current = (
+            is_current_session(s, raw_token)
+            and s.revoked_at is None
+            and s.expires_at > now
+        )
         session_infos.append(SessionInfo(
             id=s.id,
             created_at=s.created_at,
-            last_used_at=s.created_at,  # Proxy: uses created_at until per-refresh tracking is added
+            last_used_at=s.last_used_at or s.created_at,
             expires_at=s.expires_at,
             revoked_at=s.revoked_at,
             device_info=s.device_info,
-            is_current=False,
+            is_current=is_current,
         ))
 
     return SessionsListResponse(

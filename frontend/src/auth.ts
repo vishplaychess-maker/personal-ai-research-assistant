@@ -5,7 +5,7 @@
  * Auto-refresh on 401 attempts once; prevents infinite refresh loops.
  */
 
-import type { UserInfo, LoginRequest, RegisterRequest, LoginResponse, RefreshResponse } from "./types";
+import type { UserInfo, LoginRequest, RegisterRequest, LoginResponse, RefreshResponse, AuthSession } from "./types";
 
 // ── Storage keys ──────────────────────────────────────────
 
@@ -18,8 +18,8 @@ const USER_KEY = "research_assistant_user";
 /** The current access token is kept in memory, not localStorage.
  *  AuthContext manages this via setAccessToken(). */
 let _accessToken: string | null = null;
-/** Flag to prevent infinite refresh loops. */
-let _isRefreshing = false;
+/** In-flight refresh promise so concurrent callers share one request (serialized). */
+let _refreshPromise: Promise<boolean> | null = null;
 /** Callback invoked when the refresh token becomes invalid (→ logout). */
 let _onInvalidRefresh: (() => void) | null = null;
 
@@ -119,9 +119,14 @@ const REFRESH_COOLDOWN_MS = 5000; // Prevent rapid retry loops
 /**
  * Attempt to refresh the access token using the stored refresh token.
  * Returns true if the refresh succeeded, false otherwise.
+ *
+ * Phase 7B hardening: concurrent refresh requests are SERIALIZED — if a
+ * refresh is already in-flight, callers await the same shared promise
+ * instead of issuing a second request or racing to clear auth state.
  */
 export async function refreshAccessToken(): Promise<boolean> {
-  if (_isRefreshing) return false;
+  // Serialize concurrent refresh requests: share the in-flight request
+  if (_refreshPromise) return _refreshPromise;
 
   const refreshToken = getStoredRefreshToken();
   if (!refreshToken) return false;
@@ -131,35 +136,40 @@ export async function refreshAccessToken(): Promise<boolean> {
   if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) return false;
   lastRefreshAttempt = now;
 
-  _isRefreshing = true;
-  try {
-    const res = await fetch("/api/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
 
-    if (!res.ok) {
-      // Refresh failed — clear everything
+      if (!res.ok) {
+        // Refresh failed — clear everything
+        clearRefreshToken();
+        clearUser();
+        _accessToken = null;
+        _onInvalidRefresh?.();
+        return false;
+      }
+
+      const data: RefreshResponse = await res.json();
+      _accessToken = data.access_token;
+      storeRefreshToken(data.refresh_token);
+      return true;
+    } catch {
       clearRefreshToken();
       clearUser();
       _accessToken = null;
       _onInvalidRefresh?.();
       return false;
     }
+  })();
 
-    const data: RefreshResponse = await res.json();
-    _accessToken = data.access_token;
-    storeRefreshToken(data.refresh_token);
-    return true;
-  } catch {
-    clearRefreshToken();
-    clearUser();
-    _accessToken = null;
-    _onInvalidRefresh?.();
-    return false;
+  try {
+    return await _refreshPromise;
   } finally {
-    _isRefreshing = false;
+    _refreshPromise = null;
   }
 }
 
@@ -260,6 +270,35 @@ export async function restoreSession(): Promise<UserInfo | null> {
   }
 }
 
+// ── Session list (Phase 7B hardening) ────────────────────
+
+/**
+ * Fetch the current user's refresh sessions from GET /api/auth/sessions.
+ *
+ * The refresh token is sent ONLY to this endpoint via the X-Refresh-Token
+ * header (never on unrelated API requests, never via query params). The
+ * backend hashes it to mark the exact matching active session is_current.
+ */
+export async function listAuthSessions(): Promise<AuthSession[]> {
+  const refreshToken = getStoredRefreshToken();
+  // The sessions endpoint requires a valid access token (get_current_user),
+  // so refresh first if the in-memory token is missing or expired.
+  const token = getAccessToken();
+  if (!token || isTokenExpired(token)) {
+    await refreshAccessToken();
+  }
+  const headers: Record<string, string> = getAuthHeaders();
+  if (refreshToken) headers["X-Refresh-Token"] = refreshToken;
+
+  const res = await fetch("/api/auth/sessions", { headers });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ detail: "Request failed" }));
+    throw new Error(data.detail || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.sessions ?? [];
+}
+
 // ── Get stored user without network (for initial UI render) ─
 
 export function getStoredUserSync(): UserInfo | null {
@@ -269,6 +308,6 @@ export function getStoredUserSync(): UserInfo | null {
 // ── Test helper: reset module-level refresh state ─────────
 
 export function resetRefreshState(): void {
-  _isRefreshing = false;
+  _refreshPromise = null;
   lastRefreshAttempt = 0;
 }

@@ -155,6 +155,17 @@ export interface AuthState {
   isAuthenticated: boolean;
 }
 
+/** Phase 7B hardening: safe metadata for a refresh session (GET /api/auth/sessions). */
+export interface AuthSession {
+  id: number;
+  created_at: string;
+  last_used_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  device_info: string | null;
+  is_current: boolean;
+}
+
 // ── Utility Types ─────────────────────────────────────────
 
 export interface RetryTarget {

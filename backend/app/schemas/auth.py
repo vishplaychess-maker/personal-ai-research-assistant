@@ -84,8 +84,8 @@ class SessionInfo(BaseModel):
     Safe session metadata returned to the client.
 
     Never returns token_hash or any raw token data.
-    `last_used_at` is a proxy for the session creation time;
-    a full implementation would update it on each token refresh.
+    `last_used_at` tracks the last time the session was created or rotated;
+    falls back to created_at for legacy rows migrated before the column existed.
     """
 
     id: int

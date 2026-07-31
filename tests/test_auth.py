@@ -1174,8 +1174,9 @@ class TestRefreshToken:
 
     def test_no_refresh_token_in_logs(self, client, caplog):
         """
-        Verify that refresh token values do not appear in log output.
-        Token hashes (for debugging) may appear, but not the raw tokens.
+        Verify that raw refresh tokens AND token hashes never appear in logs.
+
+        Phase 7B hardening: token hashes must not be logged either.
         """
         import logging
         import re
@@ -1189,20 +1190,15 @@ class TestRefreshToken:
         assert resp.status_code == 401
         assert "Invalid refresh token" in resp.json()["detail"]
 
-        # Check every log record for leaked refresh tokens
+        # Check every log record for leaked refresh tokens OR token hashes
         for record in caplog.records:
             message = record.getMessage()
             # Raw refresh tokens are base64url strings (~64 chars).
-            # Legitimate logs should never contain them.
-            # SHA-256 hex digests (64 hex chars) in logs are acceptable.
+            # Token hashes are 64-char SHA-256 hex digests. Neither is allowed.
             potential_tokens = re.findall(r'[A-Za-z0-9_-]{40,}', message)
             for match in potential_tokens:
-                # Skip SHA-256 hex digests (only hex chars)
-                if re.match(r'^[a-f0-9]{64}$', match):
-                    continue
-                # Any other 40+ char base64url string is suspicious
                 pytest.fail(
-                    f"Potential refresh token leaked in log: '{match[:20]}...' "
+                    f"Potential refresh token or hash leaked in log: '{match[:20]}...' "
                     f"in record: {record.name} - {record.levelname}"
                 )
 
@@ -1817,3 +1813,460 @@ class TestSessionListingNoFalseCurrent:
         assert resp.status_code == 200
         data = resp.json()
         assert data["active_count"] >= 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 7B Hardening — Rate Limit Independence, Current-Session
+# Detection, last_used_at, force cleanup, and token-leak protection
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRefreshRateLimitConfig:
+    """The refresh rate limit uses the documented env var names."""
+
+    def test_refresh_rate_limit_config_defaults(self):
+        """REFRESH_RATE_LIMIT_REQUESTS defaults to 20 / 60s."""
+        from app.config import settings
+        assert settings.refresh_rate_limit_requests == 20
+        assert settings.refresh_rate_limit_window_seconds == 60
+
+
+class TestRefreshRateLimitIndependence:
+    """Login and refresh rate limits must be independent."""
+
+    def _register_and_login(self, client, username="testuser_indep"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_login_rate_limit_does_not_affect_refresh(self, client):
+        """Hitting the login rate limit must NOT rate-limit refresh."""
+        _, refresh = self._register_and_login(client, "testuser_indep1")
+        # Trigger the login IP rate limit (10 per 60s)
+        for i in range(12):
+            client.post("/api/auth/login", json={
+                "username": f"nonexistent_{i}",
+                "password": "test",
+            })
+        # Login is now 429...
+        resp = client.post("/api/auth/login", json={
+            "username": "testuser_indep1",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 429
+        # ...but refresh still works (separate limiter)
+        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        assert resp.status_code == 200
+
+    def test_refresh_rate_limit_does_not_affect_login(self, client):
+        """Hitting the refresh rate limit must NOT rate-limit login."""
+        _, refresh = self._register_and_login(client, "testuser_indep2")
+        # Trigger the refresh rate limit (20 per 60s)
+        got_429 = False
+        for i in range(25):
+            resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+            if resp.status_code == 429:
+                got_429 = True
+                break
+            if resp.status_code == 200:
+                refresh = resp.json()["refresh_token"]
+        assert got_429, "Refresh rate limit was not triggered"
+        # Login still works
+        resp = client.post("/api/auth/login", json={
+            "username": "testuser_indep2",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 200
+
+
+class TestCurrentSessionDetection:
+    """X-Refresh-Token based current-session detection."""
+
+    def _register_and_login(self, client, username="testuser_csd"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_current_session_matches_exact_refresh_token(self, client):
+        """Only the session whose token_hash matches is marked current."""
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        token, refresh1 = self._register_and_login(client, "testuser_csd1")
+        # Second login -> second refresh token
+        login2 = client.post("/api/auth/login", json={
+            "username": "testuser_csd1",
+            "password": "securePass123!",
+        })
+        assert login2.status_code == 200
+        refresh2 = login2.json()["refresh_token"]
+
+        # Sending refresh1 should mark exactly one session as current
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": refresh1,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 2
+        current = [s for s in data["sessions"] if s["is_current"]]
+        assert len(current) == 1, "Exactly one session must be current"
+        # The current session must be the one matching refresh1's hash
+        db = SessionLocal()
+        try:
+            matching = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh1)
+            ).first()
+            assert matching is not None
+            assert current[0]["id"] == matching.id
+        finally:
+            db.close()
+
+        # Sending refresh2 should mark the OTHER session as current
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": refresh2,
+        })
+        assert resp.status_code == 200
+        current = [s for s in resp.json()["sessions"] if s["is_current"]]
+        assert len(current) == 1
+        db = SessionLocal()
+        try:
+            matching2 = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh2)
+            ).first()
+            assert matching2 is not None
+            assert current[0]["id"] == matching2.id
+            assert matching2.id != matching.id
+        finally:
+            db.close()
+
+    def test_invalid_token_no_current_session(self, client):
+        """An invalid X-Refresh-Token marks no session as current."""
+        token, _ = self._register_and_login(client, "testuser_csd2")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": "invalid-token-that-matches-nothing",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_revoked_token_no_current_session(self, client):
+        """A revoked X-Refresh-Token marks no session as current."""
+        token, refresh = self._register_and_login(client, "testuser_csd3")
+        # Logout revokes the session
+        client.post("/api/auth/logout", json={"refresh_token": refresh},
+                    headers={"Authorization": f"Bearer {token}"})
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": refresh,
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_expired_token_no_current_session(self, client):
+        """An expired X-Refresh-Token marks no session as current."""
+        from datetime import datetime, timedelta, timezone
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        token, refresh = self._register_and_login(client, "testuser_csd4")
+        db = SessionLocal()
+        try:
+            session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            assert session is not None
+            session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            db.commit()
+        finally:
+            db.close()
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": refresh,
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_query_param_refresh_token_ignored(self, client):
+        """Refresh tokens via query params are never accepted."""
+        token, refresh = self._register_and_login(client, "testuser_csd5")
+        resp = client.get(f"/api/auth/sessions?refresh_token={refresh}", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_sessions_response_never_leaks_token_or_hash(self, client):
+        """Session list responses never include raw tokens or token hashes."""
+        import re
+        token, refresh = self._register_and_login(client, "testuser_csd6")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "X-Refresh-Token": refresh,
+        })
+        assert resp.status_code == 200
+        body = resp.text
+        assert refresh not in body
+        assert "token_hash" not in body
+        # No 64-char hex SHA-256 digest should appear in the response body
+        for match in re.findall(r"[a-f0-9]{64}", body):
+            pytest.fail(f"token hash leaked in response: {match[:16]}...")
+
+
+class TestLastUsedAtTracking:
+    """RefreshSession.last_used_at is set on create and updated on rotation."""
+
+    def _register_and_login(self, client, username="testuser_lua"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_last_used_at_set_on_create(self, client):
+        """A freshly created refresh session has last_used_at set."""
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        _, refresh = self._register_and_login(client, "testuser_lua1")
+        db = SessionLocal()
+        try:
+            session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            assert session is not None
+            assert session.last_used_at is not None
+        finally:
+            db.close()
+
+    def test_last_used_at_updates_after_rotation(self, client):
+        """The new session from rotation gets a fresh last_used_at."""
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        _, refresh = self._register_and_login(client, "testuser_lua2")
+        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        assert resp.status_code == 200
+        new_refresh = resp.json()["refresh_token"]
+        db = SessionLocal()
+        try:
+            old = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            new = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(new_refresh)
+            ).first()
+            assert old is not None and new is not None
+            assert new.last_used_at is not None
+            assert new.last_used_at >= old.last_used_at
+        finally:
+            db.close()
+
+    def test_session_list_uses_last_used_at(self, client):
+        """Session-list responses expose last_used_at (not a created_at proxy)."""
+        token, _ = self._register_and_login(client, "testuser_lua3")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        for session in resp.json()["sessions"]:
+            assert "last_used_at" in session
+            assert session["last_used_at"] is not None
+
+
+class TestDeviceInfoPreservation:
+    """device_info is preserved when rotating with no new device info."""
+
+    def _register_and_login(self, client, username="testuser_dev"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_rotate_preserves_previous_device_info(self, client):
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import (
+            rotate_refresh_token,
+            hash_refresh_token,
+        )
+
+        _, refresh = self._register_and_login(client, "testuser_dev1")
+        db = SessionLocal()
+        try:
+            new_raw, _ = rotate_refresh_token(db, refresh, device_info=None)
+            new_hash = hash_refresh_token(new_raw)
+            new_session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == new_hash
+            ).first()
+            old_session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            assert new_session is not None and old_session is not None
+            assert new_session.device_info == old_session.device_info
+        finally:
+            db.close()
+
+
+class TestCleanupExpiredSessionsForce:
+    """cleanup_expired_sessions(db, force=True) bypasses gating."""
+
+    def _register_and_login(self, client, username="testuser_clean"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_force_bypasses_probabilistic_gating(self, client):
+        """force=True deletes expired sessions even when the gate would skip."""
+        from datetime import datetime, timedelta, timezone
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import (
+            cleanup_expired_sessions,
+            reset_cleanup_counter,
+            hash_refresh_token,
+        )
+
+        _, refresh = self._register_and_login(client, "testuser_clean1")
+        db = SessionLocal()
+        try:
+            session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            assert session is not None
+            session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            db.commit()
+            # Without force, the probabilistic gate (every 100 calls) may skip
+            reset_cleanup_counter()
+            count = cleanup_expired_sessions(db)
+            assert count == 0  # gated -> skipped
+            # With force=True, cleanup always runs and deletes the expired row
+            count = cleanup_expired_sessions(db, force=True)
+            assert count >= 1
+        finally:
+            db.close()
+
+    def test_force_never_raises_when_nothing_to_clean(self, client):
+        """force=True is safe when there is nothing to clean."""
+        from app.database import SessionLocal
+        from app.services.refresh_token_service import cleanup_expired_sessions
+        db = SessionLocal()
+        try:
+            count = cleanup_expired_sessions(db, force=True)
+            assert count >= 0
+        finally:
+            db.close()
+
+
+class TestExpiredAccessTokenRefresh:
+    """An expired access token does not block a valid refresh."""
+
+    def _register_and_login(self, client, username="testuser_eat"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_expired_access_token_can_still_refresh(self, client):
+        """Refresh works even when the access token has expired."""
+        from datetime import timedelta
+        from app.services.auth_service import create_access_token
+
+        _, refresh = self._register_and_login(client, "testuser_eat1")
+        expired = create_access_token(data={"sub": "0"}, expires_delta=timedelta(hours=-1))
+        # The refresh endpoint does not validate the access token
+        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh},
+                           headers={"Authorization": f"Bearer {expired}"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+
+
+class TestNoTokenHashInLogs:
+    """Token hashes must never appear in log output."""
+
+    def _register_and_login(self, client, username="testuser_thl"):
+        reg = client.post("/api/auth/register", json={
+            "username": username,
+            "email": f"{username}@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": username,
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        return login.json()["access_token"], login.json()["refresh_token"]
+
+    def test_token_hash_not_logged(self, client, caplog):
+        import logging
+        import re
+        caplog.set_level(logging.DEBUG)
+
+        _, refresh = self._register_and_login(client, "testuser_thl1")
+        # Exercise the paths that log session metadata
+        client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        for record in caplog.records:
+            message = record.getMessage()
+            for match in re.findall(r"[a-f0-9]{64}", message):
+                pytest.fail(
+                    f"token hash leaked in log: '{match[:16]}...' "
+                    f"in record: {record.name} - {record.levelname}"
+                )

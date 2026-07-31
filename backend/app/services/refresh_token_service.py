@@ -10,6 +10,7 @@ Provides secure refresh token management:
 """
 
 import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -76,6 +77,8 @@ def create_refresh_session(
         expires_at=expires_at,
         device_info=device_info,
     )
+    # Track when the session was created/used
+    session.last_used_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.add(session)
     db.flush()
 
@@ -143,21 +146,27 @@ def rotate_refresh_token(
             detail="Invalid refresh token",
         )
 
+    # Track usage of the old session before revoking it
+    session.last_used_at = now
     # Revoke the current session
     session.revoked_at = now
     db.flush()
 
-    # Create a new session in the same family with a new token
+    # Create a new session in the same family with a new token.
+    # Preserve the previous session's device_info when no new device info
+    # was provided (e.g. rotation without a fresh IP fingerprint).
     raw_token, new_token_hash, _ = generate_refresh_token()
     expires_at = now + timedelta(days=settings.jwt_refresh_expiry_days)
+    preserved_device_info = device_info if device_info is not None else session.device_info
 
     new_session = RefreshSession(
         user_id=user_id,
         family_id=session.family_id,
         token_hash=new_token_hash,
         expires_at=expires_at,
-        device_info=device_info,
+        device_info=preserved_device_info,
     )
+    new_session.last_used_at = now
     db.add(new_session)
     db.commit()
 
@@ -221,17 +230,13 @@ def revoke_all_user_sessions(db: Session, user: User) -> int:
 def get_user_sessions(
     db: Session,
     user: User,
-    current_raw_token: Optional[str] = None,
 ) -> list[RefreshSession]:
-    """Return all non-expired refresh sessions for the given user.
+    """Return all refresh sessions for the given user.
 
-    If current_raw_token is provided, marks that session as current.
     Sorted by created_at descending (most recent first).
     Does NOT include token_hash or any sensitive data in the result.
+    Current-session marking is handled by the caller via is_current_session().
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    current_hash = hash_refresh_token(current_raw_token) if current_raw_token else None
-
     sessions = (
         db.query(RefreshSession)
         .filter(
@@ -276,10 +281,15 @@ def is_current_session(
     session: RefreshSession,
     current_raw_token: Optional[str],
 ) -> bool:
-    """Check if this session matches the current raw refresh token."""
+    """Check if this session matches the current raw refresh token.
+
+    Uses constant-time comparison (hmac.compare_digest) on the SHA-256
+    hashes so timing does not reveal partial matches.
+    """
     if current_raw_token is None:
         return False
-    return session.token_hash == hash_refresh_token(current_raw_token)
+    current_hash = hash_refresh_token(current_raw_token)
+    return hmac.compare_digest(session.token_hash, current_hash)
 
 
 def enforce_max_active_sessions(
@@ -375,19 +385,23 @@ def reset_cleanup_counter() -> None:
     _cleanup_counter = 0
 
 
-def cleanup_expired_sessions(db: Session) -> int:
+def cleanup_expired_sessions(db: Session, force: bool = False) -> int:
     """Remove expired and long-revoked sessions from the database.
 
     Only runs periodically (every 100 calls) to avoid unnecessary DB I/O
-    on every auth operation.
+    on every auth operation, UNLESS force=True bypasses the probabilistic
+    cleanup gating (used by tests and explicit maintenance flows).
 
     Deletes:
     - Expired sessions (expires_at passed)
     - Sessions revoked more than 7 days ago
 
+    Args:
+        force: If True, bypasses the probabilistic gating and always runs.
+
     Returns the number of deleted rows.
     """
-    if not _should_cleanup():
+    if not force and not _should_cleanup():
         return 0
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)

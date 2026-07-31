@@ -108,6 +108,11 @@ def generate_response(
             "Ollama did not respond in time. The model might still be loading "
             "or the prompt was too long."
         )
+    except httpx.RequestError as exc:
+        raise RuntimeError(
+            "Ollama request failed. Make sure Ollama is running and "
+            "the model is installed."
+        ) from exc
 
     if resp.status_code != 200:
         detail = resp.text[:200]
@@ -161,6 +166,11 @@ def generate_json_response(
         raise TimeoutError(
             "Ollama did not respond in time."
         )
+    except httpx.RequestError as exc:
+        raise RuntimeError(
+            "Ollama request failed. Make sure Ollama is running and "
+            "the model is installed."
+        ) from exc
 
     if resp.status_code != 200:
         detail = resp.text[:200]
@@ -255,4 +265,10 @@ async def generate_stream_async(
             "type": "error",
             "error": "Ollama did not respond in time. The model might still be "
                      "loading or the prompt was too long.",
+        }
+    except httpx.RequestError as exc:
+        yield {
+            "type": "error",
+            "error": "Ollama request failed. Make sure Ollama is running and "
+                     "the model is installed.",
         }

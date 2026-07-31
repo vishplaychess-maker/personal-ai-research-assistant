@@ -94,6 +94,17 @@ def _migrate_database():
         if "locked_until" not in existing_user_cols:
             conn.execute(sa_text("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP"))
 
+        # Phase 7B hardening: last_used_at on refresh_sessions (nullable so
+        # existing rows keep working without a backfill default)
+        existing_refresh_cols = {c["name"] for c in inspector.get_columns("refresh_sessions")}
+        if "last_used_at" not in existing_refresh_cols:
+            conn.execute(sa_text("ALTER TABLE refresh_sessions ADD COLUMN last_used_at TIMESTAMP"))
+            # Backfill new column with created_at for existing rows
+            conn.execute(sa_text(
+                "UPDATE refresh_sessions SET last_used_at = created_at "
+                "WHERE last_used_at IS NULL"
+            ))
+
         conn.commit()
 
 

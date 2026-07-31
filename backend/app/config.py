@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     production_mode: bool = False
 
     # Phase 7B: refresh endpoint rate limiting
-    refresh_rate_limit_max_attempts: int = 20
+    # (env var REFRESH_RATE_LIMIT_REQUESTS)
+    refresh_rate_limit_requests: int = 20
     refresh_rate_limit_window_seconds: int = 60
 
     # ── Session management (Phase 7B) ─────────────────────

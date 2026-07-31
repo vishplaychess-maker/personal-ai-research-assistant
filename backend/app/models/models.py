@@ -166,6 +166,9 @@ class RefreshSession(Base):
     expires_at = Column(DateTime, nullable=False)
     revoked_at = Column(DateTime, nullable=True)  # NULL = active
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # Last time this session was used (created or refreshed).
+    # Nullable so existing databases migrate safely; NULL rows keep working.
+    last_used_at = Column(DateTime, nullable=True)
     device_info = Column(String(255), nullable=True)  # Optional client metadata
 
     def __repr__(self):
