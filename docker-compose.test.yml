@@ -1,0 +1,64 @@
+# Test-only stack — fully isolated from the live `docker-compose.yml`.
+#
+# The integration test suite (tests/) contains destructive cleanup (e.g. it
+# clears ALL memories and deletes test sessions). Running it against the live
+# stack would wipe real user data, so this stack uses its own volumes,
+# container names, and port (18080). The backend service also bind-mounts the
+# repo tests/ directory so pytest can run inside the image.
+#
+# Usage:
+#   docker compose -p ra-test -f docker-compose.test.yml up -d --build
+#   docker compose -p ra-test -f docker-compose.test.yml exec backend \
+#     python -m pytest tests/ -q
+#   docker compose -p ra-test -f docker-compose.test.yml down -v   # teardown
+
+services:
+  # ── ChromaDB (vector database, internal only) ─────────────
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    container_name: ra-test-chromadb
+    volumes:
+      - ra_test_chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - ra-test-network
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && IFS= read -r status_line <&3 && [[ \"$$status_line\" == *\"200 OK\"* ]] && exec 3>&-"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI backend with a throwaway DB + mounted tests ──
+  backend:
+    build: ./backend
+    image: ra-test-backend:latest
+    container_name: ra-test-backend
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ra_test_app_data:/data
+      - ./tests:/app/tests
+    environment:
+      - DATABASE_URL=sqlite:////data/app.db
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_PORT=11434
+    depends_on:
+      chromadb:
+        condition: service_started
+    networks:
+      - ra-test-network
+    restart: "no"
+
+networks:
+  ra-test-network:
+    driver: bridge
+
+volumes:
+  ra_test_app_data:
+  ra_test_chroma_data:

@@ -47,29 +47,35 @@ class TokenResponse(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Response body for successful login (Phase 7B, includes refresh token).
+    """Response body for successful login (Phase 7C, refresh token via cookie).
 
-    When the frontend expects both access and refresh tokens, use this.
-    For backward compatibility, TokenResponse is still accepted by existing
-    frontend code until Phase 7B frontend update is deployed.
+    Phase 7C: the raw refresh token is delivered exclusively via the
+    HttpOnly `research_assistant_refresh_token` cookie; it is never
+    returned in JSON responses.
     """
 
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
 
 
 class RefreshRequest(BaseModel):
-    """Request body for POST /api/auth/refresh."""
+    """Deprecated Phase 7B request body for POST /api/auth/refresh.
+
+    Phase 7C: the refresh token is read from the HttpOnly cookie instead.
+    A JSON body token is ignored; this model is kept only for reference.
+    """
 
     refresh_token: str = Field(..., description="The refresh token to exchange")
 
 
 class RefreshResponse(BaseModel):
-    """Response body for successful token refresh."""
+    """Response body for a successful token refresh (Phase 7C).
+
+    Only the access token and metadata are returned; the new refresh
+    token is set as an HttpOnly cookie on the response.
+    """
 
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
 
 

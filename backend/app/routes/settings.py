@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services.settings_service import get_memory_enabled, set_memory_enabled
+from app.services.cookie_service import require_csrf
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -46,6 +47,7 @@ def read_memory_setting(db: Session = Depends(get_db)):
 def update_memory_setting(
     payload: MemorySettingUpdate,
     db: Session = Depends(get_db),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Update the memory-enabled setting and persist it to the database.

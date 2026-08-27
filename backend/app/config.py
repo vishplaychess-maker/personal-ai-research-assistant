@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     # ── Session management (Phase 7B) ─────────────────────
     max_active_sessions: int = 10
 
+    # ── Cookies & CSRF (Phase 7C) ─────────────────────────
+    # HttpOnly refresh cookie set by the backend on login/refresh.
+    refresh_cookie_name: str = "research_assistant_refresh_token"
+    # Non-HttpOnly double-submit CSRF cookie.
+    csrf_cookie_name: str = "research_assistant_csrf_token"
+    # Secure flag: false for localhost, true in production (HTTPS required).
+    cookie_secure: bool = False
+    # SameSite attribute for the refresh cookie (lax for local dev).
+    cookie_samesite: str = "lax"
+    # Allowed CORS origin for the frontend (never "*" with credentials).
+    frontend_origin: str = "http://localhost:5173"
+
     # ── Model settings ──────────────────────────────────
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5

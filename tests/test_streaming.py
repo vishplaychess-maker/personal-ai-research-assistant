@@ -19,11 +19,29 @@ import pytest
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
+from tests.auth_helpers import ensure_user, register_and_login, auth_headers
+
+# Shared test user for live-backend tests (persists across runs).
+_TEST_USER = "itest_streaming"
+
 # ── Helpers ────────────────────────────────────────────────
 
 
+def _authenticated(c: httpx.Client, username: str = _TEST_USER) -> httpx.Client:
+    """Attach a valid Authorization header for the shared test user.
+
+    The register/login lookup runs on a separate throwaway client so the
+    returned client's connection pool is NOT opened before the caller
+    enters it with `with client() as c:`.
+    """
+    with httpx.Client(base_url=str(c.base_url), timeout=15.0) as temp:
+        _, token = ensure_user(temp, username)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=30.0)
+    return _authenticated(httpx.Client(base_url=BASE_URL, timeout=30.0))
 
 
 def _create_session() -> int:
@@ -56,6 +74,15 @@ def _cleanup_sessions():
                     c.delete(f"/api/sessions/{s['id']}")
                 except Exception:
                     pass
+
+
+# ── Shared in-process auth helper ─────────────────────────
+
+
+def _testclient_headers(c) -> dict:
+    """Register/login an in-process test user and return auth headers."""
+    _, token = ensure_user(c, "itest_streaming_tc")
+    return auth_headers(token)
 
 
 # ── Parse SSE helpers ─────────────────────────────────────
@@ -355,8 +382,9 @@ def test_stream_mocked_ollama():
     from unittest.mock import patch
     with patch("app.routes.messages.stream_chat_response", mock_stream_chat_response):
         with TestClient(app) as c:
+            headers = _testclient_headers(c)
             # Create session
-            sess_resp = c.post("/api/sessions", json={"title": "Mock Stream Test"})
+            sess_resp = c.post("/api/sessions", json={"title": "Mock Stream Test"}, headers=headers)
             assert sess_resp.status_code == 201
             sid = sess_resp.json()["id"]
 
@@ -364,6 +392,7 @@ def test_stream_mocked_ollama():
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Hello from mock"},
+                headers=headers,
             )
 
     assert resp.status_code == 200
@@ -659,12 +688,23 @@ def test_stream_ollama_timeout_error():
     from unittest.mock import patch
     with patch("app.routes.messages.stream_chat_response", mock_timeout_response):
         with TestClient(app) as c:
-            sess_resp = c.post("/api/sessions", json={"title": "Timeout Test"})
+            headers = _testclient_headers(c)
+            sess_resp = c.post("/api/sessions", json={"title": "Timeout Test"}, headers=headers)
             sid = sess_resp.json()["id"]
 
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Trigger timeout"},
+                headers=headers,
+            )
+
+            # Verify no assistant message was saved. Done in-process with the
+            # SAME user (Phase 7C: sessions/messages are user-scoped, so the
+            # shared httpx _client() user cannot read this session).
+            msgs = c.get(f"/api/sessions/{sid}/messages", headers=headers).json()
+            assistant_msgs = [m for m in msgs if m["role"] == "assistant"]
+            assert len(assistant_msgs) == 0, (
+                f"Expected 0 assistant messages on timeout, got {len(assistant_msgs)}"
             )
 
     assert resp.status_code == 200
@@ -685,14 +725,6 @@ def test_stream_ollama_timeout_error():
     detail = last_event["data"]["detail"]
     assert "Traceback" not in detail
     assert "/app/" not in detail
-
-    # Verify no assistant message was saved to the database
-    with _client() as c:
-        msgs = c.get(f"/api/sessions/{sid}/messages").json()
-        assistant_msgs = [m for m in msgs if m["role"] == "assistant"]
-        assert len(assistant_msgs) == 0, (
-            f"Expected 0 assistant messages on timeout, got {len(assistant_msgs)}"
-        )
 
 
 # ── In-process cancellation mock test ─────────────────────
@@ -740,12 +772,14 @@ def test_stream_client_cancellation():
     with patch("app.routes.messages.stream_chat_response", mock_stream_cancel), \
          patch("app.routes.messages.Request.is_disconnected", mock_disconnected):
         with TestClient(app) as c:
-            sess_resp = c.post("/api/sessions", json={"title": "Cancel Test"})
+            headers = _testclient_headers(c)
+            sess_resp = c.post("/api/sessions", json={"title": "Cancel Test"}, headers=headers)
             sid = sess_resp.json()["id"]
 
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Test cancellation"},
+                headers=headers,
             )
 
     assert resp.status_code == 200
@@ -817,16 +851,18 @@ def test_stream_no_persistence_on_cancellation():
     with patch("app.routes.messages.stream_chat_response", mock_stream_cancel), \
          patch("app.routes.messages.Request.is_disconnected", mock_disconnected):
         with TestClient(app) as c:
-            sess_resp = c.post("/api/sessions", json={"title": "Cancel Persist Test"})
+            headers = _testclient_headers(c)
+            sess_resp = c.post("/api/sessions", json={"title": "Cancel Persist Test"}, headers=headers)
             sid = sess_resp.json()["id"]
 
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Test cancellation persistence"},
+                headers=headers,
             )
 
             # List messages — should have NO assistant message
-            msgs = c.get(f"/api/sessions/{sid}/messages").json()
+            msgs = c.get(f"/api/sessions/{sid}/messages", headers=headers).json()
             assistant_msgs = [m for m in msgs if m["role"] == "assistant"]
             assert len(assistant_msgs) == 0, (
                 f"Expected 0 assistant messages after cancellation, got {len(assistant_msgs)}"
@@ -938,12 +974,14 @@ def test_stream_headers_are_correct():
     from unittest.mock import patch
     with patch("app.routes.messages.stream_chat_response", mock_headers_stream):
         with TestClient(app) as c:
-            sess_resp = c.post("/api/sessions", json={"title": "Headers Test"})
+            headers = _testclient_headers(c)
+            sess_resp = c.post("/api/sessions", json={"title": "Headers Test"}, headers=headers)
             sid = sess_resp.json()["id"]
 
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Check headers"},
+                headers=headers,
             )
 
     assert resp.status_code == 200

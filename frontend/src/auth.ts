@@ -1,19 +1,23 @@
 /**
- * Phase 6C / 7B — Authentication utilities.
+ * Phase 6C / 7B / 7C — Authentication utilities.
  *
  * Phase 7B: access token in memory (via AuthContext), refresh token in localStorage.
- * Auto-refresh on 401 attempts once; prevents infinite refresh loops.
+ * Phase 7C: the refresh token lives ONLY in an HttpOnly cookie set by the backend
+ * (`research_assistant_refresh_token`). It is never stored in localStorage and
+ * never sent in headers or bodies. State-changing requests carry a double-submit
+ * CSRF token (`X-CSRF-Token`) echoed from the non-HttpOnly CSRF cookie.
  */
 
 import type { UserInfo, LoginRequest, RegisterRequest, LoginResponse, RefreshResponse, AuthSession } from "./types";
 
 // ── Storage keys ──────────────────────────────────────────
 
-/** Key for the refresh token in localStorage. */
-const REFRESH_TOKEN_KEY = "research_assistant_refresh_token";
 const USER_KEY = "research_assistant_user";
+const CSRF_COOKIE_NAME = "research_assistant_csrf_token";
+/** Legacy Phase 7B key removed during migration (one-time cleanup). */
+const LEGACY_REFRESH_TOKEN_KEY = "research_assistant_refresh_token";
 
-// ── In-memory access token (Phase 7B) ─────────────────────
+// ── In-memory access token ────────────────────────────────
 
 /** The current access token is kept in memory, not localStorage.
  *  AuthContext manages this via setAccessToken(). */
@@ -37,29 +41,44 @@ export function getAccessToken(): string | null {
   return _accessToken;
 }
 
-// ── Refresh token storage (localStorage) ──────────────────
+// ── CSRF token (Phase 7C) ─────────────────────────────────
 
-function getStoredRefreshToken(): string | null {
+/**
+ * Read the CSRF token from the non-HttpOnly cookie set by the backend.
+ * Returns null if the cookie is not present.
+ */
+export function getCsrfToken(): string | null {
   try {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
+    const match = document.cookie
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(`${CSRF_COOKIE_NAME}=`));
+    if (!match) return null;
+    return decodeURIComponent(match.slice(CSRF_COOKIE_NAME.length + 1));
   } catch {
     return null;
   }
 }
 
-function storeRefreshToken(token: string): void {
-  try {
-    localStorage.setItem(REFRESH_TOKEN_KEY, token);
-  } catch {
-    // localStorage may be unavailable
-  }
+/** Headers carrying the CSRF token (empty object if no token available). */
+export function getCsrfHeaders(): Record<string, string> {
+  const token = getCsrfToken();
+  return token ? { "X-CSRF-Token": token } : {};
 }
 
-function clearRefreshToken(): void {
+// ── Legacy migration (Phase 7C) ───────────────────────────
+
+/**
+ * Remove the Phase 7B localStorage refresh token during frontend startup.
+ * After migration the refresh token only exists as an HttpOnly cookie; the
+ * legacy value is discarded (never sent to the backend). Users without a
+ * valid cookie must log in once after the migration.
+ */
+export function removeLegacyRefreshToken(): void {
   try {
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY);
   } catch {
-    // ignore
+    // localStorage may be unavailable
   }
 }
 
@@ -111,14 +130,43 @@ export function getAuthHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 
-// ── Token refresh (Phase 7B) ──────────────────────────────
+/**
+ * Async variant of getAuthHeaders — attempts a refresh when the current
+ * access token is missing or expired. Used by raw-fetch callers
+ * (streaming, model selector, system prompt editor, sidebar search) that
+ * are outside api.ts's request() wrapper.
+ */
+export async function getAuthHeadersAsync(): Promise<Record<string, string>> {
+  const token = getAccessToken();
+  if (token && !isTokenExpired(token)) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  try {
+    const ok = await refreshAccessToken();
+    if (ok) {
+      const fresh = getAccessToken();
+      if (fresh && !isTokenExpired(fresh)) {
+        return { Authorization: `Bearer ${fresh}` };
+      }
+    }
+  } catch {
+    // fall through to no auth headers
+  }
+  return {};
+}
+
+// ── Token refresh (Phase 7B / 7C) ─────────────────────────
 
 let lastRefreshAttempt = 0;
 const REFRESH_COOLDOWN_MS = 5000; // Prevent rapid retry loops
 
 /**
- * Attempt to refresh the access token using the stored refresh token.
+ * Attempt to refresh the access token using the HttpOnly refresh cookie.
  * Returns true if the refresh succeeded, false otherwise.
+ *
+ * Phase 7C: the refresh token is read automatically from the cookie by the
+ * browser (credentials: "include"); no token is sent in the body. The
+ * CSRF token is echoed from the CSRF cookie (double-submit).
  *
  * Phase 7B hardening: concurrent refresh requests are SERIALIZED — if a
  * refresh is already in-flight, callers await the same shared promise
@@ -127,9 +175,6 @@ const REFRESH_COOLDOWN_MS = 5000; // Prevent rapid retry loops
 export async function refreshAccessToken(): Promise<boolean> {
   // Serialize concurrent refresh requests: share the in-flight request
   if (_refreshPromise) return _refreshPromise;
-
-  const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) return false;
 
   // Prevent rapid retry loops
   const now = Date.now();
@@ -140,13 +185,13 @@ export async function refreshAccessToken(): Promise<boolean> {
     try {
       const res = await fetch("/api/auth/refresh", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
+        credentials: "include",
+        body: "{}",
       });
 
       if (!res.ok) {
         // Refresh failed — clear everything
-        clearRefreshToken();
         clearUser();
         _accessToken = null;
         _onInvalidRefresh?.();
@@ -154,11 +199,15 @@ export async function refreshAccessToken(): Promise<boolean> {
       }
 
       const data: RefreshResponse = await res.json();
+      if (!data.access_token) {
+        clearUser();
+        _accessToken = null;
+        _onInvalidRefresh?.();
+        return false;
+      }
       _accessToken = data.access_token;
-      storeRefreshToken(data.refresh_token);
       return true;
     } catch {
-      clearRefreshToken();
       clearUser();
       _accessToken = null;
       _onInvalidRefresh?.();
@@ -181,6 +230,7 @@ async function authRequest<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -194,12 +244,13 @@ export async function loginUser(
   credentials: LoginRequest
 ): Promise<{ token: string; user: UserInfo }> {
   const data = await authRequest<LoginResponse>("/api/auth/login", credentials);
-  // Store the refresh token
-  storeRefreshToken(data.refresh_token);
+  // Phase 7C: the refresh token is delivered as an HttpOnly cookie; the
+  // response contains only the access token.
   _accessToken = data.access_token;
   // Fetch user info with the new access token
   const res = await fetch("/api/auth/me", {
     headers: { Authorization: `Bearer ${data.access_token}` },
+    credentials: "include",
   });
   if (!res.ok) throw new Error("Failed to load user profile");
   const user: UserInfo = await res.json();
@@ -214,36 +265,33 @@ export async function registerUser(
 }
 
 export async function logout(): Promise<void> {
-  // Attempt to revoke the refresh token server-side
-  const refreshToken = getStoredRefreshToken();
+  // Attempt to revoke the refresh session server-side. The refresh token is
+  // read from the HttpOnly cookie; the CSRF token is echoed in the header.
   const accessToken = _accessToken;
   try {
-    if (refreshToken && accessToken) {
+    if (accessToken) {
       await fetch("/api/auth/logout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
+          ...getCsrfHeaders(),
         },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        credentials: "include",
+        body: "{}",
       });
     }
   } catch {
     // Best-effort; clear client state regardless
   }
-  clearRefreshToken();
   clearUser();
   _accessToken = null;
 }
 
-// ── Restore session from stored refresh token ─────────────
+// ── Restore session from HttpOnly refresh cookie ──────────
 
 export async function restoreSession(): Promise<UserInfo | null> {
-  const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) {
-    return null;
-  }
-  // Try to get a fresh access token from the stored refresh token
+  // Try to get a fresh access token from the HttpOnly refresh cookie
   const refreshed = await refreshAccessToken();
   if (!refreshed || !_accessToken) {
     return null;
@@ -252,9 +300,9 @@ export async function restoreSession(): Promise<UserInfo | null> {
   try {
     const res = await fetch("/api/auth/me", {
       headers: { Authorization: `Bearer ${_accessToken}` },
+      credentials: "include",
     });
     if (!res.ok) {
-      clearRefreshToken();
       clearUser();
       _accessToken = null;
       return null;
@@ -263,34 +311,32 @@ export async function restoreSession(): Promise<UserInfo | null> {
     storeUser(user);
     return user;
   } catch {
-    clearRefreshToken();
     clearUser();
     _accessToken = null;
     return null;
   }
 }
 
-// ── Session list (Phase 7B hardening) ────────────────────
+// ── Session list (Phase 7B / 7C) ──────────────────────────
 
 /**
  * Fetch the current user's refresh sessions from GET /api/auth/sessions.
  *
- * The refresh token is sent ONLY to this endpoint via the X-Refresh-Token
- * header (never on unrelated API requests, never via query params). The
- * backend hashes it to mark the exact matching active session is_current.
+ * Phase 7C: no X-Refresh-Token header is sent. The backend identifies the
+ * current session from the HttpOnly refresh cookie. The sessions endpoint
+ * requires a valid access token, so we refresh first if needed.
  */
 export async function listAuthSessions(): Promise<AuthSession[]> {
-  const refreshToken = getStoredRefreshToken();
-  // The sessions endpoint requires a valid access token (get_current_user),
-  // so refresh first if the in-memory token is missing or expired.
   const token = getAccessToken();
   if (!token || isTokenExpired(token)) {
     await refreshAccessToken();
   }
   const headers: Record<string, string> = getAuthHeaders();
-  if (refreshToken) headers["X-Refresh-Token"] = refreshToken;
 
-  const res = await fetch("/api/auth/sessions", { headers });
+  const res = await fetch("/api/auth/sessions", {
+    headers,
+    credentials: "include",
+  });
   if (!res.ok) {
     const data = await res.json().catch(() => ({ detail: "Request failed" }));
     throw new Error(data.detail || `HTTP ${res.status}`);

@@ -7,6 +7,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
+import { getCsrfToken, getAuthHeadersAsync } from "./auth";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -37,7 +38,11 @@ export function SystemPromptEditor({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/system-prompt`);
+      const auth = await getAuthHeadersAsync();
+      const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
+        headers: auth.Authorization ? { Authorization: auth.Authorization } : {},
+        credentials: "include",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPrompt(data.system_prompt || "");
@@ -72,9 +77,21 @@ export function SystemPromptEditor({
     setSaving(true);
     setError(null);
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      // Phase 7C: attach the access token so the backend can identify the
+      // session owner.
+      const auth = await getAuthHeadersAsync();
+      if (auth.Authorization) headers.Authorization = auth.Authorization;
+      // Phase 7C: state-changing PATCH requires the double-submit CSRF token.
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+
       const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers,
+        credentials: "include",
         body: JSON.stringify({
           system_prompt: trimmed || null,
         }),
@@ -95,9 +112,21 @@ export function SystemPromptEditor({
     setSaving(true);
     setError(null);
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      // Phase 7C: attach the access token so the backend can identify the
+      // session owner.
+      const auth = await getAuthHeadersAsync();
+      if (auth.Authorization) headers.Authorization = auth.Authorization;
+      // Phase 7C: state-changing PATCH requires the double-submit CSRF token.
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+
       const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers,
+        credentials: "include",
         body: JSON.stringify({ system_prompt: null }),
       });
       if (!res.ok) throw new Error("Failed to reset system prompt");

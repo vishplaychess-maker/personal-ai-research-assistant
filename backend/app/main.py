@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text as sa_text
 
 from app.config import settings
@@ -172,6 +173,21 @@ app = FastAPI(
     title="Personal AI Research Assistant",
     version="0.3.0",
     lifespan=lifespan,
+)
+
+# ── CORS (Phase 7C) ──────────────────────────────────────
+# Allow only the configured frontend origin, with credentials. Wildcard
+# origins are never used together with allow_credentials=True. The
+# X-CSRF-Token header must be allowed for double-submit CSRF.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.frontend_origin],
+    allow_credentials=True,
+    allow_methods=["*"],
+    # Explicit header allow-list: Authorization (bearer), Content-Type, and
+    # X-CSRF-Token (double-submit). Avoids relying on a wildcard with
+    # credentials, which some stacks reject during preflight.
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
 )
 
 # ── Register routers ─────────────────────────────────────

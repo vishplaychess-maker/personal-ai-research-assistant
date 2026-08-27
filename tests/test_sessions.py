@@ -17,14 +17,34 @@ import pytest
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
+from tests.auth_helpers import ensure_user, register_and_login, auth_headers
+
+# Shared test user for live-backend tests (the user persists across runs, so
+# ensure_user handles the "already exists" case gracefully).
+_TEST_USER = "itest_sessions"
+
+
 # ── Helpers ────────────────────────────────────────────────
+
+
+def _authenticated(c: httpx.Client, username: str = _TEST_USER) -> httpx.Client:
+    """Attach a valid Authorization header for the shared test user.
+
+    The register/login lookup runs on a separate throwaway client so the
+    returned client's connection pool is NOT opened before the caller
+    enters it with `with client() as c:`.
+    """
+    with httpx.Client(base_url=str(c.base_url), timeout=15.0) as temp:
+        _, token = ensure_user(temp, username)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
 
 
 def client() -> httpx.Client:
     # 15s is too tight for Ollama cold starts (model loading can take 20-30s).
     # The non-streaming endpoint has a 120s server timeout.
     # Use 30s to match the streaming tests.
-    return httpx.Client(base_url=BASE_URL, timeout=30.0)
+    return _authenticated(httpx.Client(base_url=BASE_URL, timeout=30.0))
 
 
 @pytest.fixture(autouse=True)
@@ -49,14 +69,15 @@ def _cleanup_sessions():
 
 
 def test_create_session():
-    """POST /api/sessions creates a new session."""
+    """POST /api/sessions creates a new session for the authenticated user."""
     with client() as c:
         resp = c.post("/api/sessions", json={"title": "Test Session"})
     assert resp.status_code == 201
     data = resp.json()
     assert data["title"] == "Test Session"
     assert "id" in data
-    assert data["user_id"] == 1
+    # The session belongs to the authenticated test user (no fallback to user 1).
+    assert isinstance(data["user_id"], int) and data["user_id"] > 0
 
 
 def test_list_sessions():
@@ -219,10 +240,10 @@ def test_messages_persist_across_requests():
     """
     # Use separate clients to avoid httpx connection-pool reuse after long requests
     def _send(sid: int, msg: str):
-        with httpx.Client(base_url=BASE_URL, timeout=30.0) as c:
+        with _authenticated(httpx.Client(base_url=BASE_URL, timeout=30.0)) as c:
             return c.post(f"/api/sessions/{sid}/messages", json={"message": msg})
 
-    with httpx.Client(base_url=BASE_URL, timeout=15.0) as c:
+    with _authenticated(httpx.Client(base_url=BASE_URL, timeout=15.0)) as c:
         session = c.post("/api/sessions", json={"title": "Persist Test"}).json()
         sid = session["id"]
 
@@ -231,7 +252,7 @@ def test_messages_persist_across_requests():
     _send(sid, "Q2")
 
     # Fetch all messages
-    with httpx.Client(base_url=BASE_URL, timeout=15.0) as c:
+    with _authenticated(httpx.Client(base_url=BASE_URL, timeout=15.0)) as c:
         resp = c.get(f"/api/sessions/{sid}/messages")
     data = resp.json()
     assert len(data) >= 4  # 2 user + 2 assistant
@@ -284,8 +305,12 @@ def test_send_message_with_mocked_ollama():
         workflow.generate_response = mock_generate_response
 
         with TestClient(app) as c:
+            # Register + login an in-process test user and build auth headers
+            _, token = register_and_login(c, "itest_mock")
+            headers = auth_headers(token)
+
             # Create session via TestClient
-            resp = c.post("/api/sessions", json={"title": "Mock Test"})
+            resp = c.post("/api/sessions", json={"title": "Mock Test"}, headers=headers)
             assert resp.status_code == 201
             session = resp.json()
             sid = session["id"]
@@ -294,6 +319,7 @@ def test_send_message_with_mocked_ollama():
             resp = c.post(
                 f"/api/sessions/{sid}/messages",
                 json={"message": "This is a test message"},
+                headers=headers,
             )
 
         assert resp.status_code == 200

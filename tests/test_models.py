@@ -22,9 +22,27 @@ import pytest
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
+from tests.auth_helpers import ensure_user, register_and_login, auth_headers
+
+# Shared test user for live-backend tests (persists across runs).
+_TEST_USER = "itest_models"
+
+
+def _authenticated(c: httpx.Client, username: str = _TEST_USER) -> httpx.Client:
+    """Attach a valid Authorization header for the shared test user.
+
+    The register/login lookup runs on a separate throwaway client so the
+    returned client's connection pool is NOT opened before the caller
+    enters it with `with client() as c:`.
+    """
+    with httpx.Client(base_url=str(c.base_url), timeout=15.0) as temp:
+        _, token = ensure_user(temp, username)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
+
 
 def _client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=15.0)
+    return _authenticated(httpx.Client(base_url=BASE_URL, timeout=15.0))
 
 
 def _create_session() -> int:
@@ -135,16 +153,16 @@ def test_update_session_model():
         try:
             resp = c.patch(
                 f"/api/sessions/{sid}/model",
-                json={"model": "llama3.2:1b"},
+                json={"model": "llama3.2:3b"},
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data["model"] == "llama3.2:1b"
+            assert data["model"] == "llama3.2:3b"
             assert data["id"] == sid
 
             # Verify the model is persisted
             sess = c.get(f"/api/sessions/{sid}").json()
-            assert sess["model"] == "llama3.2:1b"
+            assert sess["model"] == "llama3.2:3b"
         finally:
             _delete_session(sid)
 
@@ -157,7 +175,7 @@ def test_update_session_model_to_null():
             # First set a model
             c.patch(
                 f"/api/sessions/{sid}/model",
-                json={"model": "llama3.2:1b"},
+                json={"model": "llama3.2:3b"},
             )
 
             # Then clear it
@@ -182,7 +200,7 @@ def test_update_session_model_404():
     with _client() as c:
         resp = c.patch(
             "/api/sessions/99999/model",
-            json={"model": "llama3.2:1b"},
+            json={"model": "llama3.2:3b"},
         )
     assert resp.status_code == 404
 
@@ -317,20 +335,25 @@ def test_stream_with_custom_model():
 
     with patch("app.routes.messages.stream_chat_response", mock_stream):
         with TestClient(app) as c:
+            _, token = register_and_login(c, "itest_models_tc")
+            headers = auth_headers(token)
+
             # Create session
-            sess_resp = c.post("/api/sessions", json={"title": "Model Stream Test"})
+            sess_resp = c.post("/api/sessions", json={"title": "Model Stream Test"}, headers=headers)
             sid = sess_resp.json()["id"]
 
             # Set custom model
             c.patch(
                 f"/api/sessions/{sid}/model",
-                json={"model": "llama3.2:1b"},
+                json={"model": "llama3.2:3b"},
+                headers=headers,
             )
 
             # Stream with custom model — should work fine
             resp = c.post(
                 f"/api/sessions/{sid}/messages/stream",
                 json={"message": "Test with custom model"},
+                headers=headers,
             )
 
     assert resp.status_code == 200
@@ -376,3 +399,186 @@ def test_list_sessions_includes_model_and_system_prompt():
             assert "system_prompt" in target[0]
         finally:
             _delete_session(sid)
+
+
+# ── Model persistence (Phase 7C bug-fix) ───────────────────
+
+
+def test_existing_session_defaults_to_null_model():
+    """A freshly created session has model=None (use configured default)."""
+    with _client() as c:
+        sid = _create_session()
+        try:
+            resp = c.get(f"/api/sessions/{sid}")
+            assert resp.status_code == 200
+            assert resp.json()["model"] is None
+        finally:
+            _delete_session(sid)
+
+
+def test_updated_model_survives_fresh_client():
+    """A selected model persists across a fresh database session / client."""
+    sid = None
+    with _client() as c:
+        sid = _create_session()
+        resp = c.patch(
+            f"/api/sessions/{sid}/model",
+            json={"model": "llama3.2:3b"},
+        )
+        assert resp.status_code == 200
+
+    # A brand-new client (simulating a fresh page load) must see the model
+    with _client() as c:
+        resp = c.get(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+        assert resp.json()["model"] == "llama3.2:3b"
+    _delete_session(sid)
+
+
+def test_embedding_only_model_cannot_be_selected():
+    """Embedding-only models (e.g. nomic-embed-text) are rejected for chat."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    import app.routes.sessions as sessions_route
+
+    # Ensure availability lookup is deterministic (returns a known list)
+    def fake_available():
+        return ["llama3.2:3b", "llama3.2:1b"]
+
+    original = sessions_route.fetch_available_chat_models
+    sessions_route.fetch_available_chat_models = fake_available
+    try:
+        with TestClient(app) as c:
+            _, token = register_and_login(c, "itest_model_reject")
+            headers = auth_headers(token)
+            sess_resp = c.post("/api/sessions", json={"title": "Reject Test"}, headers=headers)
+            sid = sess_resp.json()["id"]
+
+            resp = c.patch(
+                f"/api/sessions/{sid}/model",
+                json={"model": "nomic-embed-text"},
+                headers=headers,
+            )
+            assert resp.status_code == 400
+            assert "embedding" in resp.json()["detail"].lower()
+    finally:
+        sessions_route.fetch_available_chat_models = original
+
+
+def test_unavailable_chat_model_is_rejected():
+    """A model not installed on Ollama is rejected with 400."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    import app.routes.sessions as sessions_route
+
+    def fake_available():
+        return ["llama3.2:3b"]
+
+    original = sessions_route.fetch_available_chat_models
+    sessions_route.fetch_available_chat_models = fake_available
+    try:
+        with TestClient(app) as c:
+            _, token = register_and_login(c, "itest_model_unavail")
+            headers = auth_headers(token)
+            sess_resp = c.post("/api/sessions", json={"title": "Unavail Test"}, headers=headers)
+            sid = sess_resp.json()["id"]
+
+            resp = c.patch(
+                f"/api/sessions/{sid}/model",
+                json={"model": "llama3.2:1b"},
+                headers=headers,
+            )
+            assert resp.status_code == 400
+            assert "not available" in resp.json()["detail"].lower()
+    finally:
+        sessions_route.fetch_available_chat_models = original
+
+
+def test_changing_one_session_model_does_not_change_another():
+    """Per-session models are isolated from each other."""
+    with _client() as c:
+        sid1 = _create_session()
+        sid2 = _create_session()
+        try:
+            c.patch(f"/api/sessions/{sid1}/model", json={"model": "llama3.2:3b"})
+            s1 = c.get(f"/api/sessions/{sid1}").json()
+            s2 = c.get(f"/api/sessions/{sid2}").json()
+            assert s1["model"] == "llama3.2:3b"
+            assert s2["model"] is None
+        finally:
+            _delete_session(sid1)
+            _delete_session(sid2)
+
+
+def test_chat_generation_receives_session_selected_model():
+    """The chat workflow passes the session's selected model to Ollama."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    import app.services.langgraph_workflow as workflow
+
+    captured = {}
+    original = workflow.generate_response
+
+    def fake_generate_response(messages, system_prompt=None, model_name=None, **kwargs):
+        captured["model_name"] = model_name
+        return "mocked answer"
+
+    workflow.generate_response = fake_generate_response
+    try:
+        with TestClient(app) as c:
+            _, token = register_and_login(c, "itest_model_chat")
+            headers = auth_headers(token)
+            sess_resp = c.post("/api/sessions", json={"title": "Model Chat"}, headers=headers)
+            sid = sess_resp.json()["id"]
+            c.patch(f"/api/sessions/{sid}/model", json={"model": "llama3.2:3b"}, headers=headers)
+
+            resp = c.post(
+                f"/api/sessions/{sid}/messages",
+                json={"message": "hello"},
+                headers=headers,
+            )
+            assert resp.status_code == 200
+            assert captured.get("model_name") == "llama3.2:3b"
+    finally:
+        workflow.generate_response = original
+
+
+def test_default_session_uses_configured_chat_model():
+    """A session with no model set passes model_name=None (config default)."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    import app.services.langgraph_workflow as workflow
+    from app.config import settings
+
+    captured = {}
+    original = workflow.generate_response
+
+    def fake_generate_response(messages, system_prompt=None, model_name=None, **kwargs):
+        captured["model_name"] = model_name
+        return "mocked answer"
+
+    workflow.generate_response = fake_generate_response
+    try:
+        with TestClient(app) as c:
+            _, token = register_and_login(c, "itest_model_default")
+            headers = auth_headers(token)
+            sess_resp = c.post("/api/sessions", json={"title": "Default Model"}, headers=headers)
+            sid = sess_resp.json()["id"]
+
+            resp = c.post(
+                f"/api/sessions/{sid}/messages",
+                json={"message": "hello"},
+                headers=headers,
+            )
+            assert resp.status_code == 200
+            # model_name=None → the Ollama client falls back to the configured default
+            assert captured.get("model_name") is None
+            assert settings.default_model
+    finally:
+        workflow.generate_response = original
+
+
+def test_rag_embedding_model_remains_embedding_specific():
+    """Document embeddings still use the embedding model, not the chat model."""
+    import app.services.embeddings_client as ec
+    assert ec.EMBED_MODEL == "nomic-embed-text"

@@ -1,13 +1,19 @@
 /**
- * Phase 7B Hardening — Refresh token hardening tests.
+ * Phase 7B / 7C Hardening — Refresh-token hardening tests.
+ *
+ * Phase 7C: the refresh token lives ONLY in the backend HttpOnly cookie.
+ * There is no X-Refresh-Token header and no localStorage persistence.
+ * State-changing requests send X-CSRF-Token (double-submit) and use
+ * credentials: "include".
  *
  * Covers:
- * - Session-list request sends X-Refresh-Token
- * - Other API requests never send X-Refresh-Token
+ * - No refresh token stored in localStorage
+ * - Session-list request sends no X-Refresh-Token (cookie identifies session)
+ * - Other API requests never send refresh tokens in headers/query/body
  * - Concurrent refresh requests are serialized
  * - Refresh cooldown blocks rapid repeated calls
  * - Expired refresh token clears local authentication state
- * - Logout request remains correct
+ * - Logout request remains correct (POST, credentials include, no token body)
  * - Page restore still works after refresh-token rotation
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -24,8 +30,8 @@ import {
 } from "../auth";
 import { API } from "../api";
 
-const REFRESH_TOKEN_KEY = "research_assistant_refresh_token";
 const USER_KEY = "research_assistant_user";
+const LEGACY_REFRESH_KEY = "research_assistant_refresh_token";
 
 function createJWT(payload: Record<string, unknown>): string {
   const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
@@ -48,7 +54,7 @@ const testUser = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
-describe("Phase 7B hardening — X-Refresh-Token session listing", () => {
+describe("Phase 7C — no refresh token in localStorage / headers", () => {
   beforeEach(() => {
     localStorage.clear();
     setAccessToken(null);
@@ -62,13 +68,56 @@ describe("Phase 7B hardening — X-Refresh-Token session listing", () => {
     vi.restoreAllMocks();
   });
 
-  it("session-list request sends X-Refresh-Token header", async () => {
+  it("no refresh token is stored in localStorage at any point", async () => {
     const validJwt = createJWT({
       sub: "1",
       exp: Math.floor(Date.now() / 1000) + 3600,
     });
     setAccessToken(validJwt);
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-abc");
+    localStorage.setItem(USER_KEY, JSON.stringify(testUser));
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((url: string | URL | Request) => {
+        const u = url.toString();
+        if (u.includes("/api/auth/refresh")) {
+          return Promise.resolve(
+            jsonResponse({ access_token: "fresh-access", token_type: "bearer" })
+          );
+        }
+        if (u.includes("/api/auth/sessions")) {
+          return Promise.resolve(
+            jsonResponse({ sessions: [], total: 0, active_count: 0 })
+          );
+        }
+        return Promise.resolve(
+          jsonResponse({ backend: "ok", chromadb: "ok", ollama: "ok" })
+        );
+      });
+
+    await API.getHealth();
+    await listAuthSessions();
+
+    // The legacy Phase 7B key must never be re-created.
+    expect(localStorage.getItem(LEGACY_REFRESH_KEY)).toBeNull();
+    // And no other key resembling a refresh token exists.
+    const keys = Object.keys(localStorage);
+    expect(keys.some((k) => k.toLowerCase().includes("refresh"))).toBe(false);
+    // No fetch ever carries a refresh token in a header or query.
+    for (const [url, init] of fetchSpy.mock.calls) {
+      const headers = (init?.headers as Record<string, string>) ?? {};
+      expect(headers["X-Refresh-Token"]).toBeUndefined();
+      expect(String(url)).not.toContain("refresh_token");
+      expect(String(url)).not.toContain("refresh=");
+    }
+  });
+
+  it("session-list request sends NO X-Refresh-Token and uses credentials", async () => {
+    const validJwt = createJWT({
+      sub: "1",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    setAccessToken(validJwt);
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({
@@ -93,52 +142,51 @@ describe("Phase 7B hardening — X-Refresh-Token session listing", () => {
     expect(sessions[0].is_current).toBe(true);
 
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/auth/sessions");
-    const headers = init?.headers as Record<string, string>;
-    expect(headers["X-Refresh-Token"]).toBe("refresh-token-abc");
+    expect(String(url)).toBe("/api/auth/sessions");
+    const headers = (init?.headers as Record<string, string>) ?? {};
+    // Phase 7C: no X-Refresh-Token header — the HttpOnly cookie identifies
+    // the current session on the backend.
+    expect(headers["X-Refresh-Token"]).toBeUndefined();
+    expect(init?.credentials).toBe("include");
     expect(headers["Authorization"]).toBe(`Bearer ${validJwt}`);
   });
 
-  it("session-list works without access token but still sends X-Refresh-Token", async () => {
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-def");
+  it("session-list works after auto-refresh when access token is expired", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       (url: string | URL | Request) => {
         const u = url.toString();
         if (u.includes("/api/auth/refresh")) {
           return Promise.resolve(
-            jsonResponse({
-              access_token: "fresh-access",
-              refresh_token: "fresh-refresh",
-              token_type: "bearer",
-            })
+            jsonResponse({ access_token: "fresh-access", token_type: "bearer" })
           );
         }
-        return Promise.resolve(jsonResponse({ sessions: [], total: 0, active_count: 0 }));
+        if (u.includes("/api/auth/sessions")) {
+          return Promise.resolve(
+            jsonResponse({ sessions: [], total: 0, active_count: 0 })
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
       }
     );
+
     const sessions = await listAuthSessions();
     expect(sessions).toEqual([]);
-    // Find the sessions request (last call) — it carries X-Refresh-Token.
     const sessionsCall = fetchSpy.mock.calls.find(([url]) =>
       String(url).includes("/api/auth/sessions")
     );
     expect(sessionsCall).toBeDefined();
-    const headers = sessionsCall![1]?.headers as Record<string, string>;
-    expect(headers["X-Refresh-Token"]).toBe("refresh-token-def");
+    const headers = (sessionsCall![1]?.headers as Record<string, string>) ?? {};
+    expect(headers["X-Refresh-Token"]).toBeUndefined();
+    expect(sessionsCall![1]?.credentials).toBe("include");
   });
 
-  it("session-list never sends the refresh token via query params", async () => {
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-ghi");
+  it("session-list never sends refresh tokens via query params", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       (url: string | URL | Request) => {
         const u = url.toString();
         if (u.includes("/api/auth/refresh")) {
           return Promise.resolve(
-            jsonResponse({
-              access_token: "fresh-access",
-              refresh_token: "fresh-refresh",
-              token_type: "bearer",
-            })
+            jsonResponse({ access_token: "fresh-access", token_type: "bearer" })
           );
         }
         return Promise.resolve(jsonResponse({ sessions: [], total: 0, active_count: 0 }));
@@ -148,22 +196,18 @@ describe("Phase 7B hardening — X-Refresh-Token session listing", () => {
     const sessionsCall = fetchSpy.mock.calls.find(([url]) =>
       String(url).includes("/api/auth/sessions")
     );
-    expect(sessionsCall).toBeDefined();
     const url = String(sessionsCall![0]);
     expect(url).not.toContain("refresh_token");
     expect(url).not.toContain("?");
   });
 
-  it("other API requests never send X-Refresh-Token", async () => {
-    // A valid, non-expired access token plus a stored refresh token.
+  it("other API requests never send X-Refresh-Token or refresh in body", async () => {
     const validJwt = createJWT({
       sub: "1",
       exp: Math.floor(Date.now() / 1000) + 3600,
     });
     setAccessToken(validJwt);
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-should-not-leak");
 
-    // Exercise BOTH a GET (health) and a POST (create session) API request.
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation((url: string | URL | Request) => {
@@ -189,21 +233,19 @@ describe("Phase 7B hardening — X-Refresh-Token session listing", () => {
     await API.getHealth();
     await API.createSession("Hardening test");
 
-    // Verify NO call carries the X-Refresh-Token header.
     expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     for (const [url, init] of fetchSpy.mock.calls) {
       const headers = (init?.headers as Record<string, string>) ?? {};
       expect(headers["X-Refresh-Token"]).toBeUndefined();
-      expect(headers["X-Refresh-Token"]).not.toBe("refresh-token-should-not-leak");
-      // The POST createSession call must carry Bearer auth like the GET.
-      expect(headers["Authorization"]).toBe(`Bearer ${validJwt}`);
-      // And never send the refresh token as a query param either.
       expect(String(url)).not.toContain("refresh_token");
+      const body = String(init?.body ?? "");
+      expect(body).not.toContain("refresh_token");
+      expect(init?.credentials).toBe("include");
     }
   });
 });
 
-describe("Phase 7B hardening — refresh serialization & cooldown", () => {
+describe("Phase 7B/7C — refresh serialization & cooldown", () => {
   beforeEach(() => {
     localStorage.clear();
     setAccessToken(null);
@@ -218,12 +260,9 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
   });
 
   it("concurrent refresh requests are serialized (single request)", async () => {
-    localStorage.setItem(REFRESH_TOKEN_KEY, "valid-refresh");
-
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({
         access_token: "new-access",
-        refresh_token: "new-refresh",
         token_type: "bearer",
       })
     );
@@ -236,7 +275,6 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
     expect(r1).toBe(true);
     expect(r2).toBe(true);
     expect(getAccessToken()).toBe("new-access");
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe("new-refresh");
     // Exactly one network refresh should have been issued.
     const refreshCalls = fetchSpy.mock.calls.filter(([url]) =>
       String(url).includes("/api/auth/refresh")
@@ -245,20 +283,14 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
   });
 
   it("refresh cooldown blocks rapid repeated calls", async () => {
-    localStorage.setItem(REFRESH_TOKEN_KEY, "valid-refresh");
-
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({
         access_token: "new-access",
-        refresh_token: "new-refresh",
         token_type: "bearer",
       })
     );
 
-    // First refresh succeeds.
     expect(await refreshAccessToken()).toBe(true);
-
-    // Immediately repeat — cooldown (5s) blocks it without a network call.
     expect(await refreshAccessToken()).toBe(false);
     const refreshCalls = fetchSpy.mock.calls.filter(([url]) =>
       String(url).includes("/api/auth/refresh")
@@ -269,7 +301,6 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
   it("expired refresh token clears local authentication state", async () => {
     const onInvalid = vi.fn();
     setOnInvalidRefresh(onInvalid);
-    localStorage.setItem(REFRESH_TOKEN_KEY, "expired-refresh");
     localStorage.setItem(USER_KEY, JSON.stringify(testUser));
     setAccessToken("stale-access-token");
 
@@ -280,15 +311,13 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
     const result = await refreshAccessToken();
     expect(result).toBe(false);
     expect(getAccessToken()).toBeNull();
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(USER_KEY)).toBeNull();
     expect(getStoredUser()).toBeNull();
     expect(onInvalid).toHaveBeenCalledTimes(1);
   });
 
-  it("logout request remains correct (POST, bearer auth, refresh body)", async () => {
+  it("logout request remains correct (POST, credentials include, empty body)", async () => {
     setAccessToken("access-token-123");
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-456");
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ detail: "Logged out successfully" })
@@ -297,43 +326,34 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
     await logout();
 
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/auth/logout");
+    expect(String(url)).toBe("/api/auth/logout");
     expect(init?.method).toBe("POST");
-    const headers = init?.headers as Record<string, string>;
+    expect(init?.credentials).toBe("include");
+    const headers = (init?.headers as Record<string, string>) ?? {};
     expect(headers["Authorization"]).toBe("Bearer access-token-123");
-    expect(JSON.parse(String(init?.body))).toEqual({
-      refresh_token: "refresh-token-456",
-    });
+    // Phase 7C: refresh token is read from the HttpOnly cookie, not the body.
+    expect(JSON.parse(String(init?.body))).toEqual({});
+    expect(headers["X-Refresh-Token"]).toBeUndefined();
   });
 
   it("logout clears state even when no access token is available", async () => {
-    localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token-789");
     localStorage.setItem(USER_KEY, JSON.stringify(testUser));
     setAccessToken(null);
 
-    // No access token → logout skips the server call but still clears state.
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     await logout();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(getAccessToken()).toBeNull();
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(USER_KEY)).toBeNull();
   });
 
   it("page restore still works after refresh-token rotation", async () => {
-    // Simulate a stored refresh token that was rotated on a previous refresh.
-    localStorage.setItem(REFRESH_TOKEN_KEY, "rotated-refresh-token");
-
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       (url: string | URL | Request) => {
         const u = url.toString();
         if (u.includes("/api/auth/refresh")) {
           return Promise.resolve(
-            jsonResponse({
-              access_token: "fresh-access",
-              refresh_token: "newer-refresh-token",
-              token_type: "bearer",
-            })
+            jsonResponse({ access_token: "fresh-access", token_type: "bearer" })
           );
         }
         if (u.includes("/api/auth/me")) {
@@ -345,13 +365,9 @@ describe("Phase 7B hardening — refresh serialization & cooldown", () => {
 
     const user = await restoreSession();
     expect(user?.username).toBe("hardening_user");
-    // The rotated refresh token replaced the old one in storage.
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe("newer-refresh-token");
     expect(getAccessToken()).toBe("fresh-access");
 
     // A second restore round-trips through the same flow and still works.
-    // Simulate a fresh page load: module refresh state (incl. cooldown) resets,
-    // but the ROTATED refresh token persists in localStorage.
     fetchSpy.mockClear();
     resetRefreshState();
     setAccessToken(null);

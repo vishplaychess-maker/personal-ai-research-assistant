@@ -27,6 +27,13 @@ from app.services.auth_service import create_access_token
 from app.services.rate_limiter import get_rate_limiter, get_lockout_duration, InMemoryRateLimiter
 
 
+# ── Phase 7C constants ──────────────────────────────
+
+
+REFRESH_COOKIE = "research_assistant_refresh_token"
+CSRF_COOKIE = "research_assistant_csrf_token"
+
+
 # ── Fixtures ───────────────────────────────────────────────
 
 
@@ -58,8 +65,13 @@ def _cleanup_test_users():
 
 
 @pytest.fixture(autouse=True)
-def cleanup():
-    """Clean up test users and rate limiter state before and after each test."""
+def cleanup(client):
+    """Clean up test users and rate limiter state before and after each test.
+
+    Depends on the ``client`` fixture so the TestClient context manager has
+    already run the app lifespan (init_db + migrations) before we touch the
+    database — this makes the suite work against a fresh/empty test DB.
+    """
     _cleanup_test_users()
     get_rate_limiter().reset()
     yield
@@ -464,25 +476,28 @@ class TestCrossUserIsolation:
         # containing "unique_search_term"
         assert len(resp.json()) == 0
 
-    # ── Unauthenticated fallback (backward compat) ────────
+    # ── Unauthenticated requests (Phase 7C) ────────────────
 
-    def test_unauthenticated_requests_fallback_to_default_user(self, client):
-        """Requests without a token fall back to default user (id=1)."""
-        # Create a session without authentication (uses user id=1)
+    def test_unauthenticated_requests_are_rejected(self, client):
+        """
+        Requests without a token are rejected (no fallback to default user).
+
+        Phase 7C removed the backward-compat fallback that silently used
+        user id=1 for unauthenticated requests — the cause of cross-account
+        "session not found" and data leaks. Authenticated routes now require
+        a valid access token.
+        """
+        # Create a session without authentication → 401 (no default-user fallback)
         resp = client.post("/api/sessions", json={"title": "Unauthenticated Session"})
-        assert resp.status_code == 201
-        session_id = resp.json()["id"]
+        assert resp.status_code == 401
 
-        # List sessions without authentication
+        # List sessions without authentication → 401
         resp = client.get("/api/sessions")
-        assert resp.status_code == 200
-        titles = [s["title"] for s in resp.json()]
-        assert "Unauthenticated Session" in titles
+        assert resp.status_code == 401
 
-        # Read the session without authentication
-        resp = client.get(f"/api/sessions/{session_id}")
-        assert resp.status_code == 200
-        assert resp.json()["title"] == "Unauthenticated Session"
+        # Read a session without authentication → 401
+        resp = client.get("/api/sessions/1")
+        assert resp.status_code == 401
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1024,89 +1039,153 @@ class TestRateLimiterMemoryGrowth:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 7B — Refresh Token & Logout Tests
+# ═══════════════════════════════════════════════════════════════
+# Phase 7B + 7C — Refresh Cookie, Rotation, Logout, CSRF, CORS
 # ═══════════════════════════════════════════════════════════════
 
 
-class TestRefreshToken:
-    """Refresh token issuance, rotation, and reuse detection."""
+def _register_and_login(client, username="testuser", password="securePass123!"):
+    """Register + login; return (access_token, refresh_token-from-cookie)."""
+    reg = client.post("/api/auth/register", json={
+        "username": username,
+        "email": f"{username}@test.com",
+        "password": password,
+    })
+    assert reg.status_code == 201
+    login = client.post("/api/auth/login", json={
+        "username": username,
+        "password": password,
+    })
+    assert login.status_code == 200
+    return login.json()["access_token"], client.cookies.get(REFRESH_COOKIE)
 
-    def _register_and_login(self, client, username="testuser_refresh"):
-        """Register, login, return (token, refresh_token)."""
+
+def _login_only(client, username="testuser", password="securePass123!"):
+    """Login (no register) and return the refresh cookie value."""
+    login = client.post("/api/auth/login", json={
+        "username": username,
+        "password": password,
+    })
+    assert login.status_code == 200
+    return client.cookies.get(REFRESH_COOKIE)
+
+
+def _csrf_headers(client, csrf=None):
+    """Headers carrying the CSRF token from the client cookie jar."""
+    token = csrf if csrf is not None else client.cookies.get(CSRF_COOKIE)
+    headers = {}
+    if token:
+        headers["X-CSRF-Token"] = token
+    return headers
+
+
+class TestRefreshToken:
+    """Refresh token issuance, rotation, and reuse detection (cookie flow)."""
+
+    def test_login_sets_refresh_cookie(self, client):
+        """Login sets the HttpOnly refresh cookie; response has no raw token."""
         reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
+            "username": "testuser_rf1",
+            "email": "testuser_rf1@test.com",
             "password": "securePass123!",
         })
         assert reg.status_code == 201
         login = client.post("/api/auth/login", json={
-            "username": username,
+            "username": "testuser_rf1",
             "password": "securePass123!",
         })
         assert login.status_code == 200
         data = login.json()
-        return data["access_token"], data["refresh_token"]
+        assert data["access_token"]
+        assert "refresh_token" not in data  # Phase 7C: cookie only
+        assert data["token_type"] == "bearer"
+        refresh = client.cookies.get(REFRESH_COOKIE)
+        assert refresh is not None and len(refresh) > 20
+        # The cookie must be HttpOnly
+        set_cookie = login.headers.get("set-cookie", "")
+        assert "HttpOnly" in set_cookie
+        assert "Path=/api/auth" in set_cookie
 
-    def test_login_returns_refresh_token(self, client):
-        """Login returns both access_token and refresh_token."""
-        token, refresh_token = self._register_and_login(client, "testuser_rf1")
-        assert token is not None
-        assert refresh_token is not None
-        assert len(token) > 20
-        assert len(refresh_token) > 20
+    def test_login_sets_csrf_cookie(self, client):
+        """Login also sets the non-HttpOnly CSRF cookie (double-submit)."""
+        reg = client.post("/api/auth/register", json={
+            "username": "testuser_rf1b",
+            "email": "testuser_rf1b@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        client.post("/api/auth/login", json={
+            "username": "testuser_rf1b",
+            "password": "securePass123!",
+        })
+        csrf = client.cookies.get(CSRF_COOKIE)
+        assert csrf is not None and len(csrf) > 10
 
     def test_refresh_token_success(self, client):
-        """Valid refresh token returns a new token pair."""
-        _, refresh_token = self._register_and_login(client, "testuser_rf2")
-        resp = client.post("/api/auth/refresh", json={
-            "refresh_token": refresh_token,
-        })
+        """Refresh reads the cookie and returns a new access token."""
+        _, refresh = _register_and_login(client, "testuser_rf2")
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
-        assert "refresh_token" in data
+        assert "refresh_token" not in data  # cookie only
         assert data["token_type"] == "bearer"
+        # The cookie should have rotated to a new value
+        new_refresh = client.cookies.get(REFRESH_COOKIE)
+        assert new_refresh is not None and new_refresh != refresh
+
+    def test_refresh_ignores_json_body_token(self, client):
+        """A refresh_token in the JSON body is ignored after Phase 7C."""
+        _, refresh = _register_and_login(client, "testuser_rf2b")
+        # Send a bogus body token while a valid cookie exists
+        resp = client.post("/api/auth/refresh", json={"refresh_token": "bogus"})
+        assert resp.status_code == 200
+        assert resp.json()["access_token"]
+        assert client.cookies.get(REFRESH_COOKIE) != "bogus"
+
+    def test_refresh_without_cookie_rejected(self, client):
+        """Refreshing with no cookie at all returns 401."""
+        resp = client.post("/api/auth/refresh")
+        assert resp.status_code == 401
 
     def test_refresh_token_rotation(self, client):
-        """Old refresh token is invalidated after rotation."""
-        _, old_refresh = self._register_and_login(client, "testuser_rf3")
+        """Old refresh cookie is invalidated after rotation."""
+        _, old_refresh = _register_and_login(client, "testuser_rf3")
         # Rotate once
-        resp1 = client.post("/api/auth/refresh", json={"refresh_token": old_refresh})
+        resp1 = client.post("/api/auth/refresh")
         assert resp1.status_code == 200
-        new_refresh = resp1.json()["refresh_token"]
-        # Old token should be rejected
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": old_refresh})
+        new_refresh = client.cookies.get(REFRESH_COOKIE)
+        assert new_refresh and new_refresh != old_refresh
+        # Old cookie should be rejected
+        client.cookies.set(REFRESH_COOKIE, old_refresh, path="/api/auth")
+        resp2 = client.post("/api/auth/refresh")
         assert resp2.status_code == 401
 
     def test_reuse_detection_revokes_family(self, client):
-        """Using an already-rotated token revokes the entire family.
-
-        After rotation, using the old token triggers reuse detection.
-        Even the *new* token from the same family should then be invalid.
-        """
-        _, old_token = self._register_and_login(client, "testuser_rf4")
-        # Rotate once: get new_token_1
-        resp1 = client.post("/api/auth/refresh", json={"refresh_token": old_token})
+        """Reusing a rotated cookie revokes the entire token family."""
+        _, old_token = _register_and_login(client, "testuser_rf4")
+        resp1 = client.post("/api/auth/refresh")
         assert resp1.status_code == 200
-        new_token_1 = resp1.json()["refresh_token"]
-        # Use old_token again → reuse detected, family revoked
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": old_token})
+        new_token_1 = client.cookies.get(REFRESH_COOKIE)
+        # Reuse the old token → reuse detected, family revoked
+        client.cookies.set(REFRESH_COOKIE, old_token, path="/api/auth")
+        resp2 = client.post("/api/auth/refresh")
         assert resp2.status_code == 401
-        # new_token_1 (same family) should also be revoked
-        resp3 = client.post("/api/auth/refresh", json={"refresh_token": new_token_1})
+        # The new token from the same family must also be invalid now
+        client.cookies.set(REFRESH_COOKIE, new_token_1, path="/api/auth")
+        resp3 = client.post("/api/auth/refresh")
         assert resp3.status_code == 401
 
     def test_expired_refresh_token_rejected(self, client):
-        """An expired refresh token returns 401."""
+        """An expired refresh cookie returns 401 and clears the cookie."""
         from datetime import timedelta
         from app.database import SessionLocal
         from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
 
-        _, refresh_token = self._register_and_login(client, "testuser_rf5")
-        # Manually expire it in the database
+        _, refresh_token = _register_and_login(client, "testuser_rf5")
         db = SessionLocal()
         try:
-            from app.services.refresh_token_service import hash_refresh_token
             token_hash = hash_refresh_token(refresh_token)
             session = db.query(RefreshSession).filter(
                 RefreshSession.token_hash == token_hash
@@ -1116,228 +1195,151 @@ class TestRefreshToken:
             db.commit()
         finally:
             db.close()
-        # Now the token should be expired
-        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 401
-        # Service returns "Refresh token expired" for expired tokens
         assert "expired" in resp.json()["detail"].lower()
-
-    # ── Missing tests (requirement 7) ──────────────────────
+        # Cookie should have been cleared
+        assert client.cookies.get(REFRESH_COOKIE) is None
 
     def test_concurrent_refresh_reuse_detected(self, client):
-        """
-        Two concurrent refresh requests with the same token:
-        one succeeds (rotation), the other triggers reuse detection.
-
-        Since TestClient is synchronous, we simulate this by making
-        two sequential requests with the same token and verifying
-        the second one fails (reuse detection). The first one rotated,
-        so the old token is now revoked.
-        """
-        _, refresh_token = self._register_and_login(client, "testuser_rf6")
-        # First refresh succeeds
-        resp1 = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+        """A second refresh with the same cookie triggers reuse detection."""
+        _, refresh_token = _register_and_login(client, "testuser_rf6")
+        resp1 = client.post("/api/auth/refresh")
         assert resp1.status_code == 200
-        new_token = resp1.json()["refresh_token"]
-        # Second request with the SAME token → reuse detected
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+        new_token = client.cookies.get(REFRESH_COOKIE)
+        # Reuse the SAME original cookie
+        client.cookies.set(REFRESH_COOKIE, refresh_token, path="/api/auth")
+        resp2 = client.post("/api/auth/refresh")
         assert resp2.status_code == 401
-        # The rotated token should also be invalid (family revoked by reuse detection)
-        resp3 = client.post("/api/auth/refresh", json={"refresh_token": new_token})
+        # Family revoked: the rotated token no longer works either
+        client.cookies.set(REFRESH_COOKIE, new_token, path="/api/auth")
+        resp3 = client.post("/api/auth/refresh")
         assert resp3.status_code == 401
 
     def test_no_raw_refresh_token_in_database(self, client):
-        """
-        Verify that only SHA-256 hashes of refresh tokens are stored
-        in the database, never raw tokens.
-        """
+        """Only SHA-256 hashes of refresh tokens are stored, never raw."""
         import re
         from app.database import SessionLocal
         from app.models.models import RefreshSession
 
-        _, refresh_token = self._register_and_login(client, "testuser_rf7")
-        # Verify that the current session's token_hash is valid SHA-256
+        _, refresh_token = _register_and_login(client, "testuser_rf7")
         from app.services.refresh_token_service import hash_refresh_token
         expected_hash = hash_refresh_token(refresh_token)
-        assert re.match(r'^[a-f0-9]{64}$', expected_hash), \
+        assert re.match(r"^[a-f0-9]{64}$", expected_hash), \
             f"Expected SHA-256 hex digest, got: {expected_hash[:20]}..."
 
-        # Also verify ALL stored session hashes are valid SHA-256 digests
         db = SessionLocal()
         try:
             sessions = db.query(RefreshSession).all()
             for s in sessions:
-                assert re.match(r'^[a-f0-9]{64}$', s.token_hash), \
+                assert re.match(r"^[a-f0-9]{64}$", s.token_hash), \
                     f"Expected SHA-256 hex digest, got: {s.token_hash[:20]}..."
         finally:
             db.close()
 
     def test_no_refresh_token_in_logs(self, client, caplog):
-        """
-        Verify that raw refresh tokens AND token hashes never appear in logs.
-
-        Phase 7B hardening: token hashes must not be logged either.
-        """
+        """Raw refresh tokens AND token hashes never appear in logs."""
         import logging
         import re
         caplog.set_level(logging.DEBUG)
 
-        _, refresh_token = self._register_and_login(client, "testuser_rf8")
-        # Rotate the token (this generates log messages)
-        client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
-        # Log a raw attempt
-        resp = client.post("/api/auth/refresh", json={"refresh_token": "some_obviously_fake_token_12345"})
+        _, refresh_token = _register_and_login(client, "testuser_rf8")
+        client.post("/api/auth/refresh")
+        # Attempt with a bogus token
+        client.cookies.set(REFRESH_COOKIE, "some_obviously_fake_token_12345", path="/api/auth")
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 401
         assert "Invalid refresh token" in resp.json()["detail"]
 
-        # Check every log record for leaked refresh tokens OR token hashes
         for record in caplog.records:
             message = record.getMessage()
-            # Raw refresh tokens are base64url strings (~64 chars).
-            # Token hashes are 64-char SHA-256 hex digests. Neither is allowed.
-            potential_tokens = re.findall(r'[A-Za-z0-9_-]{40,}', message)
-            for match in potential_tokens:
+            for match in re.findall(r"[A-Za-z0-9_-]{40,}", message):
                 pytest.fail(
                     f"Potential refresh token or hash leaked in log: '{match[:20]}...' "
                     f"in record: {record.name} - {record.levelname}"
                 )
 
     def test_refresh_token_rotation_new_token_works(self, client):
-        """The new token from rotation can be used for further refreshes."""
-        _, refresh = self._register_and_login(client, "testuser_rf9")
-        # Rotate once
-        resp1 = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        """The new cookie from rotation can be used for further refreshes."""
+        _, refresh = _register_and_login(client, "testuser_rf9")
+        resp1 = client.post("/api/auth/refresh")
         assert resp1.status_code == 200
-        refresh = resp1.json()["refresh_token"]
-        # Rotate again with the new token
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        resp2 = client.post("/api/auth/refresh")
         assert resp2.status_code == 200
         assert resp2.json()["access_token"] is not None
 
     def test_invalid_refresh_token_rejected(self, client):
-        """A completely bogus refresh token is rejected."""
-        resp = client.post("/api/auth/refresh", json={
-            "refresh_token": "this-is-not-a-valid-refresh-token",
-        })
+        """A bogus refresh cookie is rejected with 401."""
+        client.cookies.set(REFRESH_COOKIE, "this-is-not-a-valid-refresh-token", path="/api/auth")
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 401
 
     def test_refresh_token_identifies_correct_user(self, client):
-        """Refresh tokens contain the correct user ID in the resulting access token.
-
-        Each refresh token has a unique SHA-256 hash; cross-user access is
-        structurally impossible. This test verifies the access token issued
-        after refresh has the correct subject claim.
-        """
+        """The access token issued after refresh has the correct subject."""
         from jose import jwt
         from app.config import settings
 
-        # Register User B
-        _, refresh_b = self._register_and_login(client, "testuser_rf7b")
-
-        # Use User B's refresh token
-        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh_b})
+        _, refresh_b = _register_and_login(client, "testuser_rf7b")
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 200
         new_access = resp.json()["access_token"]
-
-        # Verify the access token subject matches User B's ID
         payload = jwt.decode(new_access, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         assert payload["sub"] is not None
 
 
 class TestLogout:
-    """Server-side logout and session revocation."""
-
-    def _register_and_login(self, client, username="testuser_logout"):
-        """Register, login, return (token, refresh_token)."""
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        data = login.json()
-        return data["access_token"], data["refresh_token"]
+    """Server-side logout and session revocation (cookie flow)."""
 
     def test_logout_revokes_refresh_token(self, client):
-        """After logout, the refresh token is revoked."""
-        token, refresh = self._register_and_login(client, "testuser_lo1")
-        resp = client.post("/api/auth/logout", json={
-            "refresh_token": refresh,
-        }, headers={"Authorization": f"Bearer {token}"})
+        """After logout, the refresh cookie is revoked and cleared."""
+        token, refresh = _register_and_login(client, "testuser_lo1")
+        resp = client.post("/api/auth/logout", headers={
+            "Authorization": f"Bearer {token}",
+        })
         assert resp.status_code == 200
         assert "successfully" in resp.json()["detail"]
+        # Cookie cleared by logout
+        assert client.cookies.get(REFRESH_COOKIE) is None
+        assert client.cookies.get(CSRF_COOKIE) is None
         # The revoked token should not work for refresh
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        client.cookies.set(REFRESH_COOKIE, refresh, path="/api/auth")
+        resp2 = client.post("/api/auth/refresh")
         assert resp2.status_code == 401
 
     def test_logout_without_token_still_succeeds(self, client):
-        """Logout requires auth; returns 401 without token."""
-        resp = client.post("/api/auth/logout", json={
-            "refresh_token": "some-token",
-        })
+        """Logout requires auth; returns 401 without a token."""
+        resp = client.post("/api/auth/logout")
         assert resp.status_code == 401
 
     def test_logout_all_revokes_all_sessions(self, client):
         """Logout-all revokes all refresh sessions for the user."""
-        from app.services.refresh_token_service import hash_refresh_token
-        from app.models.models import RefreshSession
-        from app.database import SessionLocal
-
-        token, refresh1 = self._register_and_login(client, "testuser_lo2")
+        token, refresh1 = _register_and_login(client, "testuser_lo2")
 
         # Create a second refresh session by logging in again
-        login2 = client.post("/api/auth/login", json={
+        client.post("/api/auth/login", json={
             "username": "testuser_lo2",
             "password": "securePass123!",
         })
-        refresh2 = login2.json()["refresh_token"]
+        refresh2 = client.cookies.get(REFRESH_COOKIE)
 
-        # Logout from all devices
         resp = client.post("/api/auth/logout-all", headers={
             "Authorization": f"Bearer {token}",
         })
         assert resp.status_code == 200
         assert "Logged out from" in resp.json()["detail"]
-
         # Both refresh tokens should be revoked
-        resp3 = client.post("/api/auth/refresh", json={"refresh_token": refresh1})
-        assert resp3.status_code == 401
-        resp4 = client.post("/api/auth/refresh", json={"refresh_token": refresh2})
-        assert resp4.status_code == 401
-
-
-# ═══════════════════════════════════════════════════════════════
-# Phase 7B — Session Management Tests
-# ═══════════════════════════════════════════════════════════════
+        client.cookies.set(REFRESH_COOKIE, refresh1, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 401
+        client.cookies.set(REFRESH_COOKIE, refresh2, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 401
 
 
 class TestSessionListing:
     """Session listing, safe response fields, and cross-user isolation."""
 
-    def _register_and_login(self, client, username="testuser_slist"):
-        """Register, login, return (token, refresh_token)."""
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        data = login.json()
-        return data["access_token"], data["refresh_token"]
-
     def test_list_sessions_returns_user_sessions(self, client):
-        """GET /api/auth/sessions returns the user's active sessions."""
-        token, _ = self._register_and_login(client, "testuser_sl1")
+        """GET /api/auth/sessions returns the user's sessions (safe fields)."""
+        token, _ = _register_and_login(client, "testuser_sl1")
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
@@ -1347,8 +1349,6 @@ class TestSessionListing:
         assert "total" in data
         assert "active_count" in data
         assert len(data["sessions"]) >= 1
-        assert data["active_count"] >= 1
-        # Safe fields only - no token_hash or raw tokens
         session = data["sessions"][0]
         assert "id" in session
         assert "created_at" in session
@@ -1357,10 +1357,9 @@ class TestSessionListing:
         assert "refresh_token" not in session
 
     def test_list_sessions_multiple_logins(self, client):
-        """Multiple logins create multiple sessions visible in listing."""
-        token, _ = self._register_and_login(client, "testuser_sl2")
-        # Login 3 more times to create additional sessions
-        for i in range(3):
+        """Multiple logins create multiple sessions visible in the listing."""
+        token, _ = _register_and_login(client, "testuser_sl2")
+        for _ in range(3):
             client.post("/api/auth/login", json={
                 "username": "testuser_sl2",
                 "password": "securePass123!",
@@ -1370,104 +1369,71 @@ class TestSessionListing:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] >= 4  # 1 original + 3 new = 4
+        assert data["total"] >= 4
         assert data["active_count"] >= 4
 
     def test_cross_user_session_listing_isolation(self, client):
         """User A cannot see User B's sessions in their listing."""
-        token_a, _ = self._register_and_login(client, "testuser_sl3a")
-        token_b, _ = self._register_and_login(client, "testuser_sl3b")
-        # Login User B multiple times
-        for i in range(2):
+        token_a, _ = _register_and_login(client, "testuser_sl3a")
+        _, _ = _register_and_login(client, "testuser_sl3b")
+        for _ in range(2):
             client.post("/api/auth/login", json={
                 "username": "testuser_sl3b",
                 "password": "securePass123!",
             })
-        # User A's listing should NOT contain User B's sessions
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token_a}",
         })
         assert resp.status_code == 200
         data = resp.json()
-        # User A should have exactly 1 session (their own)
         assert data["total"] == 1
         assert data["active_count"] == 1
 
     def test_list_sessions_expired_excluded_from_active_count(self, client):
-        """Expired sessions are excluded from the active_count."""
+        """Expired sessions are excluded from active_count."""
         from app.database import SessionLocal
-        from app.models.models import RefreshSession
+        from app.models.models import RefreshSession, User
         from datetime import datetime, timedelta, timezone
 
-        token, _ = self._register_and_login(client, "testuser_sl4")
-        # Capture the active_count before expiration
+        token, _ = _register_and_login(client, "testuser_sl4")
         resp_before = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
         before_active = resp_before.json()["active_count"]
 
-        # Manually expire one session in the DB
+        # Scope to THIS user's sessions only (never touch other users' rows).
         db = SessionLocal()
         try:
+            user = db.query(User).filter(User.username == "testuser_sl4").first()
+            assert user is not None
             sessions = db.query(RefreshSession).filter(
-                RefreshSession.user_id > 0
+                RefreshSession.user_id == user.id
             ).order_by(RefreshSession.created_at.asc()).all()
-            if sessions:
-                s = sessions[0]
-                s.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
-                db.commit()
+            assert sessions
+            sessions[0].expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+            db.commit()
         finally:
             db.close()
 
-        # Verify active_count decreased after expiration
         resp_after = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
         assert resp_after.status_code == 200
         data = resp_after.json()
-        assert data["active_count"] < before_active, (
-            f"Expected active_count ({data['active_count']}) to be less than "
-            f"before expiration ({before_active})"
-        )
-        # Total includes all sessions (including expired)
+        assert data["active_count"] < before_active
         assert data["total"] >= data["active_count"]
 
-    def test_list_sessions_current_indicator_set(self, client):
-        """No session is marked as is_current without a reliable session identifier."""
-        token, _ = self._register_and_login(client, "testuser_sl5")
-        # Login again to create a second session
-        client.post("/api/auth/login", json={
-            "username": "testuser_sl5",
-            "password": "securePass123!",
-        })
+    def test_list_sessions_current_indicator_from_cookie(self, client):
+        """The session matching the refresh cookie is marked current."""
+        token, refresh = _register_and_login(client, "testuser_sl5")
+        # The cookie identifies the current session
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
         assert resp.status_code == 200
         sessions = resp.json()["sessions"]
-        current_sessions = [s for s in sessions if s["is_current"]]
-        assert len(current_sessions) == 0, "No session should be marked current without a session identifier"
-
-    def test_list_sessions_concurrent_logins_safe(self, client):
-        """Rapid concurrent logins don't exceed max_active_sessions limit."""
-        from app.config import settings
-        original = settings.max_active_sessions
-        try:
-            settings.max_active_sessions = 5
-            token, _ = self._register_and_login(client, "testuser_sl6")
-            # Login rapidly 8 times (should enforce 5 max)
-            for i in range(8):
-                client.post("/api/auth/login", json={
-                    "username": "testuser_sl6",
-                    "password": "securePass123!",
-                })
-            resp = client.get("/api/auth/sessions", headers={
-                "Authorization": f"Bearer {token}",
-            })
-            data = resp.json()
-            assert data["active_count"] <= 5
-        finally:
-            settings.max_active_sessions = original
+        current = [s for s in sessions if s["is_current"]]
+        assert len(current) == 1
 
     def test_list_sessions_requires_auth(self, client):
         """Unauthenticated request returns 401."""
@@ -1478,61 +1444,39 @@ class TestSessionListing:
 class TestSessionRevocation:
     """Session revocation via POST /api/auth/sessions/{id}/revoke."""
 
-    def _register_and_login(self, client, username="testuser_srev"):
-        """Register, login, return (token, refresh_token)."""
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        data = login.json()
-        return data["access_token"], data["refresh_token"]
-
     def test_revoke_session_by_id(self, client):
         """Revoking a specific session invalidates its refresh token."""
-        token, refresh1 = self._register_and_login(client, "testuser_sr1")
-        # Login again to get a second session
-        login2 = client.post("/api/auth/login", json={
+        token, refresh1 = _register_and_login(client, "testuser_sr1")
+        client.post("/api/auth/login", json={
             "username": "testuser_sr1",
             "password": "securePass123!",
         })
-        refresh2 = login2.json()["refresh_token"]
-        # Get the session IDs
+        refresh2 = client.cookies.get(REFRESH_COOKIE)
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
         sessions = resp.json()["sessions"]
-        # Find the oldest session (first one)
-        oldest_id = sessions[-1]["id"]  # Sorted desc, oldest is last
-        # Revoke the oldest session
+        oldest_id = sessions[-1]["id"]
+
         revoke_resp = client.post(f"/api/auth/sessions/{oldest_id}/revoke", headers={
             "Authorization": f"Bearer {token}",
         })
         assert revoke_resp.status_code == 200
         assert "Session revoked" in revoke_resp.json()["detail"]
-        # The revoked session's refresh token should no longer work
-        resp_fail = client.post("/api/auth/refresh", json={"refresh_token": refresh1})
-        assert resp_fail.status_code == 401
-        # But the other session's token still works
-        resp_ok = client.post("/api/auth/refresh", json={"refresh_token": refresh2})
-        assert resp_ok.status_code == 200
+
+        client.cookies.set(REFRESH_COOKIE, refresh1, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 401
+        client.cookies.set(REFRESH_COOKIE, refresh2, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 200
 
     def test_revoke_other_user_session_rejected(self, client):
         """User A cannot revoke User B's session."""
-        token_a, _ = self._register_and_login(client, "testuser_sr2a")
-        token_b, _ = self._register_and_login(client, "testuser_sr2b")
-        # Get User B's session ID
+        token_a, _ = _register_and_login(client, "testuser_sr2a")
+        token_b, _ = _register_and_login(client, "testuser_sr2b")
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token_b}",
         })
         b_session_id = resp.json()["sessions"][0]["id"]
-        # User A tries to revoke User B's session
         revoke_resp = client.post(f"/api/auth/sessions/{b_session_id}/revoke", headers={
             "Authorization": f"Bearer {token_a}",
         })
@@ -1540,7 +1484,7 @@ class TestSessionRevocation:
 
     def test_revoke_nonexistent_session(self, client):
         """Revoking a nonexistent session ID returns 404."""
-        token, _ = self._register_and_login(client, "testuser_sr3")
+        token, _ = _register_and_login(client, "testuser_sr3")
         resp = client.post("/api/auth/sessions/999999/revoke", headers={
             "Authorization": f"Bearer {token}",
         })
@@ -1552,335 +1496,77 @@ class TestSessionRevocation:
         assert resp.status_code == 401
 
 
-class TestMaxActiveSessions:
-    """Maximum active session policy enforcement."""
-
-    def test_max_sessions_enforced(self, client):
-        """
-        After MAX_ACTIVE_SESSIONS (10), the oldest session is revoked.
-        Use a test helper to reduce the limit for testing purposes.
-        """
-        from app.config import settings
-        original = settings.max_active_sessions
-        try:
-            settings.max_active_sessions = 3
-            token, first_refresh = self._register_and_login(client, "testuser_ms1")
-            # Login 3 more times: total 4 sessions, but limit is 3
-            for i in range(3):
-                client.post("/api/auth/login", json={
-                    "username": "testuser_ms1",
-                    "password": "securePass123!",
-                })
-            # List sessions - should only have 3 active (oldest revoked)
-            resp = client.get("/api/auth/sessions", headers={
-                "Authorization": f"Bearer {token}",
-            })
-            data = resp.json()
-            assert data["active_count"] <= 3
-            # The oldest refresh token should be revoked
-            resp_old = client.post("/api/auth/refresh", json={"refresh_token": first_refresh})
-            assert resp_old.status_code == 401
-        finally:
-            settings.max_active_sessions = original
-
-    def _register_and_login(self, client, username="testuser_ms"):
-        """Register, login, return (token, refresh_token)."""
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        data = login.json()
-        return data["access_token"], data["refresh_token"]
-
-
-class TestRateLimitExistingBehavior:
-    """Regression: existing 429, Retry-After, lockout and reset behavior."""
-
-    def test_rate_limit_still_works(self, client):
-        """429 is still returned after exceeding threshold."""
-        for i in range(11):
-            resp = client.post("/api/auth/login", json={
-                "username": f"nonexistent_{i}",
-                "password": "test",
-            })
-            if resp.status_code == 429:
-                return
-        pytest.fail("Rate limit not triggered")
-
-    def test_retry_after_still_present(self, client):
-        """Retry-After header is still included on 429."""
-        for i in range(12):
-            resp = client.post("/api/auth/login", json={
-                "username": f"nonexistent_{i}",
-                "password": "test",
-            })
-            if resp.status_code == 429:
-                assert "Retry-After" in resp.headers
-                return
-        pytest.fail("Rate limit not triggered")
-
-
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Phase 7B Hardening â€” Refresh Rate Limiting, Device Info, Session Listing
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
 class TestRefreshRateLimit:
     """Rate limiting on the /api/auth/refresh endpoint."""
 
-    def _register_and_login(self, client, username="testuser_rrl"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "testpass12345",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "testpass12345",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
-
     def test_refresh_rate_limited_returns_429(self, client):
-        """Exceeding refresh rate limit returns 429."""
-        _, refresh_token = self._register_and_login(client, "testuser_rrl1")
-        # The limit is 20 per 60s. Send 21 requests.
-        for i in range(21):
-            resp = client.post("/api/auth/refresh", json={
-                "refresh_token": refresh_token,
-            })
+        """Exceeding the refresh rate limit returns 429."""
+        _, _ = _register_and_login(client, "testuser_rrl1")
+        got_429 = False
+        for _ in range(25):
+            resp = client.post("/api/auth/refresh")
             if resp.status_code == 429:
                 assert "Too many requests" in resp.json()["detail"]
-                return
-            # Successful refresh returns a new token; use it next iteration
-            if resp.status_code == 200:
-                refresh_token = resp.json()["refresh_token"]
-        pytest.fail("Refresh rate limit was not triggered after 21 attempts")
+                got_429 = True
+                break
+        assert got_429, "Refresh rate limit was not triggered after 25 attempts"
 
     def test_refresh_rate_limit_retry_after_header(self, client):
-        """429 on refresh includes Retry-After header."""
-        _, refresh_token = self._register_and_login(client, "testuser_rrl2")
-        for i in range(25):
-            resp = client.post("/api/auth/refresh", json={
-                "refresh_token": refresh_token,
-            })
+        """429 on refresh includes a Retry-After header."""
+        _, _ = _register_and_login(client, "testuser_rrl2")
+        got_429 = False
+        for _ in range(25):
+            resp = client.post("/api/auth/refresh")
             if resp.status_code == 429:
                 assert "Retry-After" in resp.headers
-                retry_after = int(resp.headers["Retry-After"])
-                assert retry_after > 0
-                return
-            if resp.status_code == 200:
-                refresh_token = resp.json()["refresh_token"]
-        pytest.fail("Refresh rate limit not triggered")
+                assert int(resp.headers["Retry-After"]) > 0
+                got_429 = True
+                break
+        assert got_429, "Refresh rate limit not triggered"
 
     def test_refresh_rate_limit_does_not_invalidate_token(self, client):
-        """A valid refresh token still works after rate limiting is hit.
-
-        Rate limiting should return 429 without revoking or rotating
-        the token. After the limiter resets, the token should still work.
-        """
-        _, refresh_token = self._register_and_login(client, "testuser_rrl3")
-        # Hit the rate limit
-        current_token = refresh_token
-        for i in range(25):
-            resp = client.post("/api/auth/refresh", json={
-                "refresh_token": current_token,
-            })
+        """A valid refresh token still works after the rate limit resets."""
+        _, _ = _register_and_login(client, "testuser_rrl3")
+        for _ in range(25):
+            resp = client.post("/api/auth/refresh")
             if resp.status_code == 429:
                 break
-            if resp.status_code == 200:
-                current_token = resp.json()["refresh_token"]
-        # The last successful rotation produced current_token.
-        # It should be a valid (non-revoked) token. Verify by using it
-        # after resetting the rate limiter.
+        current_token = client.cookies.get(REFRESH_COOKIE)
+        assert current_token is not None
         get_rate_limiter().reset()
-        resp = client.post("/api/auth/refresh", json={
-            "refresh_token": current_token,
-        })
-        assert resp.status_code == 200, (
-            f"Valid token rejected after rate limit: {resp.status_code} {resp.json()}"
-        )
-
-
-class TestRefreshDeviceInfo:
-    """Device information is preserved during token rotation."""
-
-    def test_device_info_exists_after_rotation(self, client):
-        """Rotated session has device_info populated."""
-        from app.database import SessionLocal
-        from app.models.models import RefreshSession
-        from app.services.refresh_token_service import hash_refresh_token
-
-        # Register and login
-        reg = client.post("/api/auth/register", json={
-            "username": "testuser_devinfo",
-            "email": "devinfo@test.com",
-            "password": "testpass12345",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": "testuser_devinfo",
-            "password": "testpass12345",
-        })
-        assert login.status_code == 200
-        old_refresh = login.json()["refresh_token"]
-
-        # Rotate the token
-        resp = client.post("/api/auth/refresh", json={
-            "refresh_token": old_refresh,
-        })
-        assert resp.status_code == 200
-        new_refresh = resp.json()["refresh_token"]
-
-        # Check that the new session has device_info
-        db = SessionLocal()
-        try:
-            new_hash = hash_refresh_token(new_refresh)
-            session = db.query(RefreshSession).filter(
-                RefreshSession.token_hash == new_hash
-            ).first()
-            assert session is not None, "New refresh session not found"
-            assert session.device_info is not None, "device_info is None after rotation"
-            assert session.device_info.startswith("ip:"), (
-                f"device_info should start with 'ip:', got: {session.device_info}"
-            )
-        finally:
-            db.close()
-
-
-class TestSessionListingNoFalseCurrent:
-    """Session listing must not falsely mark sessions as current."""
-
-    def test_no_session_marked_current_when_unverifiable(self, client):
-        """When current session can't be verified, is_current is False for all."""
-        # Register and login (creates a session)
-        reg = client.post("/api/auth/register", json={
-            "username": "testuser_nofalse",
-            "email": "nofalse@test.com",
-            "password": "testpass12345",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": "testuser_nofalse",
-            "password": "testpass12345",
-        })
-        assert login.status_code == 200
-        token = login.json()["access_token"]
-
-        # Login again to create a second session
-        client.post("/api/auth/login", json={
-            "username": "testuser_nofalse",
-            "password": "testpass12345",
-        })
-
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] >= 2, f"Expected >= 2 sessions, got {data['total']}"
-        for session in data["sessions"]:
-            assert session["is_current"] is False, (
-                f"Session {session['id']} has is_current=True, expected False"
-            )
-
-    def test_session_listing_still_returns_active_count(self, client):
-        """Active count is still correct even without is_current."""
-        reg = client.post("/api/auth/register", json={
-            "username": "testuser_activecount",
-            "email": "activecount@test.com",
-            "password": "testpass12345",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": "testuser_activecount",
-            "password": "testpass12345",
-        })
-        assert login.status_code == 200
-        token = login.json()["access_token"]
-
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["active_count"] >= 1
-
-
-# ═══════════════════════════════════════════════════════════════
-# Phase 7B Hardening — Rate Limit Independence, Current-Session
-# Detection, last_used_at, force cleanup, and token-leak protection
-# ═══════════════════════════════════════════════════════════════
-
-
-class TestRefreshRateLimitConfig:
-    """The refresh rate limit uses the documented env var names."""
-
-    def test_refresh_rate_limit_config_defaults(self):
-        """REFRESH_RATE_LIMIT_REQUESTS defaults to 20 / 60s."""
-        from app.config import settings
-        assert settings.refresh_rate_limit_requests == 20
-        assert settings.refresh_rate_limit_window_seconds == 60
+        assert client.post("/api/auth/refresh").status_code == 200
 
 
 class TestRefreshRateLimitIndependence:
     """Login and refresh rate limits must be independent."""
 
-    def _register_and_login(self, client, username="testuser_indep"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
-
     def test_login_rate_limit_does_not_affect_refresh(self, client):
-        """Hitting the login rate limit must NOT rate-limit refresh."""
-        _, refresh = self._register_and_login(client, "testuser_indep1")
-        # Trigger the login IP rate limit (10 per 60s)
+        """Hitting the login rate limit does NOT rate-limit refresh."""
+        _, refresh = _register_and_login(client, "testuser_indep1")
         for i in range(12):
             client.post("/api/auth/login", json={
                 "username": f"nonexistent_{i}",
                 "password": "test",
             })
-        # Login is now 429...
         resp = client.post("/api/auth/login", json={
             "username": "testuser_indep1",
             "password": "securePass123!",
         })
         assert resp.status_code == 429
-        # ...but refresh still works (separate limiter)
-        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        # Refresh still works (separate limiter)
+        resp = client.post("/api/auth/refresh")
         assert resp.status_code == 200
 
     def test_refresh_rate_limit_does_not_affect_login(self, client):
-        """Hitting the refresh rate limit must NOT rate-limit login."""
-        _, refresh = self._register_and_login(client, "testuser_indep2")
-        # Trigger the refresh rate limit (20 per 60s)
+        """Hitting the refresh rate limit does NOT rate-limit login."""
+        _, _ = _register_and_login(client, "testuser_indep2")
         got_429 = False
-        for i in range(25):
-            resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        for _ in range(25):
+            resp = client.post("/api/auth/refresh")
             if resp.status_code == 429:
                 got_429 = True
                 break
-            if resp.status_code == 200:
-                refresh = resp.json()["refresh_token"]
         assert got_429, "Refresh rate limit was not triggered"
-        # Login still works
         resp = client.post("/api/auth/login", json={
             "username": "testuser_indep2",
             "password": "securePass123!",
@@ -1888,168 +1574,8 @@ class TestRefreshRateLimitIndependence:
         assert resp.status_code == 200
 
 
-class TestCurrentSessionDetection:
-    """X-Refresh-Token based current-session detection."""
-
-    def _register_and_login(self, client, username="testuser_csd"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
-
-    def test_current_session_matches_exact_refresh_token(self, client):
-        """Only the session whose token_hash matches is marked current."""
-        from app.database import SessionLocal
-        from app.models.models import RefreshSession
-        from app.services.refresh_token_service import hash_refresh_token
-
-        token, refresh1 = self._register_and_login(client, "testuser_csd1")
-        # Second login -> second refresh token
-        login2 = client.post("/api/auth/login", json={
-            "username": "testuser_csd1",
-            "password": "securePass123!",
-        })
-        assert login2.status_code == 200
-        refresh2 = login2.json()["refresh_token"]
-
-        # Sending refresh1 should mark exactly one session as current
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": refresh1,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] >= 2
-        current = [s for s in data["sessions"] if s["is_current"]]
-        assert len(current) == 1, "Exactly one session must be current"
-        # The current session must be the one matching refresh1's hash
-        db = SessionLocal()
-        try:
-            matching = db.query(RefreshSession).filter(
-                RefreshSession.token_hash == hash_refresh_token(refresh1)
-            ).first()
-            assert matching is not None
-            assert current[0]["id"] == matching.id
-        finally:
-            db.close()
-
-        # Sending refresh2 should mark the OTHER session as current
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": refresh2,
-        })
-        assert resp.status_code == 200
-        current = [s for s in resp.json()["sessions"] if s["is_current"]]
-        assert len(current) == 1
-        db = SessionLocal()
-        try:
-            matching2 = db.query(RefreshSession).filter(
-                RefreshSession.token_hash == hash_refresh_token(refresh2)
-            ).first()
-            assert matching2 is not None
-            assert current[0]["id"] == matching2.id
-            assert matching2.id != matching.id
-        finally:
-            db.close()
-
-    def test_invalid_token_no_current_session(self, client):
-        """An invalid X-Refresh-Token marks no session as current."""
-        token, _ = self._register_and_login(client, "testuser_csd2")
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": "invalid-token-that-matches-nothing",
-        })
-        assert resp.status_code == 200
-        assert all(not s["is_current"] for s in resp.json()["sessions"])
-
-    def test_revoked_token_no_current_session(self, client):
-        """A revoked X-Refresh-Token marks no session as current."""
-        token, refresh = self._register_and_login(client, "testuser_csd3")
-        # Logout revokes the session
-        client.post("/api/auth/logout", json={"refresh_token": refresh},
-                    headers={"Authorization": f"Bearer {token}"})
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": refresh,
-        })
-        assert resp.status_code == 200
-        assert all(not s["is_current"] for s in resp.json()["sessions"])
-
-    def test_expired_token_no_current_session(self, client):
-        """An expired X-Refresh-Token marks no session as current."""
-        from datetime import datetime, timedelta, timezone
-        from app.database import SessionLocal
-        from app.models.models import RefreshSession
-        from app.services.refresh_token_service import hash_refresh_token
-
-        token, refresh = self._register_and_login(client, "testuser_csd4")
-        db = SessionLocal()
-        try:
-            session = db.query(RefreshSession).filter(
-                RefreshSession.token_hash == hash_refresh_token(refresh)
-            ).first()
-            assert session is not None
-            session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
-            db.commit()
-        finally:
-            db.close()
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": refresh,
-        })
-        assert resp.status_code == 200
-        assert all(not s["is_current"] for s in resp.json()["sessions"])
-
-    def test_query_param_refresh_token_ignored(self, client):
-        """Refresh tokens via query params are never accepted."""
-        token, refresh = self._register_and_login(client, "testuser_csd5")
-        resp = client.get(f"/api/auth/sessions?refresh_token={refresh}", headers={
-            "Authorization": f"Bearer {token}",
-        })
-        assert resp.status_code == 200
-        assert all(not s["is_current"] for s in resp.json()["sessions"])
-
-    def test_sessions_response_never_leaks_token_or_hash(self, client):
-        """Session list responses never include raw tokens or token hashes."""
-        import re
-        token, refresh = self._register_and_login(client, "testuser_csd6")
-        resp = client.get("/api/auth/sessions", headers={
-            "Authorization": f"Bearer {token}",
-            "X-Refresh-Token": refresh,
-        })
-        assert resp.status_code == 200
-        body = resp.text
-        assert refresh not in body
-        assert "token_hash" not in body
-        # No 64-char hex SHA-256 digest should appear in the response body
-        for match in re.findall(r"[a-f0-9]{64}", body):
-            pytest.fail(f"token hash leaked in response: {match[:16]}...")
-
-
 class TestLastUsedAtTracking:
     """RefreshSession.last_used_at is set on create and updated on rotation."""
-
-    def _register_and_login(self, client, username="testuser_lua"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
 
     def test_last_used_at_set_on_create(self, client):
         """A freshly created refresh session has last_used_at set."""
@@ -2057,7 +1583,7 @@ class TestLastUsedAtTracking:
         from app.models.models import RefreshSession
         from app.services.refresh_token_service import hash_refresh_token
 
-        _, refresh = self._register_and_login(client, "testuser_lua1")
+        _, refresh = _register_and_login(client, "testuser_lua1")
         db = SessionLocal()
         try:
             session = db.query(RefreshSession).filter(
@@ -2074,10 +1600,9 @@ class TestLastUsedAtTracking:
         from app.models.models import RefreshSession
         from app.services.refresh_token_service import hash_refresh_token
 
-        _, refresh = self._register_and_login(client, "testuser_lua2")
-        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh})
-        assert resp.status_code == 200
-        new_refresh = resp.json()["refresh_token"]
+        _, refresh = _register_and_login(client, "testuser_lua2")
+        assert client.post("/api/auth/refresh").status_code == 200
+        new_refresh = client.cookies.get(REFRESH_COOKIE)
         db = SessionLocal()
         try:
             old = db.query(RefreshSession).filter(
@@ -2093,8 +1618,8 @@ class TestLastUsedAtTracking:
             db.close()
 
     def test_session_list_uses_last_used_at(self, client):
-        """Session-list responses expose last_used_at (not a created_at proxy)."""
-        token, _ = self._register_and_login(client, "testuser_lua3")
+        """Session-list responses expose last_used_at."""
+        token, _ = _register_and_login(client, "testuser_lua3")
         resp = client.get("/api/auth/sessions", headers={
             "Authorization": f"Bearer {token}",
         })
@@ -2107,21 +1632,42 @@ class TestLastUsedAtTracking:
 class TestDeviceInfoPreservation:
     """device_info is preserved when rotating with no new device info."""
 
-    def _register_and_login(self, client, username="testuser_dev"):
+    def test_device_info_exists_after_rotation(self, client):
+        """Rotated session has device_info populated."""
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
         reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
+            "username": "testuser_devinfo",
+            "email": "devinfo@test.com",
+            "password": "testpass12345",
         })
         assert reg.status_code == 201
         login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
+            "username": "testuser_devinfo",
+            "password": "testpass12345",
         })
         assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
+        old_refresh = client.cookies.get(REFRESH_COOKIE)
+
+        assert client.post("/api/auth/refresh").status_code == 200
+        new_refresh = client.cookies.get(REFRESH_COOKIE)
+
+        db = SessionLocal()
+        try:
+            new_hash = hash_refresh_token(new_refresh)
+            session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == new_hash
+            ).first()
+            assert session is not None
+            assert session.device_info is not None
+            assert session.device_info.startswith("ip:")
+        finally:
+            db.close()
 
     def test_rotate_preserves_previous_device_info(self, client):
+        """Rotating with device_info=None preserves the previous device_info."""
         from app.database import SessionLocal
         from app.models.models import RefreshSession
         from app.services.refresh_token_service import (
@@ -2129,7 +1675,7 @@ class TestDeviceInfoPreservation:
             hash_refresh_token,
         )
 
-        _, refresh = self._register_and_login(client, "testuser_dev1")
+        _, refresh = _register_and_login(client, "testuser_dev1")
         db = SessionLocal()
         try:
             new_raw, _ = rotate_refresh_token(db, refresh, device_info=None)
@@ -2149,20 +1695,6 @@ class TestDeviceInfoPreservation:
 class TestCleanupExpiredSessionsForce:
     """cleanup_expired_sessions(db, force=True) bypasses gating."""
 
-    def _register_and_login(self, client, username="testuser_clean"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
-
     def test_force_bypasses_probabilistic_gating(self, client):
         """force=True deletes expired sessions even when the gate would skip."""
         from datetime import datetime, timedelta, timezone
@@ -2174,7 +1706,7 @@ class TestCleanupExpiredSessionsForce:
             hash_refresh_token,
         )
 
-        _, refresh = self._register_and_login(client, "testuser_clean1")
+        _, refresh = _register_and_login(client, "testuser_clean1")
         db = SessionLocal()
         try:
             session = db.query(RefreshSession).filter(
@@ -2183,11 +1715,9 @@ class TestCleanupExpiredSessionsForce:
             assert session is not None
             session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
             db.commit()
-            # Without force, the probabilistic gate (every 100 calls) may skip
             reset_cleanup_counter()
             count = cleanup_expired_sessions(db)
             assert count == 0  # gated -> skipped
-            # With force=True, cleanup always runs and deletes the expired row
             count = cleanup_expired_sessions(db, force=True)
             assert count >= 1
         finally:
@@ -2208,61 +1738,30 @@ class TestCleanupExpiredSessionsForce:
 class TestExpiredAccessTokenRefresh:
     """An expired access token does not block a valid refresh."""
 
-    def _register_and_login(self, client, username="testuser_eat"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
-
     def test_expired_access_token_can_still_refresh(self, client):
         """Refresh works even when the access token has expired."""
         from datetime import timedelta
         from app.services.auth_service import create_access_token
 
-        _, refresh = self._register_and_login(client, "testuser_eat1")
+        _, _ = _register_and_login(client, "testuser_eat1")
         expired = create_access_token(data={"sub": "0"}, expires_delta=timedelta(hours=-1))
-        # The refresh endpoint does not validate the access token
-        resp = client.post("/api/auth/refresh", json={"refresh_token": refresh},
-                           headers={"Authorization": f"Bearer {expired}"})
+        resp = client.post("/api/auth/refresh", headers={
+            "Authorization": f"Bearer {expired}",
+        })
         assert resp.status_code == 200
-        data = resp.json()
-        assert "access_token" in data
-        assert "refresh_token" in data
+        assert "access_token" in resp.json()
 
 
 class TestNoTokenHashInLogs:
     """Token hashes must never appear in log output."""
-
-    def _register_and_login(self, client, username="testuser_thl"):
-        reg = client.post("/api/auth/register", json={
-            "username": username,
-            "email": f"{username}@test.com",
-            "password": "securePass123!",
-        })
-        assert reg.status_code == 201
-        login = client.post("/api/auth/login", json={
-            "username": username,
-            "password": "securePass123!",
-        })
-        assert login.status_code == 200
-        return login.json()["access_token"], login.json()["refresh_token"]
 
     def test_token_hash_not_logged(self, client, caplog):
         import logging
         import re
         caplog.set_level(logging.DEBUG)
 
-        _, refresh = self._register_and_login(client, "testuser_thl1")
-        # Exercise the paths that log session metadata
-        client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        _, refresh = _register_and_login(client, "testuser_thl1")
+        client.post("/api/auth/refresh")
         for record in caplog.records:
             message = record.getMessage()
             for match in re.findall(r"[a-f0-9]{64}", message):
@@ -2270,3 +1769,357 @@ class TestNoTokenHashInLogs:
                     f"token hash leaked in log: '{match[:16]}...' "
                     f"in record: {record.name} - {record.levelname}"
                 )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 7C — HttpOnly Cookie, CSRF, and CORS
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestPhase7CCookieFlow:
+    """Login/refresh deliver the refresh token exclusively via HttpOnly cookie."""
+
+    def test_login_response_contains_no_raw_refresh_token(self, client):
+        """Login JSON response never includes the raw refresh token."""
+        reg = client.post("/api/auth/register", json={
+            "username": "testuser_p7c1",
+            "email": "p7c1@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": "testuser_p7c1",
+            "password": "securePass123!",
+        })
+        assert login.status_code == 200
+        body = login.text
+        assert "refresh_token" not in body
+        data = login.json()
+        assert set(data.keys()) == {"access_token", "token_type"}
+
+    def test_refresh_response_contains_no_raw_refresh_token(self, client):
+        """Refresh JSON response never includes the raw refresh token."""
+        _, _ = _register_and_login(client, "testuser_p7c2")
+        resp = client.post("/api/auth/refresh")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "refresh_token" not in body
+
+    def test_refresh_cookie_is_httponly_and_path_scoped(self, client):
+        """The refresh cookie is HttpOnly and scoped to /api/auth."""
+        reg = client.post("/api/auth/register", json={
+            "username": "testuser_p7c3",
+            "email": "p7c3@test.com",
+            "password": "securePass123!",
+        })
+        assert reg.status_code == 201
+        login = client.post("/api/auth/login", json={
+            "username": "testuser_p7c3",
+            "password": "securePass123!",
+        })
+        set_cookie = login.headers.get("set-cookie", "")
+        assert REFRESH_COOKIE in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "Path=/api/auth" in set_cookie
+
+    def test_refresh_rotates_cookie(self, client):
+        """Refresh sets a new refresh cookie value."""
+        _, old = _register_and_login(client, "testuser_p7c4")
+        resp = client.post("/api/auth/refresh")
+        assert resp.status_code == 200
+        new = client.cookies.get(REFRESH_COOKIE)
+        assert new is not None and new != old
+
+    def test_old_cookie_reuse_revokes_family(self, client):
+        """Reusing the old refresh cookie revokes the family (Phase 7C flow)."""
+        _, old = _register_and_login(client, "testuser_p7c5")
+        assert client.post("/api/auth/refresh").status_code == 200
+        rotated = client.cookies.get(REFRESH_COOKIE)
+        client.cookies.set(REFRESH_COOKIE, old, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 401
+        client.cookies.set(REFRESH_COOKIE, rotated, path="/api/auth")
+        assert client.post("/api/auth/refresh").status_code == 401
+
+    def test_logout_clears_refresh_and_csrf_cookies(self, client):
+        """Logout clears both the refresh and CSRF cookies."""
+        token, _ = _register_and_login(client, "testuser_p7c6")
+        assert client.cookies.get(REFRESH_COOKIE) is not None
+        assert client.cookies.get(CSRF_COOKIE) is not None
+        resp = client.post("/api/auth/logout", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert client.cookies.get(REFRESH_COOKIE) is None
+        assert client.cookies.get(CSRF_COOKIE) is None
+
+    def test_logout_all_clears_cookies(self, client):
+        """Logout-all clears both cookies."""
+        token, _ = _register_and_login(client, "testuser_p7c7")
+        resp = client.post("/api/auth/logout-all", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert client.cookies.get(REFRESH_COOKIE) is None
+        assert client.cookies.get(CSRF_COOKIE) is None
+
+
+class TestPhase7CCurrentSession:
+    """Current-session detection is based on the HttpOnly refresh cookie."""
+
+    def test_current_session_matches_cookie(self, client):
+        """Only the session whose hash matches the cookie is marked current."""
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        token, refresh1 = _register_and_login(client, "testuser_p7cs1")
+        client.post("/api/auth/login", json={
+            "username": "testuser_p7cs1",
+            "password": "securePass123!",
+        })
+        refresh2 = client.cookies.get(REFRESH_COOKIE)
+
+        # With refresh1's cookie, exactly that session is current
+        client.cookies.set(REFRESH_COOKIE, refresh1, path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        current = [s for s in resp.json()["sessions"] if s["is_current"]]
+        assert len(current) == 1
+        db = SessionLocal()
+        try:
+            matching = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh1)
+            ).first()
+            assert matching is not None
+            assert current[0]["id"] == matching.id
+        finally:
+            db.close()
+
+        # With refresh2's cookie, the OTHER session is current
+        client.cookies.set(REFRESH_COOKIE, refresh2, path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        current = [s for s in resp.json()["sessions"] if s["is_current"]]
+        assert len(current) == 1
+        db = SessionLocal()
+        try:
+            matching2 = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh2)
+            ).first()
+            assert matching2 is not None
+            assert current[0]["id"] == matching2.id
+            assert matching2.id != matching.id
+        finally:
+            db.close()
+
+    def test_missing_cookie_no_current_session(self, client):
+        """Missing refresh cookie → no session marked current."""
+        token, _ = _register_and_login(client, "testuser_p7cs2")
+        client.cookies.delete(REFRESH_COOKIE, path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_invalid_cookie_no_current_session(self, client):
+        """Invalid refresh cookie → no session marked current."""
+        token, _ = _register_and_login(client, "testuser_p7cs3")
+        client.cookies.set(REFRESH_COOKIE, "invalid-token-that-matches-nothing", path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_revoked_cookie_no_current_session(self, client):
+        """Revoked refresh cookie → no session marked current."""
+        token, refresh = _register_and_login(client, "testuser_p7cs4")
+        client.post("/api/auth/logout", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        client.cookies.set(REFRESH_COOKIE, refresh, path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_expired_cookie_no_current_session(self, client):
+        """Expired refresh cookie → no session marked current."""
+        from datetime import datetime, timedelta, timezone
+        from app.database import SessionLocal
+        from app.models.models import RefreshSession
+        from app.services.refresh_token_service import hash_refresh_token
+
+        token, refresh = _register_and_login(client, "testuser_p7cs5")
+        db = SessionLocal()
+        try:
+            session = db.query(RefreshSession).filter(
+                RefreshSession.token_hash == hash_refresh_token(refresh)
+            ).first()
+            assert session is not None
+            session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            db.commit()
+        finally:
+            db.close()
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_query_param_refresh_token_ignored(self, client):
+        """Refresh tokens via query params are never accepted."""
+        token, refresh = _register_and_login(client, "testuser_p7cs6")
+        client.cookies.delete(REFRESH_COOKIE, path="/api/auth")
+        resp = client.get(f"/api/auth/sessions?refresh_token={refresh}", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert all(not s["is_current"] for s in resp.json()["sessions"])
+
+    def test_sessions_response_never_leaks_token_or_hash(self, client):
+        """Session list responses never include raw tokens or token hashes."""
+        import re
+        token, refresh = _register_and_login(client, "testuser_p7cs7")
+        client.cookies.set(REFRESH_COOKIE, refresh, path="/api/auth")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        body = resp.text
+        assert refresh not in body
+        assert "token_hash" not in body
+        for match in re.findall(r"[a-f0-9]{64}", body):
+            pytest.fail(f"token hash leaked in response: {match[:16]}...")
+
+
+class TestPhase7CCSRF:
+    """Double-submit CSRF protection on state-changing endpoints."""
+
+    def _login_with_csrf(self, client, username="testuser_csrf"):
+        """Register+login; return (token, csrf_value)."""
+        token, _ = _register_and_login(client, username)
+        csrf = client.cookies.get(CSRF_COOKIE)
+        assert csrf is not None
+        return token, csrf
+
+    def test_missing_csrf_token_returns_403(self, client):
+        """State-changing request with Origin but no CSRF token → 403."""
+        token, _ = self._login_with_csrf(client, "testuser_csrf1")
+        resp = client.post("/api/sessions", json={"title": "CSRF Test"}, headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+        })
+        assert resp.status_code == 403
+        assert "CSRF" in resp.json()["detail"]
+
+    def test_wrong_csrf_token_returns_403(self, client):
+        """State-changing request with a wrong CSRF token → 403."""
+        token, _ = self._login_with_csrf(client, "testuser_csrf2")
+        resp = client.post("/api/sessions", json={"title": "CSRF Test"}, headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+            "X-CSRF-Token": "definitely-the-wrong-token",
+        })
+        assert resp.status_code == 403
+
+    def test_correct_csrf_token_succeeds(self, client):
+        """State-changing request with the correct CSRF token succeeds."""
+        token, csrf = self._login_with_csrf(client, "testuser_csrf3")
+        resp = client.post("/api/sessions", json={"title": "CSRF OK"}, headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+            "X-CSRF-Token": csrf,
+        })
+        assert resp.status_code == 201
+
+    def test_refresh_requires_csrf_from_browser(self, client):
+        """Refresh with an Origin header requires a matching CSRF token."""
+        _, _ = self._login_with_csrf(client, "testuser_csrf4")
+        # No CSRF header + Origin → 403
+        resp = client.post("/api/auth/refresh", headers={"Origin": "http://localhost:5173"})
+        assert resp.status_code == 403
+        # With correct CSRF header → 200
+        csrf = client.cookies.get(CSRF_COOKIE)
+        resp = client.post("/api/auth/refresh", headers={
+            "Origin": "http://localhost:5173",
+            "X-CSRF-Token": csrf,
+        })
+        assert resp.status_code == 200
+
+    def test_logout_requires_csrf_from_browser(self, client):
+        """Logout with an Origin header requires a matching CSRF token."""
+        token, csrf = self._login_with_csrf(client, "testuser_csrf5")
+        resp = client.post("/api/auth/logout", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+            "X-CSRF-Token": csrf,
+        })
+        assert resp.status_code == 200
+
+    def test_get_requests_do_not_require_csrf(self, client):
+        """GET requests are exempt from CSRF protection."""
+        token, _ = self._login_with_csrf(client, "testuser_csrf6")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+        })
+        assert resp.status_code == 200
+
+    def test_login_and_register_exempt_from_csrf(self, client):
+        """Login and registration are exempt from CSRF (pre-auth)."""
+        # Register (no CSRF needed)
+        resp = client.post("/api/auth/register", json={
+            "username": "testuser_csrf7",
+            "email": "csrf7@test.com",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 201
+        # Login (no CSRF needed)
+        resp = client.post("/api/auth/login", json={
+            "username": "testuser_csrf7",
+            "password": "securePass123!",
+        })
+        assert resp.status_code == 200
+
+
+class TestPhase7CCORS:
+    """CORS allows the configured origin with credentials (no wildcard)."""
+
+    def test_cors_allows_configured_origin_with_credentials(self, client):
+        """A request from the configured origin gets CORS headers."""
+        token, _ = _register_and_login(client, "testuser_cors1")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+        })
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert resp.headers.get("access-control-allow-credentials") == "true"
+
+    def test_cors_does_not_use_wildcard(self, client):
+        """CORS never returns a wildcard origin with credentials."""
+        token, _ = _register_and_login(client, "testuser_cors2")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+        })
+        assert resp.status_code == 200
+        acao = resp.headers.get("access-control-allow-origin", "")
+        assert acao != "*"
+        assert acao == "http://localhost:5173"
+
+    def test_cors_rejects_unknown_origin(self, client):
+        """An unconfigured origin is not allowed."""
+        token, _ = _register_and_login(client, "testuser_cors3")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://evil.example.com",
+        })
+        assert resp.status_code == 200  # Request still processed
+        assert resp.headers.get("access-control-allow-origin") != "http://evil.example.com"

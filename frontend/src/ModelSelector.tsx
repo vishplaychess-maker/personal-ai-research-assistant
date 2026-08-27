@@ -7,14 +7,10 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { API } from "./api";
+import type { ModelInfo } from "./types";
 
 // ── Types ─────────────────────────────────────────────────
-
-interface ModelInfo {
-  name: string;
-  size?: string | null;
-  modified_at?: string | null;
-}
 
 interface ModelSelectorProps {
   sessionId: number;
@@ -41,14 +37,17 @@ export function ModelSelector({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/models");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await API.listChatModels();
       if (data.error) {
         setError(data.error);
         setModels([]);
       } else {
-        setModels(data.models || []);
+        // Exclude embedding-only models (e.g. nomic-embed-text) so they can
+        // never be chosen for chat generation.
+        const chatModels = (data.models || []).filter(
+          (m: ModelInfo) => !/embed/i.test(m.name)
+        );
+        setModels(chatModels);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load models");
@@ -77,12 +76,8 @@ export function ModelSelector({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/model`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: modelName === "" ? null : modelName }),
-      });
-      if (!res.ok) throw new Error("Failed to update model");
+      // api.ts attaches Authorization + CSRF headers and handles 401 refresh.
+      await API.updateSessionModel(sessionId, modelName === "" ? null : modelName);
       onModelChange(modelName === "" ? null : modelName);
       setOpen(false);
     } catch (err) {
@@ -93,6 +88,12 @@ export function ModelSelector({
   };
 
   const displayName = currentModel || null;
+
+  // Show a warning when the saved model is no longer available, without
+  // silently resetting the saved setting.
+  const selectedUnavailable =
+    !!currentModel && !loading && models.length > 0 &&
+    !models.some((m) => m.name === currentModel);
 
   return (
     <div className="model-selector" ref={dropdownRef}>
@@ -116,6 +117,12 @@ export function ModelSelector({
         </span>
         <span className={`model-selector-arrow ${open ? "open" : ""}`}>▾</span>
       </button>
+
+      {selectedUnavailable && (
+        <div className="model-selector-unavailable">
+          ⚠️ Selected model is unavailable
+        </div>
+      )}
 
       {open && (
         <div className="model-selector-dropdown">
@@ -141,7 +148,7 @@ export function ModelSelector({
               className={`model-selector-item ${!currentModel ? "active" : ""}`}
               onClick={() => handleSelect("")}
             >
-              <span className="model-selector-item-name">Default (llama3.2:3b)</span>
+              <span className="model-selector-item-name">Default model</span>
               <span className="model-selector-item-desc">Use server default</span>
             </button>
 

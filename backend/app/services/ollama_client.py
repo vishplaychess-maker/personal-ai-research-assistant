@@ -19,7 +19,8 @@ from app.config import settings
 # ── Configuration ──────────────────────────────────────────
 
 OLLAMA_GENERATE_URL = f"{settings.ollama_url}/api/generate"
-OLLAMA_MODEL = "llama3.2:3b"
+# Default chat model — aligned with the configured default (was hardcoded).
+OLLAMA_MODEL = settings.default_model
 
 # Connection timeout for establishing the socket
 CONNECT_TIMEOUT = 10.0
@@ -43,6 +44,37 @@ def _build_prompt(messages: List[Dict[str, str]]) -> str:
             parts.append(f"Assistant: {content}")
     parts.append("Assistant:")  # prompt the model to complete
     return "\n\n".join(parts)
+
+
+def fetch_available_chat_models() -> Optional[List[str]]:
+    """
+    Return the names of installed Ollama models that can be used for chat.
+
+    Excludes embedding-only models (names containing 'embed') so they can
+    never be selected for chat generation.
+
+    Returns None if Ollama is unreachable or the tag list cannot be parsed
+    (callers treat None as "cannot verify availability").
+    """
+    try:
+        with httpx.Client(timeout=settings.ollama_tags_timeout) as client:
+            resp = client.get(f"{settings.ollama_url}/api/tags")
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        raw = data.get("models", [])
+    except Exception:
+        return None
+
+    names = []
+    for m in raw:
+        name = m.get("name", "")
+        if not name:
+            continue
+        if "embed" in name.lower():
+            continue  # embedding-only models cannot generate chat responses
+        names.append(name)
+    return names
 
 
 def check_ollama_health() -> bool:

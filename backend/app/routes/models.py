@@ -57,6 +57,8 @@ async def list_models():
     models: list[ModelInfo] = []
     for m in raw_models:
         name = m.get("name", "unknown")
+        if "embed" in name.lower():
+            continue
         size_bytes = m.get("size", 0)
         size_str = _format_size(size_bytes) if size_bytes else None
         modified_at = m.get("modified_at", None)

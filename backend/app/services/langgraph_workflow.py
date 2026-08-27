@@ -134,7 +134,7 @@ def retrieve_memories(state: WorkflowState) -> WorkflowState:
         state["memories_used"] = False
         return state
 
-    memories = retrieve_relevant_memories(db)
+    memories = retrieve_relevant_memories(db, user_id=state.get("user_id", 1))
     if not memories:
         state["memory_context"] = ""
         state["memories_used"] = False
@@ -376,9 +376,17 @@ def run_research_workflow(
     session_id: int,
     user_input: str,
     db: DBSession,
+    user_id: int = 1,
 ) -> dict:
     """
     Run the research workflow synchronously.
+
+    Args:
+        session_id: The session to run in.
+        user_input: The user's message.
+        db: Database session.
+        user_id: The authenticated user ID (defaults to 1 for backward
+                 compatibility with unauthenticated API clients).
 
     Returns a dict with keys:
       - response: the generated text
@@ -403,7 +411,7 @@ def run_research_workflow(
         "extraction_result": None,
         "error": None,
         "db": db,
-        "user_id": 1,
+        "user_id": user_id,
     }
 
     final_state = _workflow_app.invoke(initial_state)

@@ -33,9 +33,21 @@ describe("SystemPromptEditor", () => {
 
   it("loads and displays the current system prompt", async () => {
     const promptText = "You are an expert Python programmer.";
-    vi.mocked(fetch).mockResolvedValue(
-      createMockPromptResponse(promptText, false)
-    );
+    // Phase 7C: the load path calls refreshAccessToken() first (an implicit
+    // /api/auth/refresh fetch). Return a FRESH Response per call so bodies
+    // are never shared, and reject the refresh (no refresh cookie in tests).
+    vi.mocked(fetch).mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "No refresh cookie" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          })
+        );
+      }
+      return Promise.resolve(createMockPromptResponse(promptText, false));
+    });
 
     render(
       <SystemPromptEditor sessionId={mockSessionId} onClose={() => {}} />

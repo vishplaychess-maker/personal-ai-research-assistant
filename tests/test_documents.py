@@ -18,6 +18,11 @@ import pytest
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
+from tests.auth_helpers import ensure_user, register_and_login, auth_headers
+
+# Shared test user for live-backend tests (persists across runs).
+_TEST_USER = "itest_documents"
+
 # ── PDF helpers ─────────────────────────────────────────────
 
 
@@ -54,8 +59,21 @@ def _make_pdf_with_text(text: str) -> bytes:
 # ── Helpers ────────────────────────────────────────────────
 
 
+def _authenticated(c: httpx.Client, username: str = _TEST_USER) -> httpx.Client:
+    """Attach a valid Authorization header for the shared test user.
+
+    The register/login lookup runs on a separate throwaway client so the
+    returned client's connection pool is NOT opened before the caller
+    enters it with `with client() as c:`.
+    """
+    with httpx.Client(base_url=str(c.base_url), timeout=15.0) as temp:
+        _, token = ensure_user(temp, username)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
+
+
 def client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=60.0)
+    return _authenticated(httpx.Client(base_url=BASE_URL, timeout=60.0))
 
 
 def create_session(c: httpx.Client) -> dict:

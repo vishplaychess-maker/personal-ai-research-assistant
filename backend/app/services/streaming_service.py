@@ -158,7 +158,7 @@ def prepare_chat_context(
     memories_used = False
     try:
         if get_memory_enabled(db):
-            memories = retrieve_relevant_memories(db)
+            memories = retrieve_relevant_memories(db, user_id=user_id)
             if memories:
                 memory_block = format_memories_for_prompt(memories)
                 system_parts.append(memory_block)
@@ -302,6 +302,7 @@ def run_memory_extraction(
     user_input: str,
     db: DBSession,
     session_id: int,
+    user_id: int = 1,
 ) -> None:
     """
     Run memory extraction in a best-effort manner.
@@ -314,6 +315,7 @@ def run_memory_extraction(
             user_message=user_input,
             db=db,
             session_id=session_id,
+            user_id=user_id,
         )
     except Exception as exc:
         logger.warning("Background memory extraction failed: %s", exc)

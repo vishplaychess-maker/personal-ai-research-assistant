@@ -12,8 +12,10 @@ import type {
   Document,
   Memory,
   MemorySetting,
+  ModelListResponse,
+  SessionModelResponse,
 } from "./types";
-import { getAccessToken, isTokenExpired, refreshAccessToken } from "./auth";
+import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 
 // Callback invoked when a 401 is received (used to trigger logout)
 let _onUnauthorized: (() => void) | null = null;
@@ -55,7 +57,16 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  let res = await fetch(url, { headers, ...options });
+  // Phase 7C: attach the double-submit CSRF token to state-changing requests.
+  // GET/HEAD/OPTIONS never need it.
+  const method = (options?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers["X-CSRF-Token"] = csrf;
+    }
+  }
+  let res = await fetch(url, { headers, credentials: "include", ...options });
   // Phase 7B: auto-refresh on 401 (try once)
   if (res.status === 401 && token) {
     const refreshed = await refreshAccessToken();
@@ -63,7 +74,16 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
       const newToken = getAccessToken();
       if (newToken) {
         headers["Authorization"] = `Bearer ${newToken}`;
-        res = await fetch(url, { headers, ...options });
+        // Phase 7C: the refresh rotated the CSRF cookie, so re-read the CSRF
+        // token before retrying a state-changing request — the old header
+        // value would now mismatch the new cookie and trigger a 403.
+        if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+          const csrf = getCsrfToken();
+          if (csrf) {
+            headers["X-CSRF-Token"] = csrf;
+          }
+        }
+        res = await fetch(url, { headers, credentials: "include", ...options });
       }
     }
   }
@@ -112,6 +132,15 @@ export const API = {
     return request<Session>(`/api/sessions/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ title }),
+    });
+  },
+  listChatModels() {
+    return request<ModelListResponse>("/api/models");
+  },
+  updateSessionModel(id: number, model: string | null) {
+    return request<SessionModelResponse>(`/api/sessions/${id}/model`, {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
     });
   },
   deleteSession(id: number) {

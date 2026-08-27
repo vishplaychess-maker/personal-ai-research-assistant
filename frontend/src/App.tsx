@@ -21,7 +21,7 @@ function App() {
   // ═══════════════════════════════════════════════════════
 
   // Phase 6C: Authentication gate
-  const { isAuthenticated, isLoading: authLoading, logout } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading, logout } = useAuth();
 
   // Session state
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -49,7 +49,6 @@ function App() {
   const [showDocs, setShowDocs] = useState(false);
 
   // Model & system prompt state
-  const [sessionModel, setSessionModel] = useState<string | null>(null);
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
 
   // Memory state
@@ -75,6 +74,7 @@ function App() {
   const [generationStopped, setGenerationStopped] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const sessionListRequestRef = useRef(0);
 
   // ── Health polling ─────────────────────────────────────
 
@@ -91,12 +91,43 @@ function App() {
   // ── Session CRUD ───────────────────────────────────────
 
   const loadSessions = useCallback(async () => {
+    const requestId = ++sessionListRequestRef.current;
     setLoadingSessions(true);
-    try { setSessions(await API.listSessions()); } catch { /* ignore */ }
-    finally { setLoadingSessions(false); }
+    try {
+      const data = await API.listSessions();
+      if (requestId !== sessionListRequestRef.current) return;
+      setSessions(data);
+      // Stale-session recovery: if the selected session no longer exists in
+      // the fetched list, clear it so the UI never points at a dead session.
+      setActiveSessionId((prev) => {
+        if (prev !== null && !data.some((s) => s.id === prev)) {
+          return null;
+        }
+        return prev;
+      });
+    } catch { /* ignore */ }
+    finally {
+      if (requestId === sessionListRequestRef.current) setLoadingSessions(false);
+    }
   }, []);
 
-  useEffect(() => { loadSessions(); }, [loadSessions]);
+  // Reload sessions whenever auth state changes (login/logout). On logout,
+  // clear account-specific state so another account never inherits it.
+  useEffect(() => {
+    sessionListRequestRef.current += 1;
+    setSessions([]);
+    setActiveSessionId(null);
+    setMessages([]);
+    setDocuments([]);
+    setChatError(null);
+    setSourcesUsedIds(new Set());
+    setMemoriesUsedIds(new Set());
+    if (isAuthenticated) {
+      loadSessions();
+    } else {
+      setLoadingSessions(false);
+    }
+  }, [isAuthenticated, user?.id, loadSessions]);
 
   const handleCreateSession = async () => {
     try {
@@ -148,12 +179,40 @@ function App() {
 
   // ── Message loading ────────────────────────────────────
 
+  // Tracks session IDs already recovered-from-404 so we refresh the list
+  // exactly once (no infinite retry loop) when a session disappears.
+  const recovered404Ref = useRef<Set<number>>(new Set());
+
   const loadMessages = useCallback(async (sessionId: number) => {
     try {
       setMessages(await API.listMessages(sessionId));
       setChatError(null);
-    } catch { setChatError("Could not load messages"); }
-  }, []);
+      recovered404Ref.current.delete(sessionId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/not found/i.test(msg)) {
+        // Session is no longer available (deleted or not owned).
+        setChatError("Session is no longer available");
+        setActiveSessionId(null);
+        setMessages([]);
+        // Refresh the list once; guard against an infinite retry loop.
+        if (!recovered404Ref.current.has(sessionId)) {
+          recovered404Ref.current.add(sessionId);
+          loadSessions();
+        }
+      } else {
+        setChatError("Could not load messages");
+      }
+    }
+  }, [loadSessions]);
+
+  // Ensure the selected session is always present in the latest list; if the
+  // user had nothing selected, select the first valid session when appropriate.
+  useEffect(() => {
+    if (activeSessionId === null && sessions.length > 0 && isAuthenticated) {
+      setActiveSessionId(sessions[0].id);
+    }
+  }, [activeSessionId, sessions, isAuthenticated]);
 
   const handleSelectSession = (id: number) => {
     setActiveSessionId(id);
@@ -162,13 +221,14 @@ function App() {
     loadDocuments(id);
     setSourcesUsedIds(new Set());
     setMemoriesUsedIds(new Set());
-    const sess = sessions.find((s) => s.id === id);
-    if (sess) setSessionModel(sess.model);
   };
 
-  const handleModelChange = (model: string | null) => {
-    setSessionModel(model);
-    loadSessions();
+  const handleModelChange = (sessionId: number, model: string | null) => {
+    // Keep the sessions list in sync so the saved model survives
+    // reopens, without triggering a full reload that could reset it.
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, model } : s))
+    );
   };
 
   // ── Document upload ────────────────────────────────────
@@ -377,8 +437,10 @@ function App() {
         chatError={chatError}
         retryTarget={retryTarget}
         onRetry={handleRetry}
-        sessionModel={sessionModel}
-        onModelChange={handleModelChange}
+        sessionModel={activeSession?.model ?? null}
+        onModelChange={(model) => {
+          if (activeSession) handleModelChange(activeSession.id, model);
+        }}
         onOpenSystemPrompt={() => setShowSystemPromptEditor(true)}
         showDocs={showDocs}
         docCount={docCount}

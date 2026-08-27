@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { getCsrfToken, getAuthHeadersAsync } from "./auth";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -135,12 +136,24 @@ export function useStreaming() {
       callbacks.onStart?.();
 
       try {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        // Phase 7C: attach the access token so the backend can identify the
+        // session owner (no more fallback to the default user).
+        const auth = await getAuthHeadersAsync();
+        if (auth.Authorization) headers.Authorization = auth.Authorization;
+        // Phase 7C: state-changing POST requires the double-submit CSRF token.
+        const csrf = getCsrfToken();
+        if (csrf) headers["X-CSRF-Token"] = csrf;
+
         const response = await fetch(
           `/api/sessions/${sessionId}/messages/stream`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ message }),
+            credentials: "include",
             signal: controller.signal,
           }
         );

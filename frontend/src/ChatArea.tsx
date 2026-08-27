@@ -187,6 +187,7 @@ export function ChatArea({
         </span>
 
         <ModelSelector
+          key={activeSession.id}
           sessionId={activeSession.id}
           currentModel={sessionModel}
           onModelChange={onModelChange}

@@ -74,6 +74,24 @@ export interface MemorySetting {
   enabled: boolean;
 }
 
+// ── Model Types ───────────────────────────────────────────
+
+export interface ModelInfo {
+  name: string;
+  size: string | null;
+  modified_at: string | null;
+}
+
+export interface ModelListResponse {
+  models: ModelInfo[];
+  error: string | null;
+}
+
+export interface SessionModelResponse {
+  id: number;
+  model: string | null;
+}
+
 // ── Streaming Types ───────────────────────────────────────
 
 export interface StreamResult {
@@ -111,22 +129,15 @@ export interface SearchResult {
 
 // ── Auth Types (Phase 6C / 7B) ────────────────────────────
 
-export interface TokenResponse {
-  access_token: string;
-  token_type: string;
-}
-
-/** Phase 7B: login response now includes refresh_token. */
+/** Phase 7C: login response — the refresh token is delivered via HttpOnly cookie. */
 export interface LoginResponse {
   access_token: string;
-  refresh_token: string;
   token_type: string;
 }
 
-/** Phase 7B: refresh endpoint response. */
+/** Phase 7C: refresh endpoint response — new refresh token is set as a cookie. */
 export interface RefreshResponse {
   access_token: string;
-  refresh_token: string;
   token_type: string;
 }
 

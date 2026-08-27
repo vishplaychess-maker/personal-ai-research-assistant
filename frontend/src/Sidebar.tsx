@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { getAuthHeadersAsync } from "./auth";
 import type { Session, HealthStatus, SearchResult } from "./types";
 
 // ── Helpers ───────────────────────────────────────────────
@@ -93,7 +94,9 @@ export function Sidebar({
     setSearchError(null);
 
     try {
+      const auth = await getAuthHeadersAsync();
       const res = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`, {
+        headers: auth.Authorization ? { Authorization: auth.Authorization } : {},
         signal: controller.signal,
       });
 

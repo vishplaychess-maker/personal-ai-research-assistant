@@ -30,7 +30,8 @@ from app.schemas.documents import (
     DocumentListResponse,
     UploadResponse,
 )
-from app.services.auth_service import get_optional_user
+from app.services.auth_service import get_current_user
+from app.services.cookie_service import require_csrf
 from app.services.document_processor import extract_text, chunk_text
 from app.services.embeddings_client import generate_embeddings_batch
 from app.services.chromadb_client import add_chunks, delete_chunks, delete_collection
@@ -109,7 +110,8 @@ async def upload_document(
     session_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Upload a PDF or TXT document (scoped to current user's session).
@@ -255,7 +257,7 @@ async def upload_document(
 def list_documents(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """List all documents for a session (scoped to current user)."""
     _get_session_or_404(db, session_id, current_user.id)
@@ -272,7 +274,7 @@ def list_documents(
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get details for a single document (scoped to current user)."""
     doc = _get_document_or_404(db, document_id)
@@ -290,7 +292,8 @@ def get_document(
 def delete_document(
     document_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Delete a document and all associated data (scoped to current user).

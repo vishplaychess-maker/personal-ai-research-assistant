@@ -15,7 +15,8 @@ from app.schemas.documents import (
     MemoryExtractionStatus,
 )
 from app.services.langgraph_workflow import run_research_workflow
-from app.services.auth_service import get_optional_user
+from app.services.auth_service import get_current_user
+from app.services.cookie_service import require_csrf
 from app.services.streaming_service import (
     prepare_chat_context,
     stream_chat_response,
@@ -46,7 +47,7 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchS
 def list_messages(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get all messages for a session, oldest first (scoped to current user)."""
     _get_session_or_404(db, session_id, current_user.id)
@@ -67,7 +68,8 @@ def create_message(
     session_id: int,
     payload: ChatRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Send a user message and get an AI response via the LangGraph workflow.
@@ -91,11 +93,13 @@ def create_message(
     db.commit()
     db.refresh(user_msg)
 
-    # 2. Run the LangGraph workflow
+    # 2. Run the LangGraph workflow (pass user_id so memory extraction
+    #    is attributed to the authenticated user, not a hardcoded user 1)
     result = run_research_workflow(
         session_id=session.id,
         user_input=payload.message,
         db=db,
+        user_id=current_user.id,
     )
 
     if result.get("error"):
@@ -159,7 +163,8 @@ async def stream_chat(
     payload: ChatRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Send a user message and stream the AI response token-by-token via SSE.
@@ -259,6 +264,7 @@ async def stream_chat(
                             user_input=payload.message,
                             db=db,
                             session_id=session_id,
+                            user_id=current_user.id,
                         )
                     except Exception as exc:
                         logger.warning("Background memory extraction failed: %s", exc)
