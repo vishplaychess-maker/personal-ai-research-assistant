@@ -321,10 +321,10 @@ export function ChatArea({
             >
               <div
                 className={cn(
-                  "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                  "max-w-[88%] text-sm leading-relaxed",
                   msg.role === "user"
-                    ? "rounded-br-sm bg-gradient-to-br from-blue-600 to-blue-500 text-white shadow-sm"
-                    : "rounded-bl-sm border bg-card text-card-foreground shadow-sm"
+                    ? "rounded-2xl rounded-br-sm bg-secondary px-4 py-2.5 text-foreground"
+                    : "w-full px-1 py-1 text-foreground"
                 )}
               >
                 {renderContent(msg, onCitationClick)}
@@ -375,7 +375,7 @@ export function ChatArea({
 
         {isStreaming && (
           <div className="flex animate-message-in justify-start">
-            <div className="max-w-[85%] rounded-2xl rounded-bl-sm border bg-card px-4 py-2.5 text-sm leading-relaxed text-card-foreground shadow-sm">
+            <div className="w-full px-1 py-1 text-sm leading-relaxed text-foreground">
               {streamedContent ? (
                 <div className="whitespace-pre-wrap">
                   {streamedContent}
@@ -433,7 +433,7 @@ export function ChatArea({
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
-            className="max-h-[120px] min-h-[44px] w-full flex-1 resize-none rounded-xl border bg-transparent px-4 py-2.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="max-h-[120px] min-h-[44px] w-full flex-1 resize-none rounded-2xl border border-border/70 bg-card px-4 py-2.5 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             placeholder={isStreaming ? "Generating response…" : "Type your message…"}
             value={input}
             onChange={(e) => onInputChange(e.target.value)}

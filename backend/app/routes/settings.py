@@ -134,7 +134,7 @@ def update_user_settings(
 ):
     """Update the current user's LLM provider, API key, and model."""
     provider = (payload.llm_provider or "").strip().lower()
-    if provider not in ("ollama", "openrouter", "nvidia", "huggingface"):
+    if provider not in ("ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab"):
         raise HTTPException(status_code=400, detail="Invalid llm_provider")
     api_key = (payload.api_key or "").strip()
     _validate_api_key_format(provider, api_key)

@@ -42,6 +42,12 @@ services:
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
       - HUGGINGFACE_BASE_URL=${HUGGINGFACE_BASE_URL:-https://router.huggingface.co/v1}
       - HUGGINGFACE_MODEL=${HUGGINGFACE_MODEL:-meta-llama/Meta-Llama-3-8B-Instruct}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_BASE_URL=${GOOGLE_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      - GOOGLE_MODEL=${GOOGLE_MODEL:-gemini-2.0-flash}
+      - MODELSLAB_API_KEY=${MODELSLAB_API_KEY:-}
+      - MODELSLAB_BASE_URL=${MODELSLAB_BASE_URL:-https://modelslab.com/api/v1}
+      - MODELSLAB_MODEL=${MODELSLAB_MODEL:-meta-llama/Llama-3.3-70B-Instruct}
       - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
     depends_on:
       chromadb:

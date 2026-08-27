@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     enable_terminal_tool: bool = False
 
     # ── Model / LLM provider settings ───────────────────
-    # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface"
+    # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
     llm_provider: str = "ollama"
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5
@@ -84,6 +84,20 @@ class Settings(BaseSettings):
     huggingface_model: str = "meta-llama/Meta-Llama-3-8B-Instruct"
     huggingface_max_tokens: int = 2048
     huggingface_temperature: float = 0.7
+
+    # Google AI Studio / Gemini (OpenAI-compatible API)
+    google_api_key: str = ""
+    google_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    google_model: str = "gemini-2.0-flash"
+    google_max_tokens: int = 2048
+    google_temperature: float = 0.7
+
+    # ModelsLab (OpenAI-compatible API - assumed)
+    modelslab_api_key: str = ""
+    modelslab_base_url: str = "https://modelslab.com/api/v1"
+    modelslab_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+    modelslab_max_tokens: int = 2048
+    modelslab_temperature: float = 0.7
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

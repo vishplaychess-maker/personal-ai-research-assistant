@@ -16,7 +16,7 @@ from app.services.llm_providers import get_provider
 router = APIRouter(prefix="/api/models", tags=["models"])
 
 
-VALID_PROVIDERS = {"ollama", "openrouter", "nvidia", "huggingface"}
+VALID_PROVIDERS = {"ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab"}
 
 
 @router.get("", response_model=ModelListResponse)

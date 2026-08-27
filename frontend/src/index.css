@@ -3,43 +3,43 @@
 @tailwind utilities;
 
 /*
- * White & Blue (light) + Dark Slate/Blue (dark) theme.
+ * Claude.ai-inspired theme (light): warm cream + terracotta accent.
  * shadcn/ui CSS variables are defined as HSL triplets; a set of legacy
  * aliases (used by pre-existing App.css components) is kept in sync below.
  */
 :root {
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 221 83% 53%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222 47% 11%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 221 83% 53%;
+  --background: 40 23% 97%;          /* warm off-white #FAF9F7 */
+  --foreground: 30 1% 12%;           /* near-black warm gray #1F1E1D */
+  --card: 40 20% 98%;                /* #FCFBF9 */
+  --card-foreground: 30 1% 12%;
+  --popover: 40 20% 98%;
+  --popover-foreground: 30 1% 12%;
+  --primary: 16 53% 50%;             /* terracotta #C15F3C */
+  --primary-foreground: 40 20% 98%;
+  --secondary: 48 5% 92%;            /* warm cream #F0EEE6 */
+  --secondary-foreground: 30 1% 12%;
+  --muted: 48 5% 92%;
+  --muted-foreground: 30 6% 45%;
+  --accent: 48 5% 92%;
+  --accent-foreground: 30 1% 12%;
+  --destructive: 0 70% 55%;
+  --destructive-foreground: 40 20% 98%;
+  --border: 45 15% 90%;              /* subtle warm gray #EAE7E1 */
+  --input: 45 15% 90%;
+  --ring: 16 53% 50%;
   --radius: 0.625rem;
 
   /* Legacy aliases (App.css) */
-  --bg-primary: #ffffff;
-  --bg-secondary: #f1f5f9;
-  --bg-card: #ffffff;
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
+  --bg-primary: #faf9f7;
+  --bg-secondary: #f0eee6;
+  --bg-card: #fcfbf9;
+  --text-primary: #1f1e1d;
+  --text-secondary: #75706a;
   --accent-green: #16a34a;
-  --accent-red: #ef4444;
-  --accent-blue: #2563eb;
-  --border-color: #e2e8f0;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --accent-red: #d9534f;
+  --accent-blue: #c15f3c;
+  --border-color: #eae7e1;
+  --shadow: 0 1px 3px rgba(31, 30, 29, 0.08);
 }
 
 .dark {
@@ -61,18 +61,18 @@
   --destructive-foreground: 210 40% 98%;
   --border: 217 33% 17%;
   --input: 217 33% 17%;
-  --ring: 224 76% 48%;
+  --ring: 16 60% 55%;
 
   /* Legacy aliases (App.css) */
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-card: #1e293b;
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
+  --bg-primary: #1f1e1d;
+  --bg-secondary: #2a2825;
+  --bg-card: #2a2825;
+  --text-primary: #f2efe9;
+  --text-secondary: #a8a29e;
   --accent-green: #22c55e;
   --accent-red: #ef4444;
-  --accent-blue: #3b82f6;
-  --border-color: #334155;
+  --accent-blue: #d97757;
+  --border-color: #3d3a35;
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
 }
 

@@ -22,6 +22,8 @@ const PROVIDERS = [
   { value: "ollama", label: "Ollama" },
   { value: "nvidia", label: "NVIDIA" },
   { value: "huggingface", label: "Hugging Face" },
+  { value: "google", label: "Google AI" },
+  { value: "modelslab", label: "ModelsLab" },
 ];
 
 const selectClass =

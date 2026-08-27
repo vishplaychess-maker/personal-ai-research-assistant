@@ -248,8 +248,8 @@ export function Sidebar({
                 className={cn(
                   "group mb-1 flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
                   session.id === activeSessionId
-                    ? "bg-primary text-primary-foreground"
-                    : "hover:bg-muted"
+                    ? "bg-secondary text-foreground"
+                    : "hover:bg-secondary/60"
                 )}
                 onClick={() => onSelectSession(session.id)}
               >
