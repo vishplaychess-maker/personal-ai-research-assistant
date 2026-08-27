@@ -15,6 +15,8 @@ import type {
   UserSettings,
   ModelListResponse,
   SessionModelResponse,
+  ProviderConfig,
+  ProviderModelGroup,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 
@@ -219,5 +221,41 @@ export const API = {
       method: "PUT",
       body: JSON.stringify(settings),
     });
+  },
+
+  // ── Multiple Providers Manager ──────────────
+  listProviders() {
+    return request<ProviderConfig[]>("/api/providers");
+  },
+  createProvider(data: {
+    provider_name: string;
+    api_key: string;
+    default_model: string;
+    is_active: boolean;
+  }) {
+    return request<ProviderConfig>("/api/providers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  updateProvider(
+    id: number,
+    data: Partial<{
+      provider_name: string;
+      api_key: string;
+      default_model: string;
+      is_active: boolean;
+    }>
+  ) {
+    return request<ProviderConfig>(`/api/providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+  deleteProvider(id: number) {
+    return request<void>(`/api/providers/${id}`, { method: "DELETE" });
+  },
+  listAllProviderModels() {
+    return request<ProviderModelGroup[]>("/api/providers/models");
   },
 };

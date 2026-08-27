@@ -80,6 +80,24 @@ export interface UserSettings {
   model: string;
 }
 
+// ── Multiple Providers Manager ───────────────────────────
+
+export interface ProviderConfig {
+  id: number;
+  provider_name: string;
+  api_key: string;
+  default_model: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ProviderModelGroup {
+  provider: string;
+  provider_label: string;
+  provider_id: number;
+  models: ModelInfo[];
+}
+
 // ── Model Types ───────────────────────────────────────────
 
 export interface ModelInfo {

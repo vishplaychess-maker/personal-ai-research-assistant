@@ -1,7 +1,7 @@
 import datetime
 import enum
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -86,6 +86,7 @@ class User(Base):
 
     sessions = relationship("ResearchSession", back_populates="user", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
+    providers = relationship("UserProvider", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"
@@ -215,3 +216,28 @@ class Memory(Base):
 
     def __repr__(self):
         return f"<Memory(id={self.id}, category='{self.category}')>"
+
+
+class UserProvider(Base):
+    """A saved LLM provider configuration for a user (multi-provider manager)."""
+
+    __tablename__ = "user_providers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider_name = Column(String(50), nullable=False)
+    api_key = Column(String(500), nullable=False, default="")
+    default_model = Column(String(255), nullable=False, default="")
+    is_active = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    user = relationship("User", back_populates="providers")
+
+    def __repr__(self):
+        return f"<UserProvider(id={self.id}, provider='{self.provider_name}', active={self.is_active})>"
