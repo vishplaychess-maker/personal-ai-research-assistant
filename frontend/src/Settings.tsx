@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { API } from "./api";
 import {
   Dialog,
@@ -11,7 +11,7 @@ import {
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
-import type { UserSettings } from "./types";
+import type { ModelInfo, UserSettings } from "./types";
 
 interface SettingsProps {
   onClose: () => void;
@@ -24,6 +24,9 @@ const PROVIDERS = [
   { value: "huggingface", label: "Hugging Face" },
 ];
 
+const selectClass =
+  "flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
 export function Settings({ onClose }: SettingsProps) {
   const [provider, setProvider] = useState("openrouter");
   const [apiKey, setApiKey] = useState("");
@@ -31,6 +34,31 @@ export function Settings({ onClose }: SettingsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Provider-specific model list (fetched dynamically per provider)
+  const [modelOptions, setModelOptions] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  const fetchModelsForProvider = useCallback(async (prov: string) => {
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const data = await API.listChatModels(prov);
+      if (data.error) {
+        setModelsError(data.error);
+        setModelOptions([]);
+      } else {
+        // Exclude embedding-only models from the chat model dropdown.
+        setModelOptions((data.models || []).filter((m) => !/embed/i.test(m.name)));
+      }
+    } catch (err) {
+      setModelsError(err instanceof Error ? err.message : "Failed to load models");
+      setModelOptions([]);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +80,13 @@ export function Settings({ onClose }: SettingsProps) {
     };
   }, []);
 
+  // Load models for the selected provider once settings are loaded, and
+  // whenever the user changes the provider dropdown.
+  useEffect(() => {
+    if (loading) return;
+    fetchModelsForProvider(provider);
+  }, [provider, loading, fetchModelsForProvider]);
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -67,6 +102,9 @@ export function Settings({ onClose }: SettingsProps) {
       setSaving(false);
     }
   };
+
+  const savedModelMissing =
+    !!model && !modelOptions.some((m) => m.name === model);
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -94,8 +132,13 @@ export function Settings({ onClose }: SettingsProps) {
               <select
                 id="llm-provider"
                 value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-                className="flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onChange={(e) => {
+                  setProvider(e.target.value);
+                  // Model from the previous provider is not relevant; clear it
+                  // so the user picks one from the new provider's list.
+                  setModel("");
+                }}
+                className={selectClass}
               >
                 {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>
@@ -118,14 +161,35 @@ export function Settings({ onClose }: SettingsProps) {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="model-name">Model Name</Label>
-              <Input
+              <Label htmlFor="model-name">Model</Label>
+              <select
                 id="model-name"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="e.g. meta-llama/llama-3.2-3b-instruct"
-                autoComplete="off"
-              />
+                className={selectClass}
+                disabled={modelsLoading}
+              >
+                {!model && <option value="">Default model</option>}
+                {savedModelMissing && (
+                  <option value={model}>{model} (saved)</option>
+                )}
+                {modelOptions.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              {modelsLoading && (
+                <p className="text-xs text-muted-foreground">Loading models…</p>
+              )}
+              {!modelsLoading && modelsError && (
+                <p className="text-xs text-destructive">{modelsError}</p>
+              )}
+              {!modelsLoading && !modelsError && modelOptions.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No free models found or invalid API key
+                </p>
+              )}
             </div>
 
             {error && <p className="text-sm text-destructive">{error}</p>}

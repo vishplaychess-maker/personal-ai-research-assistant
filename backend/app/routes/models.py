@@ -4,7 +4,7 @@ Router for listing available models.
 GET /api/models — Returns models from the configured LLM provider.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter
@@ -16,19 +16,40 @@ from app.services.llm_providers import get_provider
 router = APIRouter(prefix="/api/models", tags=["models"])
 
 
+VALID_PROVIDERS = {"ollama", "openrouter", "nvidia", "huggingface"}
+
+
 @router.get("", response_model=ModelListResponse)
-async def list_models():
+async def list_models(provider: Optional[str] = None):
     """
-    Fetch the list of available chat models from the configured LLM provider.
+    Fetch the list of available chat models.
+
+    If a ``provider`` query parameter is given (e.g. ``?provider=openrouter``),
+    models are fetched for that provider regardless of the configured default
+    (used by the Settings UI to preview a provider's free/active models).
+    Otherwise the configured global provider is used.
 
     For Ollama: fetches from GET /api/tags (local installed models).
-    For OpenRouter/NVIDIA: returns curated lists of known available models.
+    For cloud providers: fetches the live model catalog from the provider API.
 
     Returns model names, sizes, and last-modified timestamps where available.
     If the provider is unreachable, returns an empty list with an error field.
     """
-    provider = get_provider()
-    provider_name = provider.name.lower()
+    if provider:
+        provider_name_raw = provider.strip().lower()
+        if provider_name_raw not in VALID_PROVIDERS:
+            return ModelListResponse(
+                models=[],
+                error=(
+                    f"Unknown provider '{provider}'. "
+                    f"Valid: {', '.join(sorted(VALID_PROVIDERS))}."
+                ),
+            )
+        prov = get_provider(config={"provider": provider_name_raw})
+    else:
+        prov = get_provider()
+
+    provider_name = prov.name.lower()
 
     # For Ollama, use the existing direct API call for richer metadata
     if "ollama" in provider_name:
@@ -36,17 +57,17 @@ async def list_models():
 
     # For cloud providers, use the provider's model list
     try:
-        model_names = provider.fetch_available_chat_models()
+        model_names = prov.fetch_available_chat_models()
     except Exception:
         return ModelListResponse(
             models=[],
-            error=f"{provider.name} is not reachable.",
+            error=f"{prov.name} is not reachable.",
         )
 
     if model_names is None:
         return ModelListResponse(
             models=[],
-            error=f"{provider.name} is not configured or unreachable. "
+            error=f"{prov.name} is not configured or unreachable. "
                   "Check your API key and network connection.",
         )
 

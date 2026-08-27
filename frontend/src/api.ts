@@ -135,8 +135,10 @@ export const API = {
       body: JSON.stringify({ title }),
     });
   },
-  listChatModels() {
-    return request<ModelListResponse>("/api/models");
+  listChatModels(provider?: string) {
+    return request<ModelListResponse>(
+      `/api/models${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`
+    );
   },
   updateSessionModel(id: number, model: string | null) {
     return request<SessionModelResponse>(`/api/sessions/${id}/model`, {

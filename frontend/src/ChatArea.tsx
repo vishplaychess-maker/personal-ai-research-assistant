@@ -16,11 +16,17 @@ import {
   Square,
   AlertTriangle,
   RotateCcw,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ModelSelector } from "./ModelSelector";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
+import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
+import { useSpeechSynthesis } from "./hooks/useSpeechSynthesis";
 import type { Session, Message, Citation, RetryTarget } from "./types";
 
 // ── Helpers ───────────────────────────────────────────────
@@ -28,6 +34,19 @@ import type { Session, Message, Citation, RetryTarget } from "./types";
 function formatTime(iso: string) {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Strip markdown + citation markers so TTS reads plain text. */
+function toPlainText(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/\[(Source:[^\]]*)\]/gi, "")
+    .replace(/\[(\d+)\]/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_#>~|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function renderContent(
@@ -151,6 +170,25 @@ export function ChatArea({
         Math.min(inputRef.current.scrollHeight, 120) + "px";
     }
   }, [input, inputRef]);
+
+  // ── Voice input (speech-to-text) ─────────────────────
+  const micPrefixRef = useRef("");
+  const speech = useSpeechRecognition((text) => {
+    // Keep any text the user already typed as a prefix to the transcript.
+    onInputChange(
+      micPrefixRef.current
+        ? `${micPrefixRef.current} ${text}`.trim()
+        : text
+    );
+  });
+  const handleMicToggle = () => {
+    if (!speech.isListening) micPrefixRef.current = input;
+    else micPrefixRef.current = "";
+    speech.toggle();
+  };
+
+  // ── Voice output (text-to-speech) ────────────────────
+  const tts = useSpeechSynthesis();
 
   if (!activeSession) {
     return (
@@ -307,6 +345,28 @@ export function ChatArea({
                       <Brain className="h-3 w-3" /> Memory
                     </span>
                   )}
+                  {msg.role === "assistant" && (
+                    <button
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 transition-colors hover:text-primary",
+                        tts.speakingId === msg.id
+                          ? "text-primary"
+                          : "text-muted-foreground"
+                      )}
+                      onClick={() => tts.speak(msg.id, toPlainText(msg.content))}
+                      title={tts.speakingId === msg.id ? "Stop reading" : "Read aloud"}
+                    >
+                      {tts.speakingId === msg.id ? (
+                        <>
+                          <VolumeX className="h-3 w-3" /> Stop
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="h-3 w-3" /> Read
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -381,6 +441,24 @@ export function ChatArea({
             disabled={isStreaming}
             rows={1}
           />
+          <Button
+            size="icon"
+            variant={speech.isListening ? "default" : "ghost"}
+            onClick={handleMicToggle}
+            disabled={isStreaming}
+            title={speech.isListening ? "Stop listening" : "Speak (voice input)"}
+            className={cn(
+              "h-11 w-11 shrink-0 rounded-xl",
+              speech.isListening &&
+                "animate-pulse bg-destructive text-white hover:bg-destructive"
+            )}
+          >
+            {speech.isListening ? (
+              <MicOff className="h-4 w-4" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
           {isStreaming ? (
             <Button
               variant="destructive"
@@ -402,9 +480,15 @@ export function ChatArea({
             </Button>
           )}
         </div>
-        {isStreaming && (
-          <div className="mt-1.5 text-center text-[11px] text-muted-foreground">
-            Click Stop to cancel — partial response will not be saved
+        {(isStreaming || speech.error) && (
+          <div className="mt-1.5 text-center text-[11px]">
+            {speech.error ? (
+              <span className="text-destructive">{speech.error}</span>
+            ) : (
+              <span className="text-muted-foreground">
+                Click Stop to cancel — partial response will not be saved
+              </span>
+            )}
           </div>
         )}
       </div>
