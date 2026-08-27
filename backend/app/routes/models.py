@@ -1,7 +1,7 @@
 """
-Router for listing installed Ollama models.
+Router for listing available models.
 
-GET /api/models — Returns models from Ollama's GET /api/tags.
+GET /api/models — Returns models from the configured LLM provider.
 """
 
 from typing import Any
@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from app.config import settings
 from app.schemas.sessions import ModelInfo, ModelListResponse
+from app.services.llm_providers import get_provider
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -18,11 +19,43 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 @router.get("", response_model=ModelListResponse)
 async def list_models():
     """
-    Fetch the list of installed Ollama models from GET /api/tags.
+    Fetch the list of available chat models from the configured LLM provider.
 
-    Returns model names, sizes, and last-modified timestamps.
-    If Ollama is unreachable, returns an empty list with an error field.
+    For Ollama: fetches from GET /api/tags (local installed models).
+    For OpenRouter/NVIDIA: returns curated lists of known available models.
+
+    Returns model names, sizes, and last-modified timestamps where available.
+    If the provider is unreachable, returns an empty list with an error field.
     """
+    provider = get_provider()
+    provider_name = provider.name.lower()
+
+    # For Ollama, use the existing direct API call for richer metadata
+    if "ollama" in provider_name:
+        return await _list_ollama_models()
+
+    # For cloud providers, use the provider's model list
+    try:
+        model_names = provider.fetch_available_chat_models()
+    except Exception:
+        return ModelListResponse(
+            models=[],
+            error=f"{provider.name} is not reachable.",
+        )
+
+    if model_names is None:
+        return ModelListResponse(
+            models=[],
+            error=f"{provider.name} is not configured or unreachable. "
+                  "Check your API key and network connection.",
+        )
+
+    models = [ModelInfo(name=name) for name in model_names]
+    return ModelListResponse(models=models, error=None)
+
+
+async def _list_ollama_models() -> ModelListResponse:
+    """Fetch models from Ollama's GET /api/tags endpoint."""
     tags_url = f"{settings.ollama_url}/api/tags"
 
     try:

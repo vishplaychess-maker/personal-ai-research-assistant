@@ -19,9 +19,16 @@ from app.services.chromadb_client import delete_chunks, delete_collection
 from app.config import settings
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
-from app.services.ollama_client import fetch_available_chat_models
+from app.services.llm_providers import get_provider
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+# ── Patchable wrapper for model validation ─────────────────
+def fetch_available_chat_models():
+    """Delegate to the configured LLM provider. Patchable for tests."""
+    provider = get_provider()
+    return provider.fetch_available_chat_models()
 
 
 def _get_session_or_404(

@@ -53,9 +53,25 @@ class Settings(BaseSettings):
     # Allowed CORS origin for the frontend (never "*" with credentials).
     frontend_origin: str = "http://localhost:5173"
 
-    # ── Model settings ──────────────────────────────────
+    # ── Model / LLM provider settings ───────────────────
+    # Provider: "ollama" | "openrouter" | "nvidia"
+    llm_provider: str = "ollama"
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5
+
+    # OpenRouter (OpenAI-compatible API)
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    openrouter_max_tokens: int = 2048
+    openrouter_temperature: float = 0.7
+
+    # NVIDIA NIM (OpenAI-compatible API)
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_model: str = "meta/llama-3.2-3b-instruct"
+    nvidia_max_tokens: int = 2048
+    nvidia_temperature: float = 0.7
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

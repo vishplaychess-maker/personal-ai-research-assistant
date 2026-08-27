@@ -23,7 +23,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from sqlalchemy.orm import Session as DBSession
 
 from app.models.models import Message, MessageRole, ResearchSession
-from app.services.ollama_client import generate_stream_async
+from app.services.llm_providers import get_provider
 from app.services.memory_service import (
     extract_memory_from_message,
     retrieve_relevant_memories,
@@ -226,9 +226,10 @@ async def stream_chat_response(
     })
 
     try:
-        # Stream tokens from Ollama
+        # Stream tokens from the configured LLM provider
+        provider = get_provider()
         full_response = []
-        async for chunk in generate_stream_async(
+        async for chunk in provider.generate_stream_async(
             messages=context.history,
             system_prompt=context.system_prompt,
             model_name=context.model_name,

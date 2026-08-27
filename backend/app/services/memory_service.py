@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import Memory, MemoryCategory
-from app.services.ollama_client import generate_json_response
+from app.services.llm_providers import get_provider
 from app.services.settings_service import get_memory_enabled
 
 
@@ -160,7 +160,8 @@ def _call_ollama_with_retry(
     last_exc = None
     for attempt in range(1 + max_retries):
         try:
-            return generate_json_response(
+            provider = get_provider()
+            return provider.generate_json_response(
                 messages=messages,
                 system_prompt=system_prompt,
             )

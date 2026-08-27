@@ -22,7 +22,7 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session as DBSession
 
 from app.models.models import Message, MessageRole, ResearchSession
-from app.services.ollama_client import generate_response
+from app.services.llm_providers import get_provider
 from app.services.rag_service import (
     retrieve_chunks,
     format_rag_context,
@@ -38,6 +38,23 @@ from app.services.settings_service import get_memory_enabled
 
 
 logger = logging.getLogger(__name__)
+
+# ── Patchable generate_response wrapper ─────────────────────
+# Tests can monkeypatch this module-level function to mock LLM calls.
+
+def generate_response(
+    messages: List[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> str:
+    """Call the configured LLM provider. Patchable for testing."""
+    provider = get_provider()
+    return provider.generate_response(
+        messages=messages,
+        system_prompt=system_prompt,
+        model_name=model_name,
+    )
+
 
 # ── Workflow state ─────────────────────────────────────────
 
