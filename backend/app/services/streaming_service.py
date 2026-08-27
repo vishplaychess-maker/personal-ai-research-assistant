@@ -30,16 +30,19 @@ from app.services.memory_service import (
     format_memories_for_prompt,
 )
 from app.services.rag_service import retrieve_chunks, format_rag_context, build_citation_list
-from app.services.settings_service import get_memory_enabled
+from app.services.settings_service import get_memory_enabled, get_user_llm_config
+from app.services.system_prompts import build_base_prompt
+from app.config import settings
+from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
+from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code_async
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────
 
 MAX_HISTORY_MESSAGES = 20
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful research assistant. Answer the user's questions "
-    "clearly and concisely."
+DEFAULT_SYSTEM_PROMPT = build_base_prompt(
+    terminal_enabled=settings.enable_terminal_tool
 )
 
 
@@ -71,6 +74,7 @@ class ChatContext:
         sources_used: bool,
         memories_used: bool,
         model_name: Optional[str] = None,
+        provider_config: Optional[dict] = None,
     ):
         self.session_id = session_id
         self.user_message = user_message
@@ -80,6 +84,7 @@ class ChatContext:
         self.sources_used = sources_used
         self.memories_used = memories_used
         self.model_name = model_name
+        self.provider_config = provider_config
 
 
 def prepare_chat_context(
@@ -182,7 +187,56 @@ def prepare_chat_context(
         logger.warning("RAG retrieval failed (non-fatal): %s", exc)
         system_parts.append("If you don't know something, say so.")
 
+    # 7. Agentic web scraping — detect URLs, invoke web_scraper tool
+    try:
+        from app.tools.web_scraper import web_scraper, extract_urls
+
+        urls = extract_urls(user_input)
+        if urls:
+            web_parts = []
+            for url in urls[:3]:
+                if is_youtube_url(url):
+                    logger.info("Invoking youtube_summarizer tool for: %s", url)
+                    try:
+                        content = youtube_summarizer.invoke({"url": url})
+                        web_parts.append(
+                            f"=== YouTube Summarizer Result for {url} ===\n"
+                            f"{content}\n"
+                            f"=== End of YouTube Summarizer Result ==="
+                        )
+                    except Exception as exc:
+                        logger.warning("youtube_summarizer failed for %s: %s", url, exc)
+                        web_parts.append(
+                            f"=== YouTube Summarizer Result for {url} ===\n"
+                            f"Error: {exc}\n"
+                            f"=== End of YouTube Summarizer Result ==="
+                        )
+                else:
+                    logger.info("Invoking web_scraper tool for: %s", url)
+                    try:
+                        content = web_scraper.invoke({"url": url})
+                        web_parts.append(
+                            f"=== Web Scraper Result for {url} ===\n"
+                            f"{content}\n"
+                            f"=== End of Web Scraper Result ==="
+                        )
+                    except Exception as exc:
+                        logger.warning("web_scraper failed for %s: %s", url, exc)
+                        web_parts.append(
+                            f"=== Web Scraper Result for {url} ===\n"
+                            f"Error: {exc}\n"
+                            f"=== End of Web Scraper Result ==="
+                        )
+
+            if web_parts:
+                system_parts.append("\n\n".join(web_parts))
+    except Exception as exc:
+        logger.warning("Web scraping failed (non-fatal): %s", exc)
+
     system_prompt = "\n\n".join(system_parts)
+
+    # Per-user LLM provider settings (override global .env when set)
+    provider_config = get_user_llm_config(db, user_id)
 
     return ChatContext(
         session_id=session.id,
@@ -193,6 +247,7 @@ def prepare_chat_context(
         sources_used=sources_used,
         memories_used=memories_used,
         model_name=session_model,
+        provider_config=provider_config,
     )
 
 
@@ -227,7 +282,7 @@ async def stream_chat_response(
 
     try:
         # Stream tokens from the configured LLM provider
-        provider = get_provider()
+        provider = get_provider(config=context.provider_config)
         full_response = []
         async for chunk in provider.generate_stream_async(
             messages=context.history,
@@ -240,6 +295,11 @@ async def stream_chat_response(
 
             elif chunk["type"] == "done":
                 full_response_text = chunk.get("response", "")
+                # Execute any [PYTHON_CODE: ...] the LLM emitted (single-pass).
+                code = extract_python_code(full_response_text)
+                if code:
+                    result = await run_python_code_async(code)
+                    full_response_text += "\n\n" + format_code_result(code, result)
                 # Yield complete event with metadata
                 yield format_sse("complete", {
                     "message_id": None,  # Will be filled after DB save

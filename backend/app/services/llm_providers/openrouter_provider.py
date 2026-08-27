@@ -27,17 +27,21 @@ GENERATE_TIMEOUT = 120.0
 class OpenRouterProvider(LLMProvider):
     """Provider for OpenRouter (OpenAI-compatible API)."""
 
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self._api_key = api_key
+        self._model = model
+
     @property
     def name(self) -> str:
         return "OpenRouter"
 
     @property
     def default_model(self) -> str:
-        return settings.openrouter_model
+        return self._model or settings.openrouter_model
 
     def _build_headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {settings.openrouter_api_key}",
+            "Authorization": f"Bearer {self._api_key or settings.openrouter_api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/personal-ai-research-assistant",
             "X-Title": "Personal AI Research Assistant",
@@ -56,7 +60,7 @@ class OpenRouterProvider(LLMProvider):
         return result
 
     def _resolve_model(self, model_name: Optional[str] = None) -> str:
-        return model_name or settings.openrouter_model
+        return model_name or self._model or settings.openrouter_model
 
     def generate_response(
         self,
@@ -64,7 +68,7 @@ class OpenRouterProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not settings.openrouter_api_key:
+        if not (self._api_key or settings.openrouter_api_key):
             raise RuntimeError(
                 "OpenRouter API key not configured. "
                 "Set OPENROUTER_API_KEY in your .env file."
@@ -117,7 +121,7 @@ class OpenRouterProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not settings.openrouter_api_key:
+        if not (self._api_key or settings.openrouter_api_key):
             raise RuntimeError(
                 "OpenRouter API key not configured. "
                 "Set OPENROUTER_API_KEY in your .env file."
@@ -173,7 +177,7 @@ class OpenRouterProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        if not settings.openrouter_api_key:
+        if not (self._api_key or settings.openrouter_api_key):
             yield {
                 "type": "error",
                 "error": (
@@ -266,7 +270,7 @@ class OpenRouterProvider(LLMProvider):
         Filters models where both prompt and completion pricing are "0".
         Returns None if the API key is not configured (fail-closed).
         """
-        if not settings.openrouter_api_key:
+        if not (self._api_key or settings.openrouter_api_key):
             return None
 
         try:
@@ -276,7 +280,7 @@ class OpenRouterProvider(LLMProvider):
                 resp = client.get(
                     f"{settings.openrouter_base_url}/models",
                     headers={
-                        "Authorization": f"Bearer {settings.openrouter_api_key}",
+                        "Authorization": f"Bearer {self._api_key or settings.openrouter_api_key}",
                     },
                 )
         except httpx.ConnectError:
@@ -326,13 +330,13 @@ class OpenRouterProvider(LLMProvider):
 
     def health_check(self) -> bool:
         """Check if OpenRouter API is reachable."""
-        if not settings.openrouter_api_key:
+        if not (self._api_key or settings.openrouter_api_key):
             return False
         try:
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(
                     f"{settings.openrouter_base_url}/models",
-                    headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                    headers={"Authorization": f"Bearer {self._api_key or settings.openrouter_api_key}"},
                 )
                 return resp.status_code == 200
         except Exception:

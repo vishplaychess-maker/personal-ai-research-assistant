@@ -31,6 +31,7 @@ interface SidebarProps {
   onDeleteSession: (id: number) => void;
   onRenameSession: (id: number, title: string) => void;
   onLogout?: () => void;
+  onOpenSettings?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -45,6 +46,7 @@ export function Sidebar({
   onDeleteSession,
   onRenameSession,
   onLogout,
+  onOpenSettings,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -321,6 +323,11 @@ export function Sidebar({
         <span className="sidebar-footer-status">
           {healthOk === 3 ? "All OK" : `${healthOk}/3`}
         </span>
+        {onOpenSettings && (
+          <button className="sidebar-logout-btn" onClick={onOpenSettings} title="Settings">
+            Settings
+          </button>
+        )}
         {onLogout && (
           <button className="sidebar-logout-btn" onClick={onLogout} title="Sign out">
             🚪

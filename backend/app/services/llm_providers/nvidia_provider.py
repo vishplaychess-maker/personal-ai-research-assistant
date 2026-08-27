@@ -27,17 +27,21 @@ GENERATE_TIMEOUT = 120.0
 class NvidiaProvider(LLMProvider):
     """Provider for NVIDIA NIM (OpenAI-compatible API)."""
 
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self._api_key = api_key
+        self._model = model
+
     @property
     def name(self) -> str:
         return "NVIDIA NIM"
 
     @property
     def default_model(self) -> str:
-        return settings.nvidia_model
+        return self._model or settings.nvidia_model
 
     def _build_headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {settings.nvidia_api_key}",
+            "Authorization": f"Bearer {self._api_key or settings.nvidia_api_key}",
             "Content-Type": "application/json",
         }
 
@@ -54,7 +58,7 @@ class NvidiaProvider(LLMProvider):
         return result
 
     def _resolve_model(self, model_name: Optional[str] = None) -> str:
-        return model_name or settings.nvidia_model
+        return model_name or self._model or settings.nvidia_model
 
     def generate_response(
         self,
@@ -62,7 +66,7 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not settings.nvidia_api_key:
+        if not (self._api_key or settings.nvidia_api_key):
             raise RuntimeError(
                 "NVIDIA NIM API key not configured. "
                 "Set NVIDIA_API_KEY in your .env file."
@@ -115,7 +119,7 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not settings.nvidia_api_key:
+        if not (self._api_key or settings.nvidia_api_key):
             raise RuntimeError(
                 "NVIDIA NIM API key not configured. "
                 "Set NVIDIA_API_KEY in your .env file."
@@ -170,7 +174,7 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        if not settings.nvidia_api_key:
+        if not (self._api_key or settings.nvidia_api_key):
             yield {
                 "type": "error",
                 "error": (
@@ -262,7 +266,7 @@ class NvidiaProvider(LLMProvider):
         Returns a curated list of known free-tier models, or None
         if the API key is not configured (fail-closed).
         """
-        if not settings.nvidia_api_key:
+        if not (self._api_key or settings.nvidia_api_key):
             return None
 
         # Known NVIDIA NIM models — updated from build.nvidia.com
@@ -276,13 +280,13 @@ class NvidiaProvider(LLMProvider):
 
     def health_check(self) -> bool:
         """Check if NVIDIA NIM API is reachable."""
-        if not settings.nvidia_api_key:
+        if not (self._api_key or settings.nvidia_api_key):
             return False
         try:
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(
                     f"{settings.nvidia_base_url}/models",
-                    headers={"Authorization": f"Bearer {settings.nvidia_api_key}"},
+                    headers={"Authorization": f"Bearer {self._api_key or settings.nvidia_api_key}"},
                 )
                 return resp.status_code == 200
         except Exception:

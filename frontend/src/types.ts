@@ -74,6 +74,12 @@ export interface MemorySetting {
   enabled: boolean;
 }
 
+export interface UserSettings {
+  llm_provider: string;
+  api_key: string;
+  model: string;
+}
+
 // ── Model Types ───────────────────────────────────────────
 
 export interface ModelInfo {

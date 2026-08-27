@@ -93,6 +93,14 @@ class ChatResponse(BaseModel):
     memory_extraction: Optional[MemoryExtractionStatus] = None  # Memory extraction outcome
 
 
+class TerminalApprovalResponse(BaseModel):
+    """Response when the agent proposes a command and asks for approval."""
+    type: str = "terminal_approval"  # Discriminator for frontend
+    pending_command: str  # The command the agent wants to run
+    approval_message: str  # Full message shown to the user
+    session_id: int
+
+
 # ── SSE event schemas (Phase 5A streaming) ─────────────────
 
 

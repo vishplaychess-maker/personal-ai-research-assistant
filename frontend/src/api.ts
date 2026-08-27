@@ -12,6 +12,7 @@ import type {
   Document,
   Memory,
   MemorySetting,
+  UserSettings,
   ModelListResponse,
   SessionModelResponse,
 } from "./types";
@@ -206,6 +207,15 @@ export const API = {
     return request<MemorySetting>("/api/settings/memory", {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
+    });
+  },
+  getUserSettings() {
+    return request<UserSettings>("/api/settings");
+  },
+  updateUserSettings(settings: UserSettings) {
+    return request<UserSettings>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
     });
   },
 };

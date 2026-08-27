@@ -13,6 +13,7 @@ from app.schemas.documents import (
     ChatRequest,
     ChatResponse,
     MemoryExtractionStatus,
+    TerminalApprovalResponse,
 )
 from app.services.langgraph_workflow import run_research_workflow
 from app.services.auth_service import get_current_user
@@ -24,6 +25,7 @@ from app.services.streaming_service import (
     run_memory_extraction,
     format_sse,
 )
+from app.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,56 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchS
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return session
+
+
+# ── Terminal approval helpers ─────────────────────────────
+
+
+def _check_pending_approval(db: Session, session_id: int) -> Optional[dict]:
+    """Check if there's a pending terminal approval for this session.
+
+    Looks at the most recent assistant message for the approval marker
+    stored in the citations JSON field.
+    """
+    if not settings.enable_terminal_tool:
+        return None
+
+    last_assistant = (
+        db.query(Message)
+        .filter(
+            Message.session_id == session_id,
+            Message.role == MessageRole.assistant,
+        )
+        .order_by(Message.created_at.desc())
+        .first()
+    )
+    if not last_assistant or not last_assistant.citations:
+        return None
+
+    try:
+        meta = json.loads(last_assistant.citations)
+        if isinstance(meta, dict) and meta.get("pending_approval"):
+            return meta
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return None
+
+
+def _is_approval_response(message: str) -> Optional[bool]:
+    """Check if a user message is an approval/denial response.
+
+    Returns True for approval, False for denial, None if not recognized.
+    """
+    normalized = message.strip().lower()
+    if normalized in ("yes", "y", "approve", "approved", "ok"):
+        return True
+    if normalized in ("no", "n", "deny", "denied", "cancel"):
+        return False
+    return None
+
+
+# ── List messages ─────────────────────────────────────────
 
 
 @router.get(
@@ -60,9 +112,11 @@ def list_messages(
     return [MessageResponse.model_validate(m) for m in messages]
 
 
+# ── Create message (non-streaming) ───────────────────────
+
+
 @router.post(
     "/api/sessions/{session_id}/messages",
-    response_model=ChatResponse,
 )
 def create_message(
     session_id: int,
@@ -74,62 +128,150 @@ def create_message(
     """
     Send a user message and get an AI response via the LangGraph workflow.
 
-    1. Saves the user message
-    2. Runs the research workflow (load_context → retrieve_context → generate_answer → save_output)
-    3. Returns both messages with citations if documents were used
-
-    This is the non-streaming endpoint, kept for backward compatibility.
-    For streaming responses, use POST /api/sessions/{id}/messages/stream.
+    Supports terminal command approval flow:
+      - If a previous assistant message has a pending approval, the user's
+        message is treated as an approval/denial response.
+      - The workflow is resumed with the user's decision.
     """
     session = _get_session_or_404(db, session_id, current_user.id)
 
-    # 1. Save user message
-    user_msg = Message(
-        session_id=session.id,
-        role=MessageRole.user,
-        content=payload.message,
-    )
-    db.add(user_msg)
-    db.commit()
-    db.refresh(user_msg)
+    # Check for pending terminal approval
+    pending = _check_pending_approval(db, session.id)
+    approval_decision = _is_approval_response(payload.message) if pending else None
 
-    # 2. Run the LangGraph workflow (pass user_id so memory extraction
-    #    is attributed to the authenticated user, not a hardcoded user 1)
-    result = run_research_workflow(
-        session_id=session.id,
-        user_input=payload.message,
-        db=db,
-        user_id=current_user.id,
-    )
+    user_msg = None  # Will be set for normal (non-approval) messages
 
+    if pending and approval_decision is not None:
+        # ── Resume workflow with approval/denial ────────────
+        original_user_input = pending.get("original_user_input", payload.message)
+        resume_value = "yes" if approval_decision else "no"
+
+        logger.info(
+            "Resuming workflow for session %d with approval=%s",
+            session.id, resume_value,
+        )
+
+        result = run_research_workflow(
+            session_id=session.id,
+            user_input=original_user_input,
+            db=db,
+            user_id=current_user.id,
+            resume_from=resume_value,
+        )
+
+        # Save the user's approval/denial message
+        user_msg = Message(
+            session_id=session.id,
+            role=MessageRole.user,
+            content=payload.message,
+        )
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+    elif pending and approval_decision is None:
+        # ── Non-approval message while approval pending ──────
+        # Treat as denial
+        original_user_input = pending.get("original_user_input", payload.message)
+        logger.info(
+            "Non-approval message in session %d, treating as denial",
+            session.id,
+        )
+
+        user_msg = Message(
+            session_id=session.id,
+            role=MessageRole.user,
+            content=payload.message,
+        )
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+        result = run_research_workflow(
+            session_id=session.id,
+            user_input=original_user_input,
+            db=db,
+            user_id=current_user.id,
+            resume_from="no",
+        )
+
+    else:
+        # ── Normal message flow ────────────────────────────
+        user_msg = Message(
+            session_id=session.id,
+            role=MessageRole.user,
+            content=payload.message,
+        )
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+        result = run_research_workflow(
+            session_id=session.id,
+            user_input=payload.message,
+            db=db,
+            user_id=current_user.id,
+        )
+
+    # ── Handle approval response ──────────────────────────
+    if result.get("pending_approval"):
+        # The graph interrupted for terminal approval.
+        # The assistant message with the LLM's explanation was already saved
+        # inside generate_answer. Now update its citations with approval
+        # metadata so the next request can detect and resume it.
+        assistant_msg_id = result.get("assistant_message_id")
+        if assistant_msg_id:
+            assistant_msg = db.query(Message).filter(
+                Message.id == assistant_msg_id
+            ).first()
+            if assistant_msg:
+                approval_meta = json.dumps({
+                    "pending_approval": True,
+                    "pending_command": result.get("pending_command", ""),
+                    "original_user_input": payload.message,
+                })
+                assistant_msg.citations = approval_meta
+                db.commit()
+                db.refresh(assistant_msg)
+
+        return TerminalApprovalResponse(
+            pending_command=result.get("pending_command", ""),
+            approval_message=result.get("pending_approval", ""),
+            session_id=session.id,
+        )
+
+    # ── Handle errors ─────────────────────────────────────
     if result.get("error"):
-        # If Ollama is unavailable, save a friendly error message
         assistant_msg = Message(
             session_id=session.id,
             role=MessageRole.assistant,
-            content=f"⚠️ {result['error']}",
+            content=f"\u26a0\ufe0f {result['error']}",
         )
         db.add(assistant_msg)
         db.commit()
         db.refresh(assistant_msg)
     else:
-        # Assistant message was saved inside the workflow. The workflow
-        # returns the message ID to avoid ORM session-detach issues
-        # caused by subsequent db.commit() calls in the extract_memory node.
         assistant_msg_id = result.get("assistant_message_id")
         if assistant_msg_id is None:
-            raise HTTPException(status_code=500, detail="Workflow did not produce an assistant message")
-        assistant_msg = db.query(Message).filter(Message.id == assistant_msg_id).first()
+            raise HTTPException(
+                status_code=500,
+                detail="Workflow did not produce an assistant message",
+            )
+        assistant_msg = db.query(Message).filter(
+            Message.id == assistant_msg_id
+        ).first()
         if assistant_msg is None:
-            raise HTTPException(status_code=500, detail=f"Assistant message {assistant_msg_id} not found after workflow")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Assistant message {assistant_msg_id} not found after workflow",
+            )
 
-    # Refresh the session object (may have been expired by workflow commits)
-    # before updating its timestamp, then commit.
+    # Refresh session timestamp
     db.refresh(session)
     session.updated_at = __import__("datetime").datetime.utcnow()
     db.commit()
 
-    # Build extraction status if the workflow ran memory extraction
+    # Build extraction status
     extract_raw = result.get("extraction_result")
     extraction_status: Optional[MemoryExtractionStatus] = None
     if extract_raw is not None:
@@ -172,11 +314,11 @@ async def stream_chat(
     This endpoint uses Server-Sent Events to deliver tokens as they are
     generated by Ollama. The event stream has this sequence:
 
-      1. ``event: start`` — Stream begins, includes session metadata
-      2. ``event: token`` — Zero or more token events (one per generated token)
-      3. ``event: complete`` — Stream finished successfully; assistant message saved
-         OR ``event: error`` — A non-recoverable error occurred
-         OR ``event: cancelled`` — Client disconnected before completion
+      1. ``event: start`` -- Stream begins, includes session metadata
+      2. ``event: token`` -- Zero or more token events (one per generated token)
+      3. ``event: complete`` -- Stream finished successfully; assistant message saved
+         OR ``event: error`` -- A non-recoverable error occurred
+         OR ``event: cancelled`` -- Client disconnected before completion
 
     The non-streaming POST /api/sessions/{id}/messages endpoint remains
     available for backward compatibility.
@@ -225,7 +367,6 @@ async def stream_chat(
                 # Intercept complete events to save the message
                 if sse_event.startswith("event: complete"):
                     # Parse the complete event data to get the content
-                    # The format is "event: complete\ndata: {...}\n\n"
                     lines = sse_event.strip().split("\n")
                     for line in lines:
                         if line.startswith("data: "):

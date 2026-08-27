@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
-from app.models.models import AppSetting
+from app.models.models import AppSetting, UserSetting
 
 
 MEMORY_ENABLED_KEY = "memory_enabled"
@@ -58,3 +58,50 @@ def set_memory_enabled(db: DBSession, enabled: bool) -> bool:
         row.value = value_str
     db.commit()
     return enabled
+
+
+def get_user_settings(db: DBSession, user_id: int) -> Optional[UserSetting]:
+    """Return the user's LLM provider settings row, or None if unset."""
+    return db.query(UserSetting).filter(UserSetting.user_id == user_id).first()
+
+
+def save_user_settings(
+    db: DBSession,
+    user_id: int,
+    llm_provider: str,
+    api_key: str,
+    model: str,
+) -> UserSetting:
+    """Upsert the user's LLM provider settings and return the saved row."""
+    row = db.query(UserSetting).filter(UserSetting.user_id == user_id).first()
+    if row is None:
+        row = UserSetting(
+            user_id=user_id,
+            llm_provider=llm_provider,
+            api_key=api_key,
+            model=model,
+        )
+        db.add(row)
+    else:
+        row.llm_provider = llm_provider
+        row.api_key = api_key
+        row.model = model
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_user_llm_config(db: DBSession, user_id: int) -> Optional[dict]:
+    """Return a provider config dict for the LLM factory, or None.
+
+    Returns None when the user has not set a provider, so callers fall
+    back to the global .env configuration and the cached singleton.
+    """
+    row = get_user_settings(db, user_id)
+    if row is None or not row.llm_provider:
+        return None
+    return {
+        "provider": row.llm_provider,
+        "api_key": row.api_key or None,
+        "model": row.model or None,
+    }

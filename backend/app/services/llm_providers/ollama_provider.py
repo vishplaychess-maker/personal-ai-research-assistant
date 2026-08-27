@@ -15,13 +15,16 @@ from app.services.llm_providers.base import LLMProvider
 class OllamaProvider(LLMProvider):
     """Provider for local Ollama instances."""
 
+    def __init__(self, model: Optional[str] = None):
+        self._model = model
+
     @property
     def name(self) -> str:
         return "Ollama"
 
     @property
     def default_model(self) -> str:
-        return settings.default_model
+        return self._model or settings.default_model
 
     def generate_response(
         self,
@@ -37,7 +40,7 @@ class OllamaProvider(LLMProvider):
         return _ollama_generate(
             messages=messages,
             system_prompt=system_prompt,
-            model_name=model_name,
+            model_name=model_name or self._model,
         )
 
     def generate_json_response(
@@ -53,7 +56,7 @@ class OllamaProvider(LLMProvider):
         return _ollama_generate_json(
             messages=messages,
             system_prompt=system_prompt,
-            model_name=model_name,
+            model_name=model_name or self._model,
         )
 
     async def generate_stream_async(
@@ -69,7 +72,7 @@ class OllamaProvider(LLMProvider):
         async for chunk in _ollama_stream(
             messages=messages,
             system_prompt=system_prompt,
-            model_name=model_name,
+            model_name=model_name or self._model,
         ):
             yield chunk
 

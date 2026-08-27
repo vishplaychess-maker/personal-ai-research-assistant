@@ -3,6 +3,7 @@ import { useStreaming } from "./useStreaming";
 import { useAuth } from "./AuthContext";
 import { AuthScreen } from "./AuthScreen";
 import { SystemPromptEditor } from "./SystemPromptEditor";
+import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
 import { ChatArea } from "./ChatArea";
 import { CitationPopup } from "./CitationPopup";
@@ -50,6 +51,7 @@ function App() {
 
   // Model & system prompt state
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Memory state
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -414,6 +416,7 @@ function App() {
         onCreateSession={handleCreateSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
+        onOpenSettings={() => setShowSettings(true)}
         onLogout={logout}
       />
 
@@ -504,6 +507,11 @@ function App() {
       {/* System prompt editor modal */}
       {showSystemPromptEditor && activeSession && (
         <SystemPromptEditor sessionId={activeSession.id} onClose={() => setShowSystemPromptEditor(false)} />
+      )}
+
+      {/* Settings modal */}
+      {showSettings && (
+        <Settings onClose={() => setShowSettings(false)} />
       )}
     </div>
   );

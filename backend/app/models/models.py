@@ -34,6 +34,31 @@ class AppSetting(Base):
         return f"<AppSetting(key='{self.key}', value='{self.value}')>"
 
 
+class UserSetting(Base):
+    """Per-user LLM provider settings (provider, API key, model).
+
+    Overrides the global .env configuration when set, so each user can
+    pick their own provider/model without restarting Docker.
+    """
+
+    __tablename__ = "user_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    llm_provider = Column(String(50), nullable=True)  # ollama | openrouter | nvidia
+    api_key = Column(String(500), nullable=True)
+    model = Column(String(255), nullable=True)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    def __repr__(self):
+        return f"<UserSetting(user_id={self.user_id}, provider='{self.llm_provider}')>"
+
+
 class DocumentStatus(str, enum.Enum):
     processing = "processing"
     ready = "ready"

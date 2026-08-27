@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Allowed CORS origin for the frontend (never "*" with credentials).
     frontend_origin: str = "http://localhost:5173"
 
+    # ── Terminal tool (Phase 9 — Agent Tools) ─────────────
+    # Enable the terminal executor tool for the AI agent.
+    # When true, the agent can propose shell commands for user approval.
+    enable_terminal_tool: bool = False
+
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia"
     llm_provider: str = "ollama"
