@@ -180,6 +180,7 @@ async def upload_document(
             chroma_metadatas.append({
                 "document_id": doc.id,
                 "original_filename": doc.filename,
+                "source": doc.filename,
                 "page_number": chunk.get("page_number") or 0,
                 "chunk_index": chunk["chunk_index"],
                 "chunk_db_id": 0,  # Will update after DB insert

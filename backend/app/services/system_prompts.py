@@ -94,6 +94,17 @@ To run code, wrap it EXACTLY in this format:
 The code will be executed and the output returned to you so you can report the result or debug errors.
 """""
 
+RAG_CITATION_RULE = """## Citing Sources (Retrieved Documents)
+When you answer a question using the "Retrieved Documents" context block:
+1. You MUST cite where the information came from at the end of each sentence or paragraph that uses it.
+2. Use EXACTLY this format: [Source: filename, Page: X]
+   - filename = the document name shown in the context.
+   - Page: X = the page number shown in the context.
+3. If the page number is not shown, cite as: [Source: filename].
+4. Never invent sources, filenames, or page numbers — only cite documents present in the provided context.
+5. Keep the citation right after the statement it supports (end of sentence/paragraph).
+"""
+
 # ── Full base prompts (terminal enabled / disabled) ────────
 
 
@@ -116,6 +127,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     parts.append(YOUTUBE_SUMMARIZER_TOOL_CONTEXT)
 
     parts.append(PYTHON_SANDBOX_TOOL_CONTEXT)
+
+    parts.append(RAG_CITATION_RULE)
 
     parts.append(
         "Answer clearly, concisely, and with structure. "
