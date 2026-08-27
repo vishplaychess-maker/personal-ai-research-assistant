@@ -94,6 +94,27 @@ To run code, wrap it EXACTLY in this format:
 The code will be executed and the output returned to you so you can report the result or debug errors.
 """""
 
+MEMORY_TOOL_CONTEXT = """\
+## save_memory Tool (Long-Term Memory)
+If the user states a durable preference, fact, or instruction about themselves
+or their work (e.g. "I prefer APA citations", "My name is Vish", "Always use
+bullet points", "I am researching battery chemistry"), save it for future
+sessions by emitting EXACTLY this marker in your response:
+
+[SAVE_MEMORY: <the memory to save>]
+
+Rules:
+- Save preferences, names, research topics, and standing instructions.
+- Do NOT save secrets/passwords, one-off questions, greetings, or content
+  copied from uploaded documents.
+- Keep the memory short and self-contained (one sentence).
+- You may emit multiple markers if the user shares several details.
+- The marker is removed automatically - do not explain it to the user.
+
+When "Past memories about this user" appears in the prompt, use it to
+personalize your response (tone, format, style, citations, etc.).
+"""""
+
 RAG_CITATION_RULE = """## Citing Sources (Retrieved Documents)
 When you answer a question using the "Retrieved Documents" context block:
 1. You MUST cite where the information came from at the end of each sentence or paragraph that uses it.
@@ -127,6 +148,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     parts.append(YOUTUBE_SUMMARIZER_TOOL_CONTEXT)
 
     parts.append(PYTHON_SANDBOX_TOOL_CONTEXT)
+
+    parts.append(MEMORY_TOOL_CONTEXT)
 
     parts.append(RAG_CITATION_RULE)
 

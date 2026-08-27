@@ -361,6 +361,18 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
             model_name=model_name,
             provider_config=provider_config,
         )
+        # save_memory tool: persist any [SAVE_MEMORY: ...] markers the LLM emitted
+        if db is not None:
+            from app.tools.memory_tool import process_memory_markers
+            cleaned, saved_count = process_memory_markers(
+                response, db, state.get("user_id", 1), state.get("session_id")
+            )
+            if saved_count:
+                logger.info(
+                    "save_memory tool saved %d memory(ies) for user %s",
+                    saved_count, state.get("user_id", 1),
+                )
+            response = cleaned
         state["response"] = response
     except (ConnectionError, TimeoutError, RuntimeError) as exc:
         state["error"] = str(exc)

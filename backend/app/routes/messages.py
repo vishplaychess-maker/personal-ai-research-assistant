@@ -374,6 +374,19 @@ async def stream_chat(
                             full_response_content = data.get("content", "")
                             break
 
+                    # save_memory tool: persist [SAVE_MEMORY: ...] markers the
+                    # LLM emitted during streaming (strip them from saved text).
+                    from app.tools.memory_tool import process_memory_markers
+                    cleaned_content, saved_count = process_memory_markers(
+                        full_response_content, db, current_user.id, session_id
+                    )
+                    if saved_count:
+                        logger.info(
+                            "save_memory tool saved %d memory(ies) for user %s",
+                            saved_count, current_user.id,
+                        )
+                    full_response_content = cleaned_content
+
                     # Save assistant message to database
                     try:
                         assistant_msg = save_assistant_message(
