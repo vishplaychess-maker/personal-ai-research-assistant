@@ -406,7 +406,7 @@ function App() {
   // ── Render ─────────────────────────────────────────────
 
   return (
-    <div className="app">
+    <div className="app min-h-screen bg-background text-foreground transition-colors duration-300">
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}

@@ -1,11 +1,12 @@
 """
-NVIDIA NIM LLM provider.
+Hugging Face LLM provider.
 
-Uses NVIDIA's Inference Microservices (NIM) OpenAI-compatible REST API
-for chat generation. NVIDIA provides free credits for new accounts
-with access to models like Llama 3.2.
+Uses Hugging Face's Serverless Inference API (OpenAI-compatible) for chat
+generation. A free Hugging Face token gives access to hundreds of free
+models.
 
-API docs: https://docs.api.nvidia.com/nim/reference/
+Base URL: https://router.huggingface.co/v1
+API docs: https://huggingface.co/docs/inference-providers/en/index
 """
 
 import json
@@ -23,9 +24,31 @@ logger = logging.getLogger(__name__)
 CONNECT_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 120.0
 
+# Popular free serverless chat models, used as a fallback when the
+# /models endpoint returns no usable chat models.
+_POPULAR_CHAT_MODELS = [
+    "meta-llama/Meta-Llama-3-8B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "google/gemma-2-9b-it",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "HuggingFaceH4/zephyr-7b-beta",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "deepseek-ai/deepseek-llm-7b-chat",
+]
 
-class NvidiaProvider(LLMProvider):
-    """Provider for NVIDIA NIM (OpenAI-compatible API)."""
+# Model-id substrings that indicate non-chat models (embedding, rerank,
+# sentence-transformers, or image generation) that should be filtered out.
+_NON_CHAT_MARKERS = (
+    "embed",
+    "rerank",
+    "sentence-transformers",
+    "stable-diffusion",
+    "flux",
+)
+
+
+class HuggingFaceProvider(LLMProvider):
+    """Provider for Hugging Face Serverless Inference (OpenAI-compatible)."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self._api_key = api_key
@@ -33,15 +56,15 @@ class NvidiaProvider(LLMProvider):
 
     @property
     def name(self) -> str:
-        return "NVIDIA NIM"
+        return "Hugging Face"
 
     @property
     def default_model(self) -> str:
-        return self._model or settings.nvidia_model
+        return self._model or settings.huggingface_model
 
     def _build_headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {self._api_key or settings.nvidia_api_key}",
+            "Authorization": f"Bearer {self._api_key or settings.huggingface_api_key}",
             "Content-Type": "application/json",
         }
 
@@ -58,7 +81,7 @@ class NvidiaProvider(LLMProvider):
         return result
 
     def _resolve_model(self, model_name: Optional[str] = None) -> str:
-        return model_name or self._model or settings.nvidia_model
+        return model_name or self._model or settings.huggingface_model
 
     def generate_response(
         self,
@@ -66,18 +89,18 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not (self._api_key or settings.nvidia_api_key):
+        if not (self._api_key or settings.huggingface_api_key):
             raise RuntimeError(
-                "NVIDIA NIM API key not configured. "
-                "Set NVIDIA_API_KEY in your .env file."
+                "Hugging Face API key not configured. "
+                "Set HUGGINGFACE_API_KEY in your .env file."
             )
 
         model = self._resolve_model(model_name)
         payload = {
             "model": model,
             "messages": self._build_messages(messages, system_prompt),
-            "max_tokens": settings.nvidia_max_tokens,
-            "temperature": settings.nvidia_temperature,
+            "max_tokens": settings.huggingface_max_tokens,
+            "temperature": settings.huggingface_temperature,
         }
 
         try:
@@ -85,31 +108,31 @@ class NvidiaProvider(LLMProvider):
                 timeout=httpx.Timeout(GENERATE_TIMEOUT, connect=CONNECT_TIMEOUT)
             ) as client:
                 resp = client.post(
-                    f"{settings.nvidia_base_url}/chat/completions",
+                    f"{settings.huggingface_base_url}/chat/completions",
                     headers=self._build_headers(),
                     json=payload,
                 )
         except httpx.ConnectError:
             raise ConnectionError(
-                "Cannot connect to NVIDIA NIM. Check your internet connection."
+                "Cannot connect to Hugging Face. Check your internet connection."
             )
         except httpx.TimeoutException:
             raise TimeoutError(
-                "NVIDIA NIM did not respond in time. The request may be too long."
+                "Hugging Face did not respond in time. The request may be too long."
             )
         except httpx.RequestError as exc:
-            raise RuntimeError("NVIDIA NIM request failed.") from exc
+            raise RuntimeError("Hugging Face request failed.") from exc
 
         if resp.status_code != 200:
             detail = resp.text[:300]
             raise RuntimeError(
-                f"NVIDIA NIM returned HTTP {resp.status_code}: {detail}"
+                f"Hugging Face returned HTTP {resp.status_code}: {detail}"
             )
 
         data = resp.json()
         choices = data.get("choices", [])
         if not choices:
-            raise RuntimeError("NVIDIA NIM returned no choices.")
+            raise RuntimeError("Hugging Face returned no choices.")
 
         return choices[0].get("message", {}).get("content", "").strip()
 
@@ -119,10 +142,10 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
-        if not (self._api_key or settings.nvidia_api_key):
+        if not (self._api_key or settings.huggingface_api_key):
             raise RuntimeError(
-                "NVIDIA NIM API key not configured. "
-                "Set NVIDIA_API_KEY in your .env file."
+                "Hugging Face API key not configured. "
+                "Set HUGGINGFACE_API_KEY in your .env file."
             )
 
         model = self._resolve_model(model_name)
@@ -142,29 +165,29 @@ class NvidiaProvider(LLMProvider):
                 timeout=httpx.Timeout(GENERATE_TIMEOUT, connect=CONNECT_TIMEOUT)
             ) as client:
                 resp = client.post(
-                    f"{settings.nvidia_base_url}/chat/completions",
+                    f"{settings.huggingface_base_url}/chat/completions",
                     headers=self._build_headers(),
                     json=payload,
                 )
         except httpx.ConnectError:
             raise ConnectionError(
-                "Cannot connect to NVIDIA NIM. Check your internet connection."
+                "Cannot connect to Hugging Face. Check your internet connection."
             )
         except httpx.TimeoutException:
-            raise TimeoutError("NVIDIA NIM did not respond in time.")
+            raise TimeoutError("Hugging Face did not respond in time.")
         except httpx.RequestError as exc:
-            raise RuntimeError("NVIDIA NIM request failed.") from exc
+            raise RuntimeError("Hugging Face request failed.") from exc
 
         if resp.status_code != 200:
             detail = resp.text[:300]
             raise RuntimeError(
-                f"NVIDIA NIM returned HTTP {resp.status_code}: {detail}"
+                f"Hugging Face returned HTTP {resp.status_code}: {detail}"
             )
 
         data = resp.json()
         choices = data.get("choices", [])
         if not choices:
-            raise RuntimeError("NVIDIA NIM returned no choices.")
+            raise RuntimeError("Hugging Face returned no choices.")
 
         return choices[0].get("message", {}).get("content", "").strip()
 
@@ -174,12 +197,12 @@ class NvidiaProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        if not (self._api_key or settings.nvidia_api_key):
+        if not (self._api_key or settings.huggingface_api_key):
             yield {
                 "type": "error",
                 "error": (
-                    "NVIDIA NIM API key not configured. "
-                    "Set NVIDIA_API_KEY in your .env file."
+                    "Hugging Face API key not configured. "
+                    "Set HUGGINGFACE_API_KEY in your .env file."
                 ),
             }
             return
@@ -188,8 +211,8 @@ class NvidiaProvider(LLMProvider):
         payload = {
             "model": model,
             "messages": self._build_messages(messages, system_prompt),
-            "max_tokens": settings.nvidia_max_tokens,
-            "temperature": settings.nvidia_temperature,
+            "max_tokens": settings.huggingface_max_tokens,
+            "temperature": settings.huggingface_temperature,
             "stream": True,
         }
 
@@ -199,7 +222,7 @@ class NvidiaProvider(LLMProvider):
             ) as client:
                 async with client.stream(
                     "POST",
-                    f"{settings.nvidia_base_url}/chat/completions",
+                    f"{settings.huggingface_base_url}/chat/completions",
                     headers=self._build_headers(),
                     json=payload,
                 ) as response:
@@ -208,7 +231,7 @@ class NvidiaProvider(LLMProvider):
                         detail_text = detail.decode("utf-8", errors="replace")[:300]
                         yield {
                             "type": "error",
-                            "error": f"NVIDIA NIM returned HTTP {response.status_code}: {detail_text}",
+                            "error": f"Hugging Face returned HTTP {response.status_code}: {detail_text}",
                         }
                         return
 
@@ -246,93 +269,84 @@ class NvidiaProvider(LLMProvider):
         except httpx.ConnectError:
             yield {
                 "type": "error",
-                "error": "Cannot connect to NVIDIA NIM. Check your internet connection.",
+                "error": "Cannot connect to Hugging Face. Check your internet connection.",
             }
         except httpx.TimeoutException:
             yield {
                 "type": "error",
-                "error": "NVIDIA NIM did not respond in time.",
+                "error": "Hugging Face did not respond in time.",
             }
         except httpx.RequestError:
             yield {
                 "type": "error",
-                "error": "NVIDIA NIM request failed.",
+                "error": "Hugging Face request failed.",
             }
 
     def fetch_available_chat_models(self) -> Optional[List[str]]:
         """
-        Dynamically fetch available chat models from NVIDIA NIM's
+        Dynamically fetch available chat models from Hugging Face's
         OpenAI-compatible ``GET /models`` endpoint.
 
         Returns None if the API key is not configured (fail-closed).
-        Returns an empty list on any request or parsing failure.
+        Falls back to a curated list of popular free chat models when the
+        endpoint returns no usable models or fails.
         """
-        if not (self._api_key or settings.nvidia_api_key):
+        if not (self._api_key or settings.huggingface_api_key):
             return None
 
+        chat_models: List[str] = []
         try:
             with httpx.Client(
                 timeout=httpx.Timeout(15.0, connect=10.0)
             ) as client:
                 resp = client.get(
-                    f"{settings.nvidia_base_url}/models",
+                    f"{settings.huggingface_base_url}/models",
                     headers={
-                        "Authorization": f"Bearer {self._api_key or settings.nvidia_api_key}",
+                        "Authorization": f"Bearer {self._api_key or settings.huggingface_api_key}",
                     },
                 )
+            if resp.status_code == 200:
+                data = resp.json()
+                models_data = data.get("data", [])
+                for model in models_data:
+                    model_id = model.get("id", "")
+                    if not model_id:
+                        continue
+                    lowered = model_id.lower()
+                    if any(m in lowered for m in _NON_CHAT_MARKERS):
+                        continue
+                    chat_models.append(model_id)
         except httpx.ConnectError:
-            logger.error("Cannot connect to NVIDIA NIM to fetch models.")
-            return []
+            logger.error("Cannot connect to Hugging Face to fetch models.")
         except httpx.TimeoutException:
-            logger.error("NVIDIA NIM /models request timed out.")
-            return []
+            logger.error("Hugging Face /models request timed out.")
         except httpx.RequestError as exc:
-            logger.error("NVIDIA NIM /models request failed: %s", exc)
-            return []
-
-        if resp.status_code != 200:
-            logger.error(
-                "NVIDIA NIM /models returned HTTP %d: %s",
-                resp.status_code,
-                resp.text[:200],
-            )
-            return []
-
-        try:
-            data = resp.json()
+            logger.error("Hugging Face /models request failed: %s", exc)
         except Exception:
-            logger.error("Failed to parse NVIDIA NIM /models response.")
-            return []
+            logger.error("Failed to parse Hugging Face /models response.")
 
-        models_data = data.get("data", [])
-        chat_models: List[str] = []
-
-        for model in models_data:
-            model_id = model.get("id", "")
-            if not model_id:
-                continue
-            # Filter out embedding and reranking models (not chat-capable).
-            lowered = model_id.lower()
-            if any(kw in lowered for kw in ("embed", "rerank")):
-                continue
-            chat_models.append(model_id)
+        if not chat_models:
+            logger.warning(
+                "Hugging Face /models returned no usable chat models; "
+                "falling back to a curated popular list."
+            )
+            chat_models = list(_POPULAR_CHAT_MODELS)
 
         chat_models.sort()
-
         logger.info(
-            "Fetched %d chat models from NVIDIA NIM.", len(chat_models)
+            "Fetched %d chat models from Hugging Face.", len(chat_models)
         )
         return chat_models
 
     def health_check(self) -> bool:
-        """Check if NVIDIA NIM API is reachable."""
-        if not (self._api_key or settings.nvidia_api_key):
+        """Check if Hugging Face API is reachable."""
+        if not (self._api_key or settings.huggingface_api_key):
             return False
         try:
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(
-                    f"{settings.nvidia_base_url}/models",
-                    headers={"Authorization": f"Bearer {self._api_key or settings.nvidia_api_key}"},
+                    f"{settings.huggingface_base_url}/models",
+                    headers={"Authorization": f"Bearer {self._api_key or settings.huggingface_api_key}"},
                 )
                 return resp.status_code == 200
         except Exception:

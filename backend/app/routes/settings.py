@@ -78,6 +78,33 @@ class SettingsUpdate(BaseModel):
     model: str = ""
 
 
+def _validate_api_key_format(provider: str, api_key: str) -> None:
+    """Reject obviously mismatched API keys (e.g. an NVIDIA key saved for
+    OpenRouter). An empty key is allowed — it means "use the server default".
+
+    Provider key prefixes:
+      - openrouter  -> sk-or-
+      - nvidia      -> nvapi-
+      - huggingface -> hf_
+    """
+    if not api_key:
+        return
+    expected_prefix = {
+        "openrouter": "sk-or-",
+        "nvidia": "nvapi-",
+        "huggingface": "hf_",
+    }.get(provider)
+    if expected_prefix and not api_key.startswith(expected_prefix):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The API key does not look like a {provider} key "
+                f"(expected prefix '{expected_prefix}'). Double-check the key "
+                "and the selected provider."
+            ),
+        )
+
+
 @router.get("", response_model=SettingsResponse)
 def read_user_settings(
     db: Session = Depends(get_db),
@@ -107,13 +134,15 @@ def update_user_settings(
 ):
     """Update the current user's LLM provider, API key, and model."""
     provider = (payload.llm_provider or "").strip().lower()
-    if provider not in ("ollama", "openrouter", "nvidia"):
+    if provider not in ("ollama", "openrouter", "nvidia", "huggingface"):
         raise HTTPException(status_code=400, detail="Invalid llm_provider")
+    api_key = (payload.api_key or "").strip()
+    _validate_api_key_format(provider, api_key)
     row = save_user_settings(
         db,
         user_id=current_user.id,
         llm_provider=provider,
-        api_key=(payload.api_key or "").strip(),
+        api_key=api_key,
         model=(payload.model or "").strip(),
     )
     return SettingsResponse(

@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     enable_terminal_tool: bool = False
 
     # ── Model / LLM provider settings ───────────────────
-    # Provider: "ollama" | "openrouter" | "nvidia"
+    # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface"
     llm_provider: str = "ollama"
     default_model: str = "llama3.2:3b"
     ollama_tags_timeout: int = 5
@@ -74,9 +74,16 @@ class Settings(BaseSettings):
     # NVIDIA NIM (OpenAI-compatible API)
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "meta/llama-3.2-3b-instruct"
+    nvidia_model: str = "nvidia/llama-3.1-nemotron-70b-instruct"
     nvidia_max_tokens: int = 2048
     nvidia_temperature: float = 0.7
+
+    # Hugging Face (OpenAI-compatible Serverless Inference API)
+    huggingface_api_key: str = ""
+    huggingface_base_url: str = "https://router.huggingface.co/v1"
+    huggingface_model: str = "meta-llama/Meta-Llama-3-8B-Instruct"
+    huggingface_max_tokens: int = 2048
+    huggingface_temperature: float = 0.7
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

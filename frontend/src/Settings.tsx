@@ -1,5 +1,16 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { API } from "./api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
 import type { UserSettings } from "./types";
 
 interface SettingsProps {
@@ -10,46 +21,8 @@ const PROVIDERS = [
   { value: "openrouter", label: "OpenRouter" },
   { value: "ollama", label: "Ollama" },
   { value: "nvidia", label: "NVIDIA" },
+  { value: "huggingface", label: "Hugging Face" },
 ];
-
-const overlayStyle: CSSProperties = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  background: "rgba(0, 0, 0, 0.55)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-
-const panelStyle: CSSProperties = {
-  background: "#1e1e2e",
-  color: "#e0e0e0",
-  padding: "1.5rem",
-  borderRadius: "12px",
-  width: "min(420px, 92vw)",
-  boxShadow: "0 8px 40px rgba(0, 0, 0, 0.4)",
-};
-
-const inputStyle: CSSProperties = {
-  background: "#16161f",
-  border: "1px solid #3a3a4a",
-  color: "#e0e0e0",
-  padding: "0.5rem 0.7rem",
-  borderRadius: "6px",
-};
-
-const buttonStyle: CSSProperties = {
-  background: "#3a3a4a",
-  border: "none",
-  color: "#ffffff",
-  padding: "0.5rem 1rem",
-  borderRadius: "6px",
-  cursor: "pointer",
-};
 
 export function Settings({ onClose }: SettingsProps) {
   const [provider, setProvider] = useState("openrouter");
@@ -79,14 +52,6 @@ export function Settings({ onClose }: SettingsProps) {
     };
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -104,25 +69,33 @@ export function Settings({ onClose }: SettingsProps) {
   };
 
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ margin: "0 0 1rem", fontSize: "1.25rem" }}>Settings</h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>
+            Configure your default LLM provider, API key, and model. Changes
+            apply immediately without restarting.
+          </DialogDescription>
+        </DialogHeader>
+
         {loading ? (
-          <p>Loading settings...</p>
+          <p className="py-4 text-sm text-muted-foreground">Loading settings…</p>
         ) : (
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSave();
             }}
-            style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}
+            className="grid gap-4 py-2"
           >
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-              <span>LLM Provider</span>
+            <div className="grid gap-2">
+              <Label htmlFor="llm-provider">LLM Provider</Label>
               <select
+                id="llm-provider"
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
-                style={inputStyle}
+                className="flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>
@@ -130,56 +103,45 @@ export function Settings({ onClose }: SettingsProps) {
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-              <span>API Key</span>
-              <input
+            <div className="grid gap-2">
+              <Label htmlFor="api-key">API Key</Label>
+              <Input
+                id="api-key"
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="Leave blank to use server default"
                 autoComplete="off"
-                style={inputStyle}
               />
-            </label>
+            </div>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-              <span>Model Name</span>
-              <input
-                type="text"
+            <div className="grid gap-2">
+              <Label htmlFor="model-name">Model Name</Label>
+              <Input
+                id="model-name"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="e.g. meta-llama/llama-3.2-3b-instruct"
-                style={inputStyle}
+                autoComplete="off"
               />
-            </label>
-
-            {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: "0.6rem",
-                marginTop: "0.4rem",
-              }}
-            >
-              <button type="button" onClick={onClose} style={buttonStyle}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving}
-                style={{ ...buttonStyle, background: "#4f6ef7" }}
-              >
-                {saving ? "Saving..." : "Save"}
-              </button>
             </div>
+
+            {error && <p className="text-sm text-destructive">{error}</p>}
           </form>
         )}
-      </div>
-    </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={saving || loading}>
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -44,6 +44,9 @@ def _build_provider(
     elif provider_name == "nvidia":
         from app.services.llm_providers.nvidia_provider import NvidiaProvider
         return NvidiaProvider(api_key=api_key, model=model)
+    elif provider_name == "huggingface":
+        from app.services.llm_providers.huggingface_provider import HuggingFaceProvider
+        return HuggingFaceProvider(api_key=api_key, model=model)
     else:
         logger.warning(
             "Unknown LLM provider '%s', falling back to Ollama", provider_name
@@ -81,6 +84,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "ollama": "ollama",
             "openrouter": "openrouter",
             "nvidia": "nvidia nim",
+            "huggingface": "hugging face",
         }
         if alias_map.get(provider_name, provider_name) != expected:
             _provider_instance = None
