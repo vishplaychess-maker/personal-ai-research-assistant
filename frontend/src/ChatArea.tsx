@@ -66,7 +66,7 @@ function renderContent(
   }
 
   return (
-    <div className="prose prose-slate dark:prose-invert max-w-none text-sm leading-relaxed">
+    <div className="prose max-w-none text-sm leading-relaxed">
       <MarkdownRenderer
         content={msg.content}
         citations={parsedCitations}
@@ -391,7 +391,7 @@ export function ChatArea({
                         "max-w-[85%] text-sm leading-relaxed",
                         msg.role === "user"
                           ? "rounded-2xl rounded-tr-md bg-white/5 px-4 py-2.5 text-foreground"
-                          : "w-full px-1"
+                          : "w-full px-1 text-white"
                       )}
                     >
                       {renderContent(msg, onCitationClick)}
@@ -446,7 +446,7 @@ export function ChatArea({
                 {/* Streaming Message */}
                 {isStreaming && (
                   <div className="animate-message-in flex justify-start">
-                    <div className="w-full max-w-[85%] px-1 py-1 text-sm leading-relaxed text-foreground">
+                    <div className="w-full max-w-[85%] px-1 py-1 text-sm leading-relaxed text-white">
                       {streamedContent ? (
                         <div className="whitespace-pre-wrap">
                           {streamedContent}
@@ -467,7 +467,7 @@ export function ChatArea({
                 {/* Generation Stopped */}
                 {generationStopped && (
                   <div className="flex justify-center my-2 animate-message-in">
-                    <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-muted-foreground">
+                    <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-white/70">
                       ⏹ Generation stopped — partial response was not saved
                     </span>
                   </div>

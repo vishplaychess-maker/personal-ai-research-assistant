@@ -222,6 +222,53 @@ button, a, input, textarea, select, [role="button"] {
 .prose h3 { font-size: 1.125rem; font-weight: 600; margin: 1em 0 0.5em; }
 .prose hr { border-color: hsl(var(--border)); margin: 1.5em 0; }
 
+/* Force pure white text in dark mode for all markdown content */
+.dark .prose,
+.dark .prose p,
+.dark .prose li,
+.dark .prose strong,
+.dark .prose em,
+.dark .prose h1,
+.dark .prose h2,
+.dark .prose h3,
+.dark .prose h4,
+.dark .prose h5,
+.dark .prose h6,
+.dark .prose blockquote,
+.dark .prose td,
+.dark .prose th,
+.dark .prose code {
+  color: #FFFFFF !important;
+}
+
+/* Keep links visible with indigo in dark mode */
+.dark .prose a {
+  color: #818CF8 !important;
+}
+.dark .prose a:hover {
+  color: #A5B4FC !important;
+}
+
+/* Code blocks - ensure text is readable */
+.dark .prose pre {
+  background: #1A1B26;
+}
+.dark .prose pre code {
+  color: #E2E8F0;
+}
+
+/* Inline code */
+.dark .prose :not(pre) > code {
+  background: #1A1B26;
+  color: #F8FAFC;
+}
+
+/* Blockquote */
+.dark .prose blockquote {
+  color: #CBD5E1;
+  border-left-color: #6366F1;
+}
+
 /* Message animation */
 @keyframes message-in {
   from { opacity: 0; transform: translateY(8px); }
