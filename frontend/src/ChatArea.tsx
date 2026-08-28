@@ -22,6 +22,8 @@ import {
   VolumeX,
   Sparkles,
   ChevronDown,
+  Image as ImageIcon,
+  X,
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ModelSelector } from "./ModelSelector";
@@ -55,7 +57,18 @@ function renderContent(
   onCitationClick: (citation: Citation) => void
 ) {
   if (msg.role !== "assistant") {
-    return <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>;
+    return (
+      <div className="flex flex-col gap-2">
+        {msg.image_url && (
+          <img
+            src={msg.image_url}
+            alt="User attached image"
+            className="max-w-xs rounded-lg self-end"
+          />
+        )}
+        <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
+      </div>
+    );
   }
 
   let parsedCitations: Citation[] = [];
@@ -87,7 +100,7 @@ interface ChatAreaProps {
 
   input: string;
   onInputChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (imageUrl?: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   inputRef: React.RefObject<HTMLTextAreaElement> | React.MutableRefObject<HTMLTextAreaElement | null>;
 
@@ -155,6 +168,7 @@ export function ChatArea({
   const streamingEndRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);  // Base64 image data URL
 
   const indicators = useMemo(() => ({
     hasSources: sourcesUsedIds.size > 0,
@@ -233,7 +247,7 @@ export function ChatArea({
           </div>
           <div className="min-w-0">
             <h1 className="truncate font-medium text-foreground">{activeSession.title}</h1>
-            <p className="truncate text-xs text-muted-foreground">
+            <p className="truncate text-xs text-secondary">
               {messages.length} message{messages.length !== 1 ? "s" : ""}
             </p>
           </div>
@@ -319,10 +333,29 @@ export function ChatArea({
                 <div className="w-full max-w-xl animate-fade-in-up">
                   {/* Centered Input Box - Grok Style */}
                   <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+                    {/* Image preview */}
+                    {attachedImage && (
+                      <div className="relative mb-2 flex items-center gap-2 px-1">
+                        <img
+                          src={attachedImage}
+                          alt="Attached image"
+                          className="h-16 w-auto rounded-lg object-cover"
+                        />
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => setAttachedImage(null)}
+                          className="h-6 w-6 rounded-lg hover:bg-white/5"
+                          title="Remove image"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
                     <div className="flex items-end gap-2">
                       <textarea
                         ref={inputRef}
-                        className="max-h-[160px] min-h-[56px] w-full flex-1 resize-none bg-transparent px-5 py-4 text-base leading-relaxed text-foreground placeholder:text-muted-foreground/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                        className="max-h-[160px] min-h-[56px] w-full flex-1 resize-none bg-transparent px-5 py-4 text-base leading-relaxed text-foreground placeholder:text-placeholder focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                         placeholder="Ask anything about your research…"
                         value={input}
                         onChange={(e) => onInputChange(e.target.value)}
@@ -333,7 +366,7 @@ export function ChatArea({
                       />
                       <Button
                         size="icon"
-                        variant="ghost"
+                        variant={speech.isListening ? "default" : "ghost"}
                         onClick={handleMicToggle}
                         disabled={isStreaming}
                         title={speech.isListening ? "Stop listening" : "Speak (voice input)"}
@@ -345,16 +378,45 @@ export function ChatArea({
                           <Mic className="h-5 w-5" />
                         )}
                       </Button>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        id="image-upload-centered"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onload = () => setAttachedImage(reader.result as string);
+                            reader.readAsDataURL(file);
+                          }
+                          e.target.value = "";
+                        }}
+                        disabled={isStreaming || !!attachedImage}
+                      />
                       <Button
-                        className="h-11 w-11 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
-                        onClick={onSend}
-                        disabled={!input.trim() || isStreaming}
-                        title="Send message"
-                        aria-label="Send message"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => document.getElementById("image-upload-centered")?.click()}
+                        disabled={isStreaming || !!attachedImage}
+                        title="Attach image"
+                        className="h-11 w-11 shrink-0 rounded-xl transition-colors hover:bg-white/5"
                       >
-                        <Send className="h-5 w-5" />
-                        <span className="sr-only">Send</span>
+                        <ImageIcon className="h-4 w-4" />
                       </Button>
+<Button
+                      className="h-11 w-11 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
+                      onClick={() => {
+                        onSend(attachedImage || undefined);
+                        setAttachedImage(null);
+                      }}
+                      disabled={!input.trim() || isStreaming}
+                      title="Send message"
+                      aria-label="Send message"
+                    >
+                      <Send className="h-5 w-5" />
+                      <span className="sr-only">Send</span>
+                    </Button>
                     </div>
                     {(isStreaming || speech.error) && (
                       <div className="mt-2 text-center text-[11px]">
@@ -368,7 +430,7 @@ export function ChatArea({
                   </div>
 
                   {/* Welcome Text Above Input */}
-                  <div className="mt-6 text-center text-muted-foreground/60">
+                  <div className="mt-6 text-center text-secondary">
                     <p className="text-sm">Press <kbd className="px-1.5 py-0.5 rounded bg-white/5 font-mono text-xs">Enter</kbd> to send, <kbd className="px-1.5 py-0.5 rounded bg-white/5 font-mono text-xs">Shift+Enter</kbd> for new line</p>
                   </div>
                 </div>
@@ -395,50 +457,50 @@ export function ChatArea({
                       )}
                     >
                       {renderContent(msg, onCitationClick)}
-                      <div
-                        className={cn(
-                          "mt-1.5 flex items-center gap-1.5 text-[10px]",
-                          msg.role === "user"
-                            ? "justify-end text-muted-foreground/50"
-                            : "text-muted-foreground/60"
-                        )}
-                      >
-                        <time dateTime={msg.created_at}>{formatTime(msg.created_at)}</time>
-                        {msg.role === "assistant" && indicators.hasSources && sourcesUsedIds.has(msg.id) && (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                            <FileText className="h-3 w-3" />
-                            RAG
-                          </span>
-                        )}
-                        {msg.role === "assistant" && indicators.hasMemories && memoriesUsedIds.has(msg.id) && (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                            <Brain className="h-3 w-3" />
-                            Memory
-                          </span>
-                        )}
-                        {msg.role === "assistant" && (
-                          <button
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 transition-colors hover:text-primary",
-                              tts.speakingId === msg.id ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
-                            )}
-                            onClick={() => tts.speak(msg.id, toPlainText(msg.content))}
-                            title={tts.speakingId === msg.id ? "Stop reading" : "Read aloud"}
-                          >
-                            {tts.speakingId === msg.id ? (
-                              <>
-                                <VolumeX className="h-3 w-3" />
-                                <span className="hidden sm:inline">Stop</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="h-3 w-3" />
-                                <span className="hidden sm:inline">Read</span>
-                              </>
-                            )}
-                          </button>
-                        )}
-                      </div>
+<div
+                      className={cn(
+                        "mt-1.5 flex items-center gap-1.5 text-[10px]",
+                        msg.role === "user"
+                          ? "justify-end text-secondary"
+                          : "text-secondary"
+                      )}
+                    >
+                      <time dateTime={msg.created_at} className="text-secondary">{formatTime(msg.created_at)}</time>
+                      {msg.role === "assistant" && indicators.hasSources && sourcesUsedIds.has(msg.id) && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          <FileText className="h-3 w-3" />
+                          RAG
+                        </span>
+                      )}
+                      {msg.role === "assistant" && indicators.hasMemories && memoriesUsedIds.has(msg.id) && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          <Brain className="h-3 w-3" />
+                          Memory
+                        </span>
+                      )}
+                      {msg.role === "assistant" && (
+                        <button
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 transition-colors hover:text-primary",
+                            tts.speakingId === msg.id ? "text-primary" : "text-secondary hover:text-primary"
+                          )}
+                          onClick={() => tts.speak(msg.id, toPlainText(msg.content))}
+                          title={tts.speakingId === msg.id ? "Stop reading" : "Read aloud"}
+                        >
+                          {tts.speakingId === msg.id ? (
+                            <>
+                              <VolumeX className="h-3 w-3" />
+                              <span className="hidden sm:inline">Stop</span>
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="h-3 w-3" />
+                              <span className="hidden sm:inline">Read</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                     </div>
                   </div>
                 ))}
@@ -459,7 +521,7 @@ export function ChatArea({
                           <span className="typing-dot" />
                         </div>
                       )}
-                      <div className="mt-1 text-[10px] text-muted-foreground/60">Generating…</div>
+                      <div className="mt-1 text-[10px] text-secondary">Generating…</div>
                     </div>
                   </div>
                 )}
@@ -467,7 +529,7 @@ export function ChatArea({
                 {/* Generation Stopped */}
                 {generationStopped && (
                   <div className="flex justify-center my-2 animate-message-in">
-                    <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-white/70">
+                    <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-secondary">
                       ⏹ Generation stopped — partial response was not saved
                     </span>
                   </div>
@@ -512,7 +574,7 @@ export function ChatArea({
                   className="h-10 w-10 rounded-full bg-white/5 border border-white/10 shadow-lg hover:bg-white/10"
                   aria-label="Scroll to bottom"
                 >
-                  <ChevronDown className="h-5 w-5" />
+                  <ChevronDown className="h-5 w-5 icon-primary" />
                 </Button>
               </div>
             )}
@@ -524,10 +586,29 @@ export function ChatArea({
           <div className="relative z-10 px-4 pb-6">
             <div className="mx-auto max-w-3xl">
               <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+                {/* Image preview */}
+                {attachedImage && (
+                  <div className="relative mb-2 flex items-center gap-2 px-1">
+                    <img
+                      src={attachedImage}
+                      alt="Attached image"
+                      className="h-16 w-auto rounded-lg object-cover"
+                    />
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setAttachedImage(null)}
+                      className="h-6 w-6 rounded-lg hover:bg-white/5"
+                      title="Remove image"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
                 <div className="flex items-end gap-2">
                   <textarea
                     ref={inputRef}
-                    className="max-h-[160px] min-h-[48px] w-full flex-1 resize-none bg-transparent px-5 py-3 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                    className="max-h-[160px] min-h-[48px] w-full flex-1 resize-none bg-transparent px-5 py-3 text-sm leading-relaxed text-foreground placeholder:text-placeholder focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                     placeholder={isStreaming ? "Generating response…" : "Type your message…"}
                     value={input}
                     onChange={(e) => onInputChange(e.target.value)}
@@ -550,6 +631,34 @@ export function ChatArea({
                       <Mic className="h-4 w-4" />
                     )}
                   </Button>
+                  {/* Image upload button */}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    id="image-upload"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = () => setAttachedImage(reader.result as string);
+                        reader.readAsDataURL(file);
+                      }
+                      // Reset input so same file can be selected again
+                      e.target.value = "";
+                    }}
+                    disabled={isStreaming || !!attachedImage}
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => document.getElementById("image-upload")?.click()}
+                    disabled={isStreaming || !!attachedImage}
+                    title="Attach image"
+                    className="h-10 w-10 shrink-0 rounded-xl transition-colors hover:bg-white/5"
+                  >
+                    <ImageIcon className="h-4 w-4" />
+                  </Button>
                   {isStreaming ? (
                     <Button
                       variant="destructive"
@@ -563,7 +672,10 @@ export function ChatArea({
                   ) : (
                     <Button
                       className="h-10 w-10 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
-                      onClick={onSend}
+                      onClick={() => {
+                        onSend(attachedImage || undefined);
+                        setAttachedImage(null);
+                      }}
                       disabled={!input.trim() || isStreaming}
                       title="Send message"
                       aria-label="Send message"
@@ -574,11 +686,11 @@ export function ChatArea({
                   )}
                 </div>
                 {(isStreaming || speech.error) && (
-                  <div className="mt-2 text-center text-[11px]">
+                  <div className="mt-2 text-center text-[11px] text-secondary">
                     {speech.error ? (
                       <span className="text-destructive">{speech.error}</span>
                     ) : (
-                      <span className="text-muted-foreground/50">Click Stop to cancel — partial response will not be saved</span>
+                      <span>Click Stop to cancel — partial response will not be saved</span>
                     )}
                   </div>
                 )}

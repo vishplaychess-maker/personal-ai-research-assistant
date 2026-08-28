@@ -68,7 +68,7 @@ class ChatContext:
         self,
         session_id: int,
         user_message: Message,
-        history: List[Dict[str, str]],
+        history: List[Dict[str, Any]],
         system_prompt: str,
         citations: List[Dict[str, Any]],
         sources_used: bool,
@@ -92,6 +92,7 @@ def prepare_chat_context(
     user_input: str,
     db: DBSession,
     user_id: int = 1,
+    image_url: Optional[str] = None,
 ) -> ChatContext:
     """
     Prepare all context needed for a streaming chat response.
@@ -127,6 +128,7 @@ def prepare_chat_context(
         session_id=session.id,
         role=MessageRole.user,
         content=user_input,
+        image_url=image_url,
     )
     db.add(user_msg)
     db.commit()
@@ -143,12 +145,22 @@ def prepare_chat_context(
     recent_messages.reverse()
 
     history = [
-        {"role": msg.role.value, "content": msg.content}
+        {"role": msg.role.value, "content": msg.content, **({"image_url": msg.image_url} if msg.image_url else {})}
         for msg in recent_messages
         if msg.id != user_msg.id  # exclude the just-saved user message temporarily
     ]
     # Add the new user message at the end
-    history.append({"role": "user", "content": user_input})
+    if image_url:
+        # Multimodal message
+        history.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_input},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ]
+        })
+    else:
+        history.append({"role": "user", "content": user_input})
 
     # 4. Build system prompt parts
     # Use per-session custom system prompt if set, otherwise use default

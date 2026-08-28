@@ -78,10 +78,10 @@ function DropdownContent({
       style={{ top: `${top}px`, left: `${left}px` }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-2.5">
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2.5">
         <span className="text-xs font-semibold text-foreground">Select Model</span>
         <button
-          className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-foreground hover:bg-white/3 transition-all"
+          className="h-7 w-7 rounded-lg icon-muted hover:icon-secondary hover:bg-white/3 transition-all"
           onClick={onRefresh}
           disabled={loading}
           title="Refresh models"
@@ -93,7 +93,7 @@ function DropdownContent({
 
       {/* Error */}
       {error && (
-        <div className="border-b border-white/5 px-3 py-2 text-xs text-destructive bg-destructive/5">
+        <div className="border-b border-white/10 px-3 py-2 text-xs text-destructive bg-destructive/5">
           {error}
         </div>
       )}
@@ -106,24 +106,24 @@ function DropdownContent({
           aria-selected={!currentModel}
           className={cn(
             "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors",
-            "hover:bg-white/3",
+            "hover:bg-white/5",
             !currentModel && "bg-white/5 text-primary"
           )}
           onClick={() => onSelect(null, "")}
         >
           <div className="flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+            <Sparkles className="h-3.5 w-3.5 icon-muted" />
             <span>Default model</span>
           </div>
-          <span className="text-xs text-muted-foreground">Server default</span>
+          <span className="text-xs text-secondary">Server default</span>
         </button>
 
         {loading && groups.length === 0 && (
-          <div className="px-2 py-4 text-center text-xs text-muted-foreground">Loading models…</div>
+          <div className="px-2 py-4 text-center text-xs text-secondary">Loading models…</div>
         )}
 
         {!loading && groups.length === 0 && !error && (
-          <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+          <div className="px-2 py-4 text-center text-xs text-secondary">
             No providers configured. Add one in Settings.
           </div>
         )}
@@ -131,15 +131,15 @@ function DropdownContent({
         {groups.map((g) => (
           <div key={g.provider_id} className="mt-2">
             <div className="flex items-center justify-between px-2 pb-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary">
                 {g.provider_label}
               </span>
-              <span className="text-[10px] text-muted-foreground/40">
+              <span className="text-[10px] text-muted">
                 {g.models.length} model{g.models.length !== 1 ? "s" : ""}
               </span>
             </div>
             {g.models.length === 0 ? (
-              <p className="px-2 pb-1 text-xs text-muted-foreground/40">
+              <p className="px-2 pb-1 text-xs text-muted">
                 No models available (check API key)
               </p>
             ) : (
@@ -153,7 +153,7 @@ function DropdownContent({
                     aria-selected={isSelected}
                     className={cn(
                       "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm transition-all duration-150",
-                      "hover:bg-white/3",
+                      "hover:bg-white/5",
                       isSelected && "bg-primary/10 text-primary"
                     )}
                     onClick={() => onSelect(g, m.name)}
@@ -268,7 +268,7 @@ export function ModelSelector({
       <button
         ref={triggerRef}
         className={cn(
-          "flex items-center gap-2 rounded-xl bg-white/3 px-3 py-1.5 text-xs font-medium border border-white/5 transition-all",
+          "flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5 text-xs font-medium border border-white/10 transition-all",
           "hover:bg-white/5 hover:border-primary/20",
           open && "border-primary/30 bg-white/5"
         )}
@@ -282,11 +282,11 @@ export function ModelSelector({
         aria-haspopup="listbox"
       >
         <Zap className="h-3.5 w-3.5 text-primary" />
-        <span className="max-w-[140px] truncate">
+        <span className="max-w-[140px] truncate text-secondary">
           {saving ? "Saving…" : displayName}
         </span>
         <ChevronDown
-          className={cn("h-3.5 w-3.5 transition-transform duration-150", open && "rotate-180")}
+          className={cn("h-3.5 w-3.5 transition-transform duration-150 icon-secondary", open && "rotate-180")}
         />
       </button>
 

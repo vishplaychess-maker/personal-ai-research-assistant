@@ -49,14 +49,23 @@ class OpenRouterProvider(LLMProvider):
 
     def _build_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
-    ) -> List[Dict[str, str]]:
-        """Build OpenAI-compatible messages array."""
+    ) -> List[Dict[str, Any]]:
+        """Build OpenAI-compatible messages array.
+        Handles multimodal messages where content can be a string or array of content parts.
+        """
         result = []
         if system_prompt:
             result.append({"role": "system", "content": system_prompt})
-        result.extend(messages)
+        
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Multimodal content - OpenRouter uses OpenAI-compatible format
+                result.append({"role": msg["role"], "content": content})
+            else:
+                result.append({"role": msg["role"], "content": content})
         return result
 
     def _resolve_model(self, model_name: Optional[str] = None) -> str:
@@ -64,7 +73,7 @@ class OpenRouterProvider(LLMProvider):
 
     def generate_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
@@ -117,7 +126,7 @@ class OpenRouterProvider(LLMProvider):
 
     def generate_json_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
@@ -173,7 +182,7 @@ class OpenRouterProvider(LLMProvider):
 
     async def generate_stream_async(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:

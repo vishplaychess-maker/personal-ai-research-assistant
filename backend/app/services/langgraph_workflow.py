@@ -90,7 +90,8 @@ class WorkflowState(TypedDict):
 
     session_id: int
     user_input: str
-    messages: List[Dict[str, str]]
+    image_url: Optional[str]
+    messages: List[Dict[str, Any]]
     response: str
     retrieved_context: str
     citations: List[Dict[str, Any]]
@@ -142,8 +143,8 @@ def load_context(state: WorkflowState) -> WorkflowState:
     )
     recent_messages.reverse()
 
-    history: List[Dict[str, str]] = [
-        {"role": msg.role.value, "content": msg.content}
+    history: List[Dict[str, Any]] = [
+        {"role": msg.role.value, "content": msg.content, **({"image_url": msg.image_url} if msg.image_url else {})}
         for msg in recent_messages
     ]
 
@@ -330,6 +331,7 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
 
     history = list(state.get("messages", []))
     user_input = state.get("user_input", "")
+    image_url = state.get("image_url", None)
     model_name = state.get("model_name", None)
 
     # Per-user LLM provider settings (override global .env when set)
@@ -342,8 +344,19 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         provider_config["model"] = model_name
 
     # Ensure the latest user message is in the history
+    # If there's an image, create a multimodal message
     if not history or history[-1].get("content") != user_input:
-        history.append({"role": "user", "content": user_input})
+        if image_url:
+            # Multimodal message: text + image
+            history.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_input},
+                    {"type": "image_url", "image_url": {"url": image_url}}
+                ]
+            })
+        else:
+            history.append({"role": "user", "content": user_input})
 
     # If resuming from approval and NOT regenerating, return the existing
     # placeholder response so we flow straight to ask_terminal_approval.
@@ -744,6 +757,7 @@ def run_research_workflow(
     db: DBSession,
     user_id: int = 1,
     resume_from: Optional[str] = None,
+    image_url: Optional[str] = None,
 ) -> dict:
     """
     Run the research workflow synchronously.
@@ -792,6 +806,7 @@ def run_research_workflow(
     initial_state: WorkflowState = {
         "session_id": session_id,
         "user_input": user_input,
+        "image_url": image_url,
         "messages": [],
         "response": "",
         "retrieved_context": "",

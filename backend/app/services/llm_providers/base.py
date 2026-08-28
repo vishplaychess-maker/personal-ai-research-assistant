@@ -1,11 +1,16 @@
 """
 Abstract base class for LLM providers.
 
-All providers (Ollama, OpenRouter, NVIDIA NIM) implement this interface
+All providers (Ollama, OpenRouter, NVIDIA NIM, Google) implement this interface
 so the rest of the application can remain provider-agnostic.
 
 Embedding logic is intentionally excluded — embeddings always use Ollama
 regardless of the chat provider.
+
+Multimodal support: Messages can contain text and/or images.
+Message format: List[Dict[str, Any]] where each message is:
+  - {"role": "user", "content": "text only"}  # traditional
+  - {"role": "user", "content": [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}]}  # multimodal
 """
 
 from abc import ABC, abstractmethod
@@ -30,7 +35,7 @@ class LLMProvider(ABC):
     @abstractmethod
     def generate_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
@@ -54,7 +59,7 @@ class LLMProvider(ABC):
     @abstractmethod
     def generate_json_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> str:
@@ -69,7 +74,7 @@ class LLMProvider(ABC):
     @abstractmethod
     async def generate_stream_async(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:

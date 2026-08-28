@@ -123,7 +123,22 @@ export function useStreaming() {
   }, []);
 
   const startStream = useCallback(
-    async (sessionId: number, message: string, callbacks: StreamCallbacks) => {
+    async (sessionId: number, message: string, imageUrlOrCallbacks: string | undefined | StreamCallbacks, callbacks?: StreamCallbacks) => {
+      // Support both old signature (sessionId, message, callbacks) and new signature (sessionId, message, imageUrl, callbacks)
+      let imageUrl: string | undefined;
+      let actualCallbacks: StreamCallbacks;
+      
+      const isOldSignature = typeof imageUrlOrCallbacks === "object" && imageUrlOrCallbacks !== null && "onStart" in imageUrlOrCallbacks;
+      
+      if (isOldSignature) {
+        // Old signature: (sessionId, message, callbacks)
+        actualCallbacks = imageUrlOrCallbacks;
+        imageUrl = undefined;
+      } else {
+        // New signature: (sessionId, message, imageUrl, callbacks)
+        imageUrl = imageUrlOrCallbacks as string | undefined;
+        actualCallbacks = callbacks!;
+      }
       // Prevent double-submission
       if (abortRef.current) return;
 
@@ -133,7 +148,7 @@ export function useStreaming() {
       setIsStreaming(true);
       contentRef.current = "";
       setStreamedContent("");
-      callbacks.onStart?.();
+      actualCallbacks.onStart?.();
 
       try {
         const headers: Record<string, string> = {
@@ -152,14 +167,14 @@ export function useStreaming() {
           {
             method: "POST",
             headers,
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, image_url: imageUrl }),
             credentials: "include",
             signal: controller.signal,
           }
         );
 
         if (cancelledRef.current) {
-          callbacks.onCancelled?.();
+          actualCallbacks.onCancelled?.();
           finish();
           return;
         }
@@ -174,7 +189,7 @@ export function useStreaming() {
               : response.status === 422
                 ? "VALIDATION_ERROR"
                 : "HTTP_ERROR";
-          callbacks.onError?.({
+          actualCallbacks.onError?.({
             code,
             detail: body.detail || `Request failed with status ${response.status}`,
           });
@@ -184,7 +199,7 @@ export function useStreaming() {
 
         const reader = response.body?.getReader();
         if (!reader) {
-          callbacks.onError?.({
+          actualCallbacks.onError?.({
             code: "READ_ERROR",
             detail: "Failed to read response stream",
           });
@@ -197,7 +212,7 @@ export function useStreaming() {
 
         while (true) {
           if (cancelledRef.current) {
-            callbacks.onCancelled?.();
+            actualCallbacks.onCancelled?.();
             finish();
             return;
           }
@@ -205,7 +220,7 @@ export function useStreaming() {
           const { done, value } = await reader.read();
 
           if (cancelledRef.current) {
-            callbacks.onCancelled?.();
+            actualCallbacks.onCancelled?.();
             finish();
             return;
           }
@@ -218,7 +233,7 @@ export function useStreaming() {
 
           for (const event of events) {
             if (cancelledRef.current) {
-              callbacks.onCancelled?.();
+actualCallbacks.onCancelled?.();
               finish();
               return;
             }
@@ -228,11 +243,11 @@ export function useStreaming() {
                 const token = (event.data.token as string) || "";
                 contentRef.current += token;
                 setStreamedContent(contentRef.current);
-                callbacks.onToken?.(token);
+                actualCallbacks.onToken?.(token);
                 break;
               }
               case "complete": {
-                callbacks.onComplete?.({
+actualCallbacks.onComplete?.({
                   messageId: event.data.message_id as number,
                   content: contentRef.current,
                   citations: (event.data.citations ||
@@ -244,7 +259,7 @@ export function useStreaming() {
                 return;
               }
               case "error": {
-                callbacks.onError?.({
+actualCallbacks.onError?.({
                   code: (event.data.code as string) || "UNKNOWN_ERROR",
                   detail: (event.data.detail as string) || "An unknown error occurred",
                 });
@@ -257,9 +272,9 @@ export function useStreaming() {
 
         // Stream ended without a terminal event
         if (cancelledRef.current) {
-          callbacks.onCancelled?.();
+          actualCallbacks.onCancelled?.();
         } else if (contentRef.current) {
-          callbacks.onComplete?.({
+          actualCallbacks.onComplete?.({
             messageId: 0,
             content: contentRef.current,
             citations: [],
@@ -270,9 +285,9 @@ export function useStreaming() {
         finish();
       } catch (err: unknown) {
         if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
-          callbacks.onCancelled?.();
+          actualCallbacks.onCancelled?.();
         } else {
-          callbacks.onError?.({
+          actualCallbacks.onError?.({
             code: "NETWORK_ERROR",
             detail:
               err instanceof Error

@@ -153,9 +153,9 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col bg-background border-r border-white/5">
       {/* Header - Minimal */}
-      <header className="flex items-center justify-between border-b border-white/5 px-3 py-3">
+      <header className="flex items-center justify-between border-b border-white/10 px-3 py-3">
         <div className="flex items-center gap-2">
-          <MessageSquare className="h-5 w-5 text-muted-foreground" />
+          <MessageSquare className="h-5 w-5 icon-secondary" />
           <span className="text-sm font-medium text-foreground">Research</span>
         </div>
         <Button
@@ -170,11 +170,11 @@ export function Sidebar({
       </header>
 
       {/* Search - Clean */}
-      <div className="px-3 py-2 border-b border-white/5">
+      <div className="px-3 py-2 border-b border-white/10">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 icon-muted" />
           <input
-            className="h-9 w-full rounded-xl bg-white/3 border border-transparent px-9 py-0 text-sm outline-none placeholder:text-muted-foreground/40 focus:border-primary/30 focus:bg-white/5 transition-all"
+            className="h-9 w-full rounded-xl bg-white/5 border border-transparent px-9 py-0 text-sm outline-none placeholder:text-placeholder focus:border-primary/30 focus:bg-white/5 transition-all"
             type="text"
             placeholder="Search conversations"
             value={searchQuery}
@@ -185,7 +185,7 @@ export function Sidebar({
           />
           {searchQuery && (
             <button
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/40 transition-colors hover:text-foreground"
+              className="absolute right-3 top-1/2 -translate-y-1/2 icon-muted transition-colors hover:icon-secondary"
               onClick={handleClearSearch}
               title="Clear search"
             >
@@ -193,7 +193,7 @@ export function Sidebar({
             </button>
           )}
           {isSearching && (
-            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground/40" />
+            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin icon-muted" />
           )}
         </div>
       </div>
@@ -215,25 +215,25 @@ export function Sidebar({
                   <div
                     key={result.message_id}
                     className={cn(
-                      "mb-1 cursor-pointer rounded-lg px-3 py-2 transition-colors hover:bg-white/3",
+                      "mb-1 cursor-pointer rounded-lg px-3 py-2 transition-colors hover:bg-white/5",
                       result.session_id === activeSessionId && "bg-white/5"
                     )}
                     onClick={() => handleSearchResultClick(result)}
                   >
                     <div className="truncate text-sm font-medium text-foreground">{result.session_title}</div>
-                    <div className="truncate text-xs text-muted-foreground">{result.snippet}</div>
-                    <div className="mt-1 text-[10px] text-muted-foreground/50">{result.role} · {formatDate(result.created_at)}</div>
+                    <div className="truncate text-xs text-secondary">{result.snippet}</div>
+                    <div className="mt-1 text-[10px] text-muted">{result.role} · {formatDate(result.created_at)}</div>
                   </div>
                 ))
               )}
             </>
           ) : loadingSessions ? (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">Loading…</div>
+            <div className="px-3 py-6 text-center text-sm text-secondary">Loading…</div>
           ) : sessions.length === 0 ? (
             <div className="px-3 py-8 text-center">
-              <MessageSquare className="mx-auto mb-2 h-8 w-8 opacity-20" />
-              <p className="text-sm text-muted-foreground">No conversations yet</p>
-              <p className="mt-1 text-xs text-muted-foreground/50">Click + to start a new conversation</p>
+              <MessageSquare className="mx-auto mb-2 h-8 w-8 icon-muted" />
+              <p className="text-sm text-secondary">No conversations yet</p>
+              <p className="mt-1 text-xs text-muted">Click + to start a new conversation</p>
             </div>
           ) : (
             sessions.map((session) => {
@@ -243,14 +243,14 @@ export function Sidebar({
                   key={session.id}
                   className={cn(
                     "group mb-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150",
-                    isActive ? "bg-white/5 text-foreground" : "hover:bg-white/3"
+                    isActive ? "bg-white/5 text-foreground" : "hover:bg-white/5"
                   )}
                   onClick={() => onSelectSession(session.id)}
                 >
                   <div className={cn("flex-1 flex items-center gap-2 min-w-0", isActive ? "ml-1" : "ml-2")}>
                     <MessageSquare className={cn(
                       "h-4 w-4 shrink-0 transition-colors",
-                      isActive ? "text-primary" : "text-muted-foreground/40"
+                      isActive ? "text-primary" : "icon-secondary"
                     )} />
                     {renamingId === session.id ? (
                       <input
@@ -267,10 +267,10 @@ export function Sidebar({
                       />
                     ) : (
                       <>
-                        <span className={cn("truncate font-medium", isActive ? "text-foreground" : "text-foreground/80")}>
+                        <span className={cn("truncate font-medium", isActive ? "text-foreground" : "text-secondary")}>
                           {session.title}
                         </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground/40">
+                        <span className="shrink-0 text-[10px] text-muted">
                           {formatDate(session.updated_at)}
                         </span>
                       </>
@@ -281,14 +281,14 @@ export function Sidebar({
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
-                      className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-foreground hover:bg-white/5 transition-all"
+                      className="h-7 w-7 rounded-lg icon-muted hover:icon-primary hover:bg-white/5 transition-all"
                       title="Rename"
                       onClick={() => handleRenameStart(session)}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
                     <button
-                      className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-all"
+                      className="h-7 w-7 rounded-lg icon-muted hover:text-destructive hover:bg-destructive/10 transition-all"
                       title="Delete"
                       onClick={() => onDeleteSession(session.id)}
                     >
@@ -303,9 +303,9 @@ export function Sidebar({
       </ScrollArea>
 
       {/* Footer - Minimal */}
-      <footer className="border-t border-white/5 px-3 py-3">
-        {/* Health Status - Very subtle */}
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground/60">
+      <footer className="border-t border-white/10 px-3 py-3">
+        {/* Health Status - Readable */}
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-secondary">
           <span className="flex items-center gap-1">
             <span
               className={cn(
@@ -333,12 +333,12 @@ export function Sidebar({
             />
             DB
           </span>
-          <span className="ml-auto text-[10px] font-medium text-muted-foreground/50">
+          <span className="ml-auto text-[10px] font-medium text-secondary">
             {healthOk === 3 ? "All OK" : `${healthOk}/3`}
           </span>
         </div>
 
-        {/* Action Buttons - Minimal */}
+        {/* Action Buttons - Readable */}
         <div className="flex items-center gap-0.5">
           <Button
             size="icon"
@@ -347,7 +347,7 @@ export function Sidebar({
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
           >
-            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {theme === "dark" ? <Sun className="h-4 w-4 icon-secondary" /> : <Moon className="h-4 w-4 icon-secondary" />}
           </Button>
           {onOpenSettings && (
             <Button
@@ -357,7 +357,7 @@ export function Sidebar({
               title="Settings"
               className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
             >
-              <SettingsIcon className="h-4 w-4" />
+              <SettingsIcon className="h-4 w-4 icon-secondary" />
             </Button>
           )}
           {onLogout && (
@@ -368,7 +368,7 @@ export function Sidebar({
               title="Sign out"
               className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5 hover:text-destructive"
             >
-              <LogOut className="h-4 w-4" />
+              <LogOut className="h-4 w-4 icon-secondary" />
             </Button>
           )}
         </div>

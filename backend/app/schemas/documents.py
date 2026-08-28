@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
+    image_url: Optional[str] = Field(None, description="Base64-encoded image data URL (data:image/...;base64,...)")
 
 
 # ── Citation schemas ───────────────────────────────────────
@@ -59,6 +60,7 @@ class MessageResponse(BaseModel):
     session_id: int
     role: str
     content: str
+    image_url: Optional[str] = None  # Base64-encoded image data URL for multimodal messages
     citations: Optional[str] = None  # JSON-serialized citation list
     created_at: datetime
 

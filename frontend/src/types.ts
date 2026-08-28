@@ -27,6 +27,7 @@ export interface Message {
   session_id: number;
   role: string;
   content: string;
+  image_url?: string | null;  // Base64-encoded image data URL for multimodal messages
   citations?: string | null;
   created_at: string;
 }
@@ -206,4 +207,5 @@ export interface AuthSession {
 export interface RetryTarget {
   message: string;
   errorDetail: string;
+  image_url?: string;
 }

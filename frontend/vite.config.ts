@@ -1,6 +1,7 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import http from "http";
 
 export default defineConfig({
   plugins: [react()],
@@ -17,6 +18,8 @@ export default defineConfig({
       "/api": {
         target: "http://backend:8080",
         changeOrigin: true,
+        // Disable DNS caching by using a custom agent
+        agent: new http.Agent({ keepAlive: false, maxSockets: 1 }),
       },
     },
     // Force polling for file changes — required for Docker Desktop on Windows

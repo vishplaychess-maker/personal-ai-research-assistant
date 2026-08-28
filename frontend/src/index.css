@@ -6,9 +6,9 @@
  * Grok.com inspired theme - Monochrome dark aesthetic
  * Background: Almost black (#0B0F19)
  * Surfaces: Slightly lighter (#131722)
- * Text: Off-white (#E4E6EB)
- * Accent: Subtle indigo (#6366F1)
- * Borders: Very subtle white opacity (rgba(255,255,255,0.08))
+ * Text: Pure white (#FFFFFF) primary, #A1A1AA secondary, #71717A muted
+ * Accent: Indigo (#6366F1)
+ * Borders: Visible dark-gray (rgba(255,255,255,0.15))
  */
 
 :root {
@@ -47,70 +47,71 @@
   --shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
 }
 
-/* Grok-style Dark Theme (DEFAULT) */
+/* Grok-style Dark Theme (DEFAULT) - WCAG AA Compliant Contrast Hierarchy */
 .dark {
-  /* Core colors */
+  /* Core colors - Pure white primary, accessible secondary/muted */
   --background: 225 20% 4%;        /* #0B0F19 - Almost black with slight blue tint */
-  --foreground: 210 40% 98%;       /* #F8FAFC - Bright cream white */
+  --foreground: 0 0% 100%;         /* #FFFFFF - Pure white primary text */
   --card: 225 15% 7%;              /* #131722 - Slightly lighter surface */
-  --card-foreground: 210 40% 98%;
+  --card-foreground: 0 0% 100%;    /* #FFFFFF */
   --popover: 225 15% 7%;
-  --popover-foreground: 210 40% 98%;
+  --popover-foreground: 0 0% 100%;
   
-  /* Accent - Subtle indigo */
+  /* Accent - Indigo */
   --primary: 239 84% 67%;          /* #6366F1 - Indigo */
   --primary-foreground: 0 0% 100%;
   
-  /* Muted surfaces */
-  --secondary: 225 10% 10%;        /* #1A1B26 - Subtle hover */
-  --secondary-foreground: 210 40% 98%;
-  --muted: 225 10% 10%;
-  --muted-foreground: 215 20% 65%; /* Muted text - brighter */
-  --accent: 225 10% 10%;
-  --accent-foreground: 210 40% 98%;
+  /* Muted surfaces - Improved for visible hover states */
+  --secondary: 225 15% 15%;        /* #27272A - Visible hover/active background */
+  --secondary-foreground: 0 0% 100%;
+  --muted: 225 15% 15%;            /* #27272A - Visible muted background */
+  --muted-foreground: 0 0% 63%;    /* #A1A1AA - Secondary text (WCAG AA on #0B0F19) */
+  --accent: 225 15% 15%;
+  --accent-foreground: 0 0% 100%;
   
   /* States */
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
   
-  /* Borders - Very subtle */
-  --border: 225 10% 15%;           /* ~rgba(255,255,255,0.08) */
-  --input: 225 10% 15%;
+  /* Borders - Visible dark-gray */
+  --border: 225 15% 20%;           /* #3F3F46 - Visible border (rgba(255,255,255,0.15)) */
+  --input: 225 15% 20%;
   --ring: 239 84% 67%;
   
   /* Legacy aliases */
   --bg-primary: #0B0F19;
   --bg-secondary: #131722;
   --bg-card: #1A1B26;
-  --text-primary: #F8FAFC;         /* Bright cream white */
-  --text-secondary: #CBD5E1;       /* Brighter secondary */
+  --text-primary: #FFFFFF;         /* Pure white */
+  --text-secondary: #A1A1AA;       /* Secondary - WCAG AA on dark */
+  --text-muted: #71717A;           /* Muted - WCAG AA for large text only */
   --accent-green: #10b981;
   --accent-red: #ef4444;
   --accent-blue: #6366f1;
-  --border-color: rgba(255,255,255,0.08);
+  --border-color: rgba(255,255,255,0.15);
   --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 /* Force dark mode as default by making :root use dark values when no .light class */
 :root:not(.light) {
   --background: 225 20% 4%;
-  --foreground: 210 40% 98%;
+  --foreground: 0 0% 100%;
   --card: 225 15% 7%;
-  --card-foreground: 210 40% 98%;
+  --card-foreground: 0 0% 100%;
   --popover: 225 15% 7%;
-  --popover-foreground: 210 40% 98%;
+  --popover-foreground: 0 0% 100%;
   --primary: 239 84% 67%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 225 10% 10%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 225 10% 10%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 225 10% 10%;
-  --accent-foreground: 210 40% 98%;
+  --secondary: 225 15% 15%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 225 15% 15%;
+  --muted-foreground: 0 0% 63%;
+  --accent: 225 15% 15%;
+  --accent-foreground: 0 0% 100%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 225 10% 15%;
-  --input: 225 10% 15%;
+  --border: 225 15% 20%;
+  --input: 225 15% 20%;
   --ring: 239 84% 67%;
 }
 
@@ -143,13 +144,13 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: hsl(var(--muted-foreground) / 0.3);
   border-radius: 3px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.35);
+  background: hsl(var(--muted-foreground) / 0.5);
 }
 
 /* Selection */
@@ -179,7 +180,7 @@ button, a, input, textarea, select, [role="button"] {
   border: 1px solid hsl(var(--border));
 }
 
-/* Markdown styling */
+/* Markdown styling - Pure white text in dark mode */
 .prose {
   color: hsl(var(--foreground));
   max-width: none;
@@ -223,7 +224,9 @@ button, a, input, textarea, select, [role="button"] {
 .prose hr { border-color: hsl(var(--border)); margin: 1.5em 0; }
 
 /* Force pure white text in dark mode for all markdown content */
-.dark .prose,
+.dark .prose {
+  color: #FFFFFF !important;
+}
 .dark .prose p,
 .dark .prose li,
 .dark .prose strong,
@@ -263,10 +266,19 @@ button, a, input, textarea, select, [role="button"] {
   color: #F8FAFC;
 }
 
-/* Blockquote */
+/* Blockquote - pure white in dark mode */
 .dark .prose blockquote {
-  color: #CBD5E1;
+  color: #FFFFFF !important;
   border-left-color: #6366F1;
+}
+
+/* Tables - ensure headers and cells are readable */
+.dark .prose table {
+  border-color: hsl(var(--border));
+}
+.dark .prose th,
+.dark .prose td {
+  border-color: hsl(var(--border));
 }
 
 /* Message animation */
@@ -276,9 +288,9 @@ button, a, input, textarea, select, [role="button"] {
 }
 .animate-message-in { animation: message-in 0.3s ease-out both; }
 
-/* Typing indicator */
+/* Typing indicator - brighter dots */
 @keyframes typing-bounce {
-  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
   40% { transform: translateY(-5px); opacity: 1; }
 }
 .typing-dot {
@@ -297,3 +309,14 @@ button, a, input, textarea, select, [role="button"] {
   ring-offset: 2px;
   ring-offset-color: hsl(var(--background));
 }
+
+/* Utility classes for consistent contrast hierarchy */
+.text-primary { color: hsl(var(--foreground)) !important; }     /* #FFFFFF */
+.text-secondary { color: #A1A1AA !important; }                   /* Secondary */
+.text-muted { color: #71717A !important; }                       /* Muted - large text only */
+.text-placeholder { color: #A1A1AA !important; }                 /* Placeholders */
+.icon-primary { color: #D4D4D8 !important; }                     /* Important icons */
+.icon-secondary { color: #A1A1AA !important; }                   /* Secondary icons */
+.icon-muted { color: #71717A !important; }                       /* Muted icons */
+.border-visible { border-color: hsl(var(--border)) !important; } /* Visible borders */
+.bg-hover { background-color: hsl(var(--secondary)) !important; } /* Hover backgrounds */

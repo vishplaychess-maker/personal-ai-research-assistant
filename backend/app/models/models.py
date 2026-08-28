@@ -123,6 +123,7 @@ class Message(Base):
     session_id = Column(Integer, ForeignKey("research_sessions.id"), nullable=False)
     role = Column(SAEnum(MessageRole), nullable=False)
     content = Column(Text, nullable=False)
+    image_url = Column(Text, nullable=True)  # Base64-encoded image data URL for multimodal messages
     citations = Column(Text, nullable=True)  # JSON-serialized list of citation dicts
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 

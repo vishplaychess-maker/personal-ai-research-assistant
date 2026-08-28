@@ -54,10 +54,26 @@ class GoogleProvider(LLMProvider):
         }
 
     def _build_messages(self, messages, system_prompt=None):
+        """
+        Build messages array for Google/Gemini API.
+        Handles multimodal messages where content can be a string or array of content parts.
+        """
         result = []
         if system_prompt:
             result.append({"role": "system", "content": system_prompt})
-        result.extend(messages)
+        
+        for msg in messages:
+            # Messages can be either:
+            # - {"role": "user", "content": "text only"}
+            # - {"role": "user", "content": [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}]}
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Multimodal content - ensure it's in the format Google expects
+                # Google's OpenAI-compatible API accepts the same format
+                result.append({"role": msg["role"], "content": content})
+            else:
+                # Traditional text-only content
+                result.append({"role": msg["role"], "content": content})
         return result
 
     def _resolve_model(self, model_name: Optional[str] = None) -> str:

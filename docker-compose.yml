@@ -24,6 +24,8 @@ services:
     container_name: research-assistant-backend
     ports:
       - "127.0.0.1:8080:8080"
+    expose:
+      - "8080"
     volumes:
       - app_data:/data
     environment:
@@ -49,6 +51,12 @@ services:
       - MODELSLAB_BASE_URL=${MODELSLAB_BASE_URL:-https://modelslab.com/api/v1}
       - MODELSLAB_MODEL=${MODELSLAB_MODEL:-meta-llama/Llama-3.3-70B-Instruct}
       - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       chromadb:
         condition: service_started
@@ -66,7 +74,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - research-network
     restart: unless-stopped

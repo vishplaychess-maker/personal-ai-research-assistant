@@ -201,6 +201,7 @@ def create_message(
             session_id=session.id,
             role=MessageRole.user,
             content=payload.message,
+            image_url=payload.image_url,
         )
         db.add(user_msg)
         db.commit()
@@ -211,6 +212,7 @@ def create_message(
             user_input=payload.message,
             db=db,
             user_id=current_user.id,
+            image_url=payload.image_url,
         )
 
     # ── Handle approval response ──────────────────────────
@@ -344,6 +346,7 @@ async def stream_chat(
             user_input=payload.message,
             db=db,
             user_id=current_user.id,
+            image_url=payload.image_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

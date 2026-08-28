@@ -34,7 +34,7 @@ function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string } | null>(null);
+  const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string; image_url?: string } | null>(null);
 
   // Citation popup state
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
@@ -325,9 +325,10 @@ function App() {
 
   // ── Send message (streaming) ───────────────────────────
 
-  const handleSend = (overrideText?: string) => {
+  const handleSend = (imageUrl?: string, overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || !activeSessionId || isStreaming || togglePending) return;
+    if (!text && !imageUrl) return;
+    if (!activeSessionId || isStreaming || togglePending) return;
     const originalText = text;
 
     setSending(true);
@@ -339,12 +340,13 @@ function App() {
       session_id: activeSessionId,
       role: "user",
       content: text,
+      image_url: imageUrl || undefined,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, tempUserMsg]);
     if (!overrideText) setInput("");
 
-    startStream(activeSessionId, text, {
+    startStream(activeSessionId, text, imageUrl, {
       onStart: () => setGenerationStopped(false),
       onToken: () => {},
       onComplete: (result) => {
@@ -362,7 +364,7 @@ function App() {
       onError: (error) => {
         setChatError(error.detail || "Failed to send message");
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
-        setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message" });
+        setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message", image_url: imageUrl });
         setSending(false);
         setGenerationStopped(false);
       },
@@ -377,7 +379,7 @@ function App() {
 
   const handleRetry = useCallback(() => {
     if (!retryTarget || !activeSessionId || isStreaming) return;
-    handleSend(retryTarget.message);
+    handleSend(retryTarget.message, retryTarget.image_url);
   }, [retryTarget, activeSessionId, isStreaming]);
 
   // ═══════════════════════════════════════════════════════
