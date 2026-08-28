@@ -238,6 +238,11 @@ def prepare_chat_context(
     # Per-user LLM provider settings (override global .env when set)
     provider_config = get_user_llm_config(db, user_id)
 
+    # Override provider config model with session-specific model if set
+    if session_model and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = session_model
+
     return ChatContext(
         session_id=session.id,
         user_message=user_msg,

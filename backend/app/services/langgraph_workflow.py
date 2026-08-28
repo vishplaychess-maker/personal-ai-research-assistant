@@ -336,6 +336,11 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
     db: DBSession = state.get("db")
     provider_config = get_user_llm_config(db, state.get("user_id", 1)) if db else None
 
+    # Override provider config model with session-specific model if set
+    if model_name and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = model_name
+
     # Ensure the latest user message is in the history
     if not history or history[-1].get("content") != user_input:
         history.append({"role": "user", "content": user_input})
@@ -533,6 +538,11 @@ def regenerate_answer(state: WorkflowState) -> WorkflowState:
     # Per-user LLM provider settings (override global .env when set)
     db: DBSession = state.get("db")
     provider_config = get_user_llm_config(db, state.get("user_id", 1)) if db else None
+
+    # Override provider config model with session-specific model if set
+    if model_name and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = model_name
 
     # Ensure user message is present
     if not history or history[-1].get("content") != user_input:
