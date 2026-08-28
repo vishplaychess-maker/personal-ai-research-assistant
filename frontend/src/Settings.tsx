@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Clock, Calendar } from "lucide-react";
 import { API } from "./api";
 import {
   Dialog,
@@ -9,15 +9,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./components/ui/dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "./components/ui/tabs";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { cn } from "./lib/utils";
-import type { ModelInfo, ProviderConfig } from "./types";
-
-interface SettingsProps {
-  onClose: () => void;
-}
+import type { ModelInfo, ProviderConfig, ScheduledTask } from "./types";
+import { ScheduledTasks } from "./ScheduledTasks";
 
 const PROVIDER_OPTIONS = [
   { value: "openrouter", label: "OpenRouter" },
@@ -35,7 +38,16 @@ const PROVIDER_LABELS: Record<string, string> = Object.fromEntries(
 const selectClass =
   "flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
-export function Settings({ onClose }: SettingsProps) {
+interface SettingsProps {
+  onClose: () => void;
+  sessions: any[]; // Session[]
+  activeSessionId: number | null;
+}
+
+export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) {
+  const [activeTab, setActiveTab] = useState<"providers" | "scheduler">("providers");
+  
+  // ── Providers state ──────────────────────────────────────
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,167 +143,191 @@ export function Settings({ onClose }: SettingsProps) {
     }
   };
 
+  // ── Render ───────────────────────────────────────────────
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh]">
         <DialogHeader>
-          <DialogTitle>Providers</DialogTitle>
-          <DialogDescription>
-            Manage your LLM API keys and models. Only one provider is active at
-            a time — the active one is used for chat.
-          </DialogDescription>
+          <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <div className="flex justify-end">
-          <Button size="sm" onClick={openAdd}>
-            <Plus className="h-4 w-4" />
-            Add Provider
-          </Button>
-        </div>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler")} className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="providers">Providers</TabsTrigger>
+            <TabsTrigger value="scheduler">Scheduled Tasks</TabsTrigger>
+          </TabsList>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
-
-        {loading ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : providers.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">
-            No providers yet. Add your first provider to start chatting.
-          </p>
-        ) : (
-          <div className="grid max-h-[40vh] gap-2 overflow-y-auto pr-1">
-            {providers.map((p) => (
-              <div
-                key={p.id}
-                className={cn(
-                  "flex items-center gap-3 rounded-xl border p-3",
-                  p.is_active && "border-primary/40 bg-primary/5"
-                )}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium">
-                      {PROVIDER_LABELS[p.provider_name] || p.provider_name}
-                    </span>
-                    {p.is_active && (
-                      <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                        Active
-                      </span>
-                    )}
-                  </div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {p.default_model || "Default model"}
-                  </div>
-                </div>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => openEdit(p)}
-                  title="Edit"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => handleDelete(p)}
-                  title="Delete"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add / Edit dialog */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="sm:max-w-md">
+          {/* ── Providers Tab ── */}
+          <TabsContent value="providers">
             <DialogHeader>
-              <DialogTitle>{editing ? "Edit Provider" : "Add Provider"}</DialogTitle>
+              <DialogTitle>Providers</DialogTitle>
               <DialogDescription>
-                Configure the provider, API key, and default model.
+                Manage your LLM API keys and models. Only one provider is active at
+                a time — the active one is used for chat.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-2">
-              <div className="grid gap-2">
-                <Label>Provider</Label>
-                <select
-                  value={formProvider}
-                  onChange={(e) => {
-                    setFormProvider(e.target.value);
-                    setFormModel("");
-                    fetchModelsForProvider(e.target.value);
-                  }}
-                  className={selectClass}
-                >
-                  {PROVIDER_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
-              <div className="grid gap-2">
-                <Label>API Key</Label>
-                <Input
-                  type="password"
-                  value={formApiKey}
-                  onChange={(e) => setFormApiKey(e.target.value)}
-                  placeholder="Paste your API key (leave blank for Ollama)"
-                  autoComplete="off"
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label>Default Model</Label>
-                <select
-                  value={formModel}
-                  onChange={(e) => setFormModel(e.target.value)}
-                  className={selectClass}
-                  disabled={modelsLoading}
-                >
-                  {!formModel && <option value="">Default model</option>}
-                  {formModel &&
-                    !modelOptions.some((m) => m.name === formModel) && (
-                      <option value={formModel}>{formModel} (saved)</option>
-                    )}
-                  {modelOptions.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-                {modelsLoading && (
-                  <p className="text-xs text-muted-foreground">Loading models…</p>
-                )}
-                {!modelsLoading && modelOptions.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    No free models found or invalid API key
-                  </p>
-                )}
-              </div>
-
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={formActive}
-                  onChange={(e) => setFormActive(e.target.checked)}
-                  className="h-4 w-4 rounded border"
-                />
-                Set as active provider
-              </label>
+            <div className="flex justify-end mb-4">
+              <Button size="sm" onClick={openAdd}>
+                <Plus className="h-4 w-4" />
+                Add Provider
+              </Button>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+
+            {error && <p className="text-sm text-destructive mb-4">{error}</p>}
+
+            {loading ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+            ) : providers.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No providers yet. Add your first provider to start chatting.
+              </p>
+            ) : (
+              <div className="grid max-h-[40vh] gap-2 overflow-y-auto pr-1">
+                {providers.map((p) => (
+                  <div
+                    key={p.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl border p-3",
+                      p.is_active && "border-primary/40 bg-primary/5"
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {PROVIDER_LABELS[p.provider_name] || p.provider_name}
+                        </span>
+                        {p.is_active && (
+                          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {p.default_model || "Default model"}
+                      </div>
+                    </div>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => openEdit(p)}
+                      title="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => handleDelete(p)}
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add / Edit dialog */}
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>{editing ? "Edit Provider" : "Add Provider"}</DialogTitle>
+                  <DialogDescription>
+                    Configure the provider, API key, and default model.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-2">
+                  <div className="grid gap-2">
+                    <Label>Provider</Label>
+                    <select
+                      value={formProvider}
+                      onChange={(e) => {
+                        setFormProvider(e.target.value);
+                        setFormModel("");
+                        fetchModelsForProvider(e.target.value);
+                      }}
+                      className={selectClass}
+                    >
+                      {PROVIDER_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label>API Key</Label>
+                    <Input
+                      type="password"
+                      value={formApiKey}
+                      onChange={(e) => setFormApiKey(e.target.value)}
+                      placeholder="Paste your API key (leave blank for Ollama)"
+                      autoComplete="off"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label>Default Model</Label>
+                    <select
+                      value={formModel}
+                      onChange={(e) => setFormModel(e.target.value)}
+                      className={selectClass}
+                      disabled={modelsLoading}
+                    >
+                      {!formModel && <option value="">Default model</option>}
+                      {formModel &&
+                        !modelOptions.some((m) => m.name === formModel) && (
+                          <option value={formModel}>{formModel} (saved)</option>
+                        )}
+                      {modelOptions.map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                    {modelsLoading && (
+                      <p className="text-xs text-muted-foreground">Loading models…</p>
+                    )}
+                    {!modelsLoading && modelOptions.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        No free models found or invalid API key
+                      </p>
+                    )}
+                  </div>
+
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={formActive}
+                      onChange={(e) => setFormActive(e.target.checked)}
+                      className="h-4 w-4 rounded border"
+                    />
+                    Set as active provider
+                  </label>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSave} disabled={saving}>
+                    {saving ? "Saving…" : "Save"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </TabsContent>
+
+          {/* ── Scheduler Tab ── */}
+          <TabsContent value="scheduler">
+            <ScheduledTasks
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onClose={() => {}}
+            />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

@@ -17,6 +17,9 @@ import type {
   SessionModelResponse,
   ProviderConfig,
   ProviderModelGroup,
+  ScheduledTask,
+  ScheduledTaskCreate,
+  ScheduledTaskUpdate,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 
@@ -257,5 +260,36 @@ export const API = {
   },
   listAllProviderModels() {
     return request<ProviderModelGroup[]>("/api/providers/models");
+  },
+
+  // ── Scheduler ────────────────────────────────────────────
+  listScheduledTasks() {
+    return request<ScheduledTask[]>("/api/scheduler");
+  },
+  getScheduledTask(id: number) {
+    return request<ScheduledTask>(`/api/scheduler/${id}`);
+  },
+  createScheduledTask(data: ScheduledTaskCreate) {
+    return request<ScheduledTask>("/api/scheduler", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  updateScheduledTask(id: number, data: ScheduledTaskUpdate) {
+    return request<ScheduledTask>(`/api/scheduler/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  },
+  deleteScheduledTask(id: number) {
+    return request<void>(`/api/scheduler/${id}`, { method: "DELETE" });
+  },
+  runScheduledTask(id: number) {
+    return request<{ response: string }>(`/api/scheduler/${id}/run`, {
+      method: "POST",
+    });
+  },
+  getSchedulerHealth() {
+    return request<{ running: boolean; jobs_count: number }>("/api/scheduler/health");
   },
 };

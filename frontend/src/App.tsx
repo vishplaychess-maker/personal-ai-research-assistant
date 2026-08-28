@@ -512,8 +512,12 @@ function App() {
       )}
 
       {/* Settings modal */}
-      {showSettings && (
-        <Settings onClose={() => setShowSettings(false)} />
+      {showSettings && activeSession && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+        />
       )}
     </div>
   );

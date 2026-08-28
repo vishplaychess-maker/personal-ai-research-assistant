@@ -87,6 +87,7 @@ class User(Base):
     sessions = relationship("ResearchSession", back_populates="user", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
     providers = relationship("UserProvider", back_populates="user", cascade="all, delete-orphan")
+    scheduled_tasks = relationship("ScheduledTask", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"
@@ -111,6 +112,7 @@ class ResearchSession(Base):
     user = relationship("User", back_populates="sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="session", cascade="all, delete-orphan")
+    scheduled_tasks = relationship("ScheduledTask", back_populates="session", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<ResearchSession(id={self.id}, title='{self.title}')>"
@@ -242,3 +244,31 @@ class UserProvider(Base):
 
     def __repr__(self):
         return f"<UserProvider(id={self.id}, provider='{self.provider_name}', active={self.is_active})>"
+
+
+class ScheduledTask(Base):
+    """A scheduled autonomous task that runs on a cron schedule."""
+
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("research_sessions.id"), nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    cron_expression = Column(String(100), nullable=False)  # e.g., "0 8 * * *" for 8 AM daily
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+    session = relationship("ResearchSession")
+
+    def __repr__(self):
+        return f"<ScheduledTask(id={self.id}, prompt='{self.prompt[:30]}...', cron='{self.cron_expression}', active={self.is_active})>"

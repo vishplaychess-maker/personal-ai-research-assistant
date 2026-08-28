@@ -209,3 +209,34 @@ export interface RetryTarget {
   errorDetail: string;
   image_url?: string;
 }
+
+// ── Scheduler Types ────────────────────────────────────────
+
+export interface ScheduledTask {
+  id: number;
+  user_id: number;
+  session_id: number;
+  prompt: string;
+  cron_expression: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_run_at: string | null;
+  next_run_at: string | null;
+}
+
+export interface ScheduledTaskWithSession extends ScheduledTask {
+  session_title: string;
+}
+
+export interface ScheduledTaskCreate {
+  session_id: number;
+  prompt: string;
+  cron_expression: string;
+}
+
+export interface ScheduledTaskUpdate {
+  prompt?: string;
+  cron_expression?: string;
+  is_active?: boolean;
+}

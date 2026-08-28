@@ -22,6 +22,7 @@ from app.routes.models import router as models_router
 from app.routes.providers import router as providers_router
 from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
+from app.routes.scheduler import router as scheduler_router
 
 
 def _migrate_database():
@@ -109,6 +110,31 @@ def _migrate_database():
 
         conn.commit()
 
+        # Add scheduled_tasks table if missing
+        existing_tables = inspector.get_table_names()
+        if "scheduled_tasks" not in existing_tables:
+            conn.execute(sa_text("""
+                CREATE TABLE scheduled_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    session_id INTEGER NOT NULL,
+                    prompt TEXT NOT NULL,
+                    cron_expression VARCHAR(100) NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    last_run_at TIMESTAMP,
+                    next_run_at TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id)
+                )
+            """))
+            # Create indexes
+            conn.execute(sa_text("CREATE INDEX ix_scheduled_tasks_user_id ON scheduled_tasks (user_id)"))
+            conn.execute(sa_text("CREATE INDEX ix_scheduled_tasks_session_id ON scheduled_tasks (session_id)"))
+
+        conn.commit()
+
 
 def _validate_jwt_secret():
     """
@@ -148,7 +174,15 @@ async def lifespan(app: FastAPI):
     init_db()
     _migrate_database()
     _create_default_user()
+    
+    # Start scheduler
+    from app.services.scheduler_service import start_scheduler, shutdown_scheduler
+    start_scheduler()
+    
     yield
+    
+    # Shutdown scheduler
+    shutdown_scheduler()
 
 
 def _create_default_user():
@@ -201,6 +235,7 @@ app.include_router(models_router)
 app.include_router(providers_router)
 app.include_router(search_router)
 app.include_router(auth_router)
+app.include_router(scheduler_router)
 
 
 @app.get("/api/health")
