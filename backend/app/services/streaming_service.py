@@ -316,8 +316,10 @@ async def stream_chat_response(
                 return
 
             elif chunk["type"] == "error":
+                # Pass through the provider's error with a generic code
+                # The detail contains the actual error from the provider (e.g., "OpenRouter returned HTTP 404: Model not found")
                 yield format_sse("error", {
-                    "code": "OLLAMA_ERROR",
+                    "code": "PROVIDER_ERROR",
                     "detail": chunk["error"],
                 })
                 return

@@ -348,6 +348,9 @@ async def stream_chat(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    # Capture user_id before async generator to avoid DetachedInstanceError
+    user_id = current_user.id
+
     async def event_generator():
         """Async generator producing SSE events for the streaming response."""
         cancelled = False
@@ -378,7 +381,7 @@ async def stream_chat(
                     # LLM emitted during streaming (strip them from saved text).
                     from app.tools.memory_tool import process_memory_markers
                     cleaned_content, saved_count = process_memory_markers(
-                        full_response_content, db, current_user.id, session_id
+                        full_response_content, db, user_id, session_id
                     )
                     if saved_count:
                         logger.info(
@@ -418,7 +421,7 @@ async def stream_chat(
                             user_input=payload.message,
                             db=db,
                             session_id=session_id,
-                            user_id=current_user.id,
+                            user_id=user_id,
                         )
                     except Exception as exc:
                         logger.warning("Background memory extraction failed: %s", exc)

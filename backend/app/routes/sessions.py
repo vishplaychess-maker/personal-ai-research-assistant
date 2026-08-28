@@ -25,10 +25,27 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 # ── Patchable wrapper for model validation ─────────────────
-def fetch_available_chat_models():
-    """Delegate to the configured LLM provider. Patchable for tests."""
-    provider = get_provider()
-    return provider.fetch_available_chat_models()
+def fetch_available_chat_models(db: Session, user_id: int):
+    """Return available chat models from ALL of the user's configured providers."""
+    from app.services.settings_service import list_user_providers
+    from app.services.llm_providers import get_provider
+
+    rows = list_user_providers(db, user_id)
+    all_models: List[str] = []
+    for row in rows:
+        try:
+            prov = get_provider(
+                config={
+                    "provider": row.provider_name,
+                    "api_key": row.api_key or None,
+                    "model": row.default_model or None,
+                }
+            )
+            names = prov.fetch_available_chat_models() or []
+            all_models.extend(names)
+        except Exception:
+            continue
+    return all_models
 
 
 def _get_session_or_404(
@@ -190,16 +207,16 @@ def update_session_model(
                 status_code=400,
                 detail=f"Model '{model}' is an embedding-only model and cannot be used for chat",
             )
-        available = fetch_available_chat_models()
-        if available is None:
+        available = fetch_available_chat_models(db, current_user.id)
+        if not available:
             raise HTTPException(
                 status_code=503,
-                detail="Unable to verify the model because Ollama model discovery is unavailable",
+                detail="Unable to verify the model because no provider model discovery is available",
             )
         if model not in available:
             raise HTTPException(
                 status_code=400,
-                detail=f"Model '{model}' is not available on the server",
+                detail=f"Model '{model}' is not available on any of your configured providers",
             )
 
     session.model = model
