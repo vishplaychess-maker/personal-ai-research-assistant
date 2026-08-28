@@ -51,6 +51,8 @@ def _migrate_database():
         existing_msg_cols = {c["name"] for c in inspector.get_columns("messages")}
         if "citations" not in existing_msg_cols:
             conn.execute(sa_text("ALTER TABLE messages ADD COLUMN citations TEXT"))
+        if "image_url" not in existing_msg_cols:
+            conn.execute(sa_text("ALTER TABLE messages ADD COLUMN image_url TEXT"))
 
         # Migrate memories table columns
         existing_mem_cols = {c["name"] for c in inspector.get_columns("memories")}
