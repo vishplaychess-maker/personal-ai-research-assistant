@@ -57,7 +57,7 @@ def extract_text(file_path: str, content_type: str) -> List[Dict]:
 
     Args:
         file_path: Absolute path to the uploaded file.
-        content_type: MIME type (text/plain or application/pdf).
+        content_type: MIME type (text/plain, application/pdf, or code files).
 
     Returns:
         List of dicts with 'text' and 'page_number' keys.
@@ -65,7 +65,7 @@ def extract_text(file_path: str, content_type: str) -> List[Dict]:
     Raises:
         ValueError: If extraction fails or content_type unsupported.
     """
-    if content_type == "text/plain":
+    if content_type == "text/plain" or content_type.startswith("text/") or content_type in ("application/json", "application/x-yaml", "application/xml", "application/x-yaml", "application/xml", "application/x-toml"):
         return extract_text_from_txt(file_path)
     elif content_type == "application/pdf":
         return extract_text_from_pdf(file_path)

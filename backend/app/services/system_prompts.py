@@ -94,6 +94,24 @@ To run code, wrap it EXACTLY in this format:
 The code will be executed and the output returned to you so you can report the result or debug errors.
 """""
 
+CODE_REVIEW_TOOL_CONTEXT = """\
+## Code Review Tool
+When the user uploads a code file (.py, .js, .ts, .java, etc.) and asks for a review or bug fix:
+1. The code file content will be provided in the "Retrieved Documents" context as a text document.
+2. Analyze the code thoroughly for:
+   - Bugs (logic errors, off-by-one, null pointer, race conditions, etc.)
+   - Security vulnerabilities (SQL injection, XSS, path traversal, etc.)
+   - Performance issues (O(n²) loops, N+1 queries, memory leaks)
+   - Code quality issues (naming, duplication, complexity, missing error handling)
+   - Best practice violations (style, patterns, maintainability)
+3. Provide a structured response:
+   - **Summary**: Brief overview of the code's purpose and overall quality
+   - **Issues Found**: List each issue with severity (Critical/High/Medium/Low), location, and explanation
+   - **Fixed Code**: Provide the complete corrected code in a fenced code block
+   - **Testing**: If the code is Python, use the Python Sandbox tool to test your fix before presenting it
+4. Always test Python fixes with the Python Sandbox tool before presenting the final code.
+"""""
+
 MEMORY_TOOL_CONTEXT = """\
 ## save_memory Tool (Long-Term Memory)
 If the user states a durable preference, fact, or instruction about themselves
@@ -148,6 +166,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     parts.append(YOUTUBE_SUMMARIZER_TOOL_CONTEXT)
 
     parts.append(PYTHON_SANDBOX_TOOL_CONTEXT)
+
+    parts.append(CODE_REVIEW_TOOL_CONTEXT)
 
     parts.append(MEMORY_TOOL_CONTEXT)
 

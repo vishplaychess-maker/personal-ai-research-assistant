@@ -40,10 +40,39 @@ router = APIRouter(tags=["documents"])
 
 # ── Constants ──────────────────────────────────────────────
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".r", ".m", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".sql", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".conf", ".md", ".markdown", ".rst", ".tex", ".dockerfile", ".gitignore", ".dockerignore"}
 ALLOWED_MIME_TYPES = {
     "application/pdf",
     "text/plain",
+    "text/x-python",
+    "application/javascript",
+    "text/javascript",
+    "application/typescript",
+    "text/typescript",
+    "text/x-java-source",
+    "text/x-c",
+    "text/x-c++",
+    "text/x-csharp",
+    "text/x-go",
+    "text/x-rust",
+    "text/x-ruby",
+    "application/x-php",
+    "text/x-swift",
+    "text/x-kotlin",
+    "text/x-scala",
+    "text/x-r",
+    "text/x-objc",
+    "application/x-sh",
+    "application/x-sql",
+    "text/html",
+    "text/css",
+    "application/json",
+    "application/x-yaml",
+    "application/xml",
+    "application/toml",
+    "text/markdown",
+    "application/x-tex",
+    "text/x-dockerfile",
 }
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
