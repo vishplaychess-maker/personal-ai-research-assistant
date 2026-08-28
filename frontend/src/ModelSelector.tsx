@@ -1,15 +1,14 @@
 /**
- * ModelSelector — compact pill button + popover listing models from ALL the
- * user's configured providers, grouped by provider.
- *
- * Selecting a model marks that provider active (PUT /api/providers/{id}) and
- * persists the choice on the session (PATCH /api/sessions/{id}/model).
+ * ModelSelector — Minimal model picker (Grok style).
+ * Clean dropdown, grouped by provider, subtle animations.
+ * Monochrome dark aesthetic with indigo accents.
+ * Uses a portal to render dropdown at body level for proper z-index.
  */
-
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Zap, ChevronDown, RefreshCw } from "lucide-react";
+import { Zap, ChevronDown, RefreshCw, Sparkles } from "lucide-react";
 import { API } from "./api";
 import { cn } from "./lib/utils";
+import { createPortal } from "react-dom";
 import type { ModelInfo, ProviderModelGroup } from "./types";
 
 // ── Types ─────────────────────────────────────────────────
@@ -39,6 +38,151 @@ function badgeFor(id: string): string | null {
   return null;
 }
 
+// ── Dropdown Content Component (for portal) ───────────────
+
+interface DropdownContentProps {
+  groups: ProviderModelGroup[];
+  currentModel: string | null;
+  loading: boolean;
+  error: string | null;
+  open: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+  onSelect: (group: ProviderModelGroup | null, modelName: string) => void;
+  saving: boolean;
+  triggerRect: DOMRect | null;
+}
+
+function DropdownContent({
+  groups,
+  currentModel,
+  loading,
+  error,
+  open,
+  onClose,
+  onRefresh,
+  onSelect,
+  saving,
+  triggerRect,
+}: DropdownContentProps) {
+  if (!open || !triggerRect) return null;
+
+  // Calculate position: dropdown appears below the trigger, right-aligned
+  const top = triggerRect.bottom + 8; // mt-2 = 8px
+  const left = triggerRect.right - 288; // w-72 = 288px, right-aligned
+
+  return createPortal(
+    <div
+      className="fixed z-[100] flex max-h-[70vh] w-72 flex-col overflow-hidden rounded-xl border border-white/5 bg-background text-foreground shadow-2xl backdrop-blur-xl pointer-events-auto"
+      role="listbox"
+      style={{ top: `${top}px`, left: `${left}px` }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/5 px-3 py-2.5">
+        <span className="text-xs font-semibold text-foreground">Select Model</span>
+        <button
+          className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-foreground hover:bg-white/3 transition-all"
+          onClick={onRefresh}
+          disabled={loading}
+          title="Refresh models"
+          aria-label="Refresh models"
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="border-b border-white/5 px-3 py-2 text-xs text-destructive bg-destructive/5">
+          {error}
+        </div>
+      )}
+
+      {/* Model List */}
+      <div className="flex-1 overflow-y-auto p-1.5">
+        {/* Default Option */}
+        <button
+          role="option"
+          aria-selected={!currentModel}
+          className={cn(
+            "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors",
+            "hover:bg-white/3",
+            !currentModel && "bg-white/5 text-primary"
+          )}
+          onClick={() => onSelect(null, "")}
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>Default model</span>
+          </div>
+          <span className="text-xs text-muted-foreground">Server default</span>
+        </button>
+
+        {loading && groups.length === 0 && (
+          <div className="px-2 py-4 text-center text-xs text-muted-foreground">Loading models…</div>
+        )}
+
+        {!loading && groups.length === 0 && !error && (
+          <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+            No providers configured. Add one in Settings.
+          </div>
+        )}
+
+        {groups.map((g) => (
+          <div key={g.provider_id} className="mt-2">
+            <div className="flex items-center justify-between px-2 pb-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                {g.provider_label}
+              </span>
+              <span className="text-[10px] text-muted-foreground/40">
+                {g.models.length} model{g.models.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            {g.models.length === 0 ? (
+              <p className="px-2 pb-1 text-xs text-muted-foreground/40">
+                No models available (check API key)
+              </p>
+            ) : (
+              g.models.map((m) => {
+                const badge = badgeFor(m.name);
+                const isSelected = currentModel === m.name;
+                return (
+                  <button
+                    key={m.name}
+                    role="option"
+                    aria-selected={isSelected}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm transition-all duration-150",
+                      "hover:bg-white/3",
+                      isSelected && "bg-primary/10 text-primary"
+                    )}
+                    onClick={() => onSelect(g, m.name)}
+                  >
+                    <span className="truncate font-medium">{shortName(m.name)}</span>
+                    {badge && (
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-2 py-0.5 text-[9px] font-medium",
+                          badge === "Fast"
+                            ? "bg-green-500/10 text-green-500"
+                            : "bg-primary/10 text-primary"
+                        )}
+                      >
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 // ── Component ─────────────────────────────────────────────
 
 export function ModelSelector({
@@ -51,7 +195,8 @@ export function ModelSelector({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRectRef = useRef<DOMRect | null>(null);
 
   const fetchModels = useCallback(async () => {
     setLoading(true);
@@ -79,8 +224,12 @@ export function ModelSelector({
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setOpen(false);
+      if (triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
+        // Check if click is inside the portal dropdown
+        const dropdown = document.querySelector('[role="listbox"]');
+        if (dropdown && !dropdown.contains(e.target as Node)) {
+          setOpen(false);
+        }
       }
     };
     document.addEventListener("mousedown", handler);
@@ -92,7 +241,6 @@ export function ModelSelector({
     setError(null);
     try {
       if (group) {
-        // Routing: mark the owning provider active so chat uses its API key.
         await API.updateProvider(group.provider_id, { is_active: true });
       }
       await API.updateSessionModel(sessionId, modelName === "" ? null : modelName);
@@ -105,113 +253,56 @@ export function ModelSelector({
     }
   };
 
+  // Calculate dropdown position when open
+  useEffect(() => {
+    if (open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      dropdownRectRef.current = rect;
+    }
+  }, [open]);
+
   const displayName = currentModel ? shortName(currentModel) : "Default model";
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative">
       <button
-        className="flex items-center gap-1.5 rounded-full border bg-background/70 px-3 py-1.5 text-xs font-medium shadow-sm backdrop-blur transition-colors hover:bg-accent/60"
+        ref={triggerRef}
+        className={cn(
+          "flex items-center gap-2 rounded-xl bg-white/3 px-3 py-1.5 text-xs font-medium border border-white/5 transition-all",
+          "hover:bg-white/5 hover:border-primary/20",
+          open && "border-primary/30 bg-white/5"
+        )}
         onClick={() => {
           setOpen(!open);
           if (!open) fetchModels();
         }}
         disabled={saving}
         title={currentModel ? `Model: ${currentModel}` : "Click to select a model"}
+        aria-expanded={open}
+        aria-haspopup="listbox"
       >
         <Zap className="h-3.5 w-3.5 text-primary" />
         <span className="max-w-[140px] truncate">
           {saving ? "Saving…" : displayName}
         </span>
         <ChevronDown
-          className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")}
+          className={cn("h-3.5 w-3.5 transition-transform duration-150", open && "rotate-180")}
         />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg">
-          <div className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-xs font-medium">Select model</span>
-            <button
-              className="rounded p-1 hover:bg-accent"
-              onClick={fetchModels}
-              disabled={loading}
-              title="Refresh"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-            </button>
-          </div>
-
-          {error && (
-            <div className="border-b px-3 py-2 text-xs text-destructive">{error}</div>
-          )}
-
-          <div className="flex-1 overflow-y-auto p-2">
-            <button
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent"
-              onClick={() => handleSelect(null, "")}
-            >
-              <span>Default model</span>
-              <span className="text-xs text-muted-foreground">Server default</span>
-            </button>
-
-            {loading && groups.length === 0 && (
-              <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                Loading models…
-              </p>
-            )}
-            {!loading && groups.length === 0 && !error && (
-              <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                No providers configured. Add one in Settings.
-              </p>
-            )}
-
-            {groups.map((g) => (
-              <div key={g.provider_id} className="mt-2">
-                <div className="flex items-center justify-between px-2 pb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {g.provider_label}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {g.models.length}
-                  </span>
-                </div>
-                {g.models.length === 0 ? (
-                  <p className="px-2 pb-1 text-xs text-muted-foreground">
-                    No models (check API key)
-                  </p>
-                ) : (
-                  g.models.map((m) => {
-                    const badge = badgeFor(m.name);
-                    return (
-                      <button
-                        key={m.name}
-                        className={cn(
-                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent",
-                          currentModel === m.name && "bg-accent/60"
-                        )}
-                        onClick={() => handleSelect(g, m.name)}
-                      >
-                        <span className="truncate">{shortName(m.name)}</span>
-                        {badge && (
-                          <span
-                            className={cn(
-                              "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                              badge === "Fast"
-                                ? "bg-green-500/10 text-green-600 dark:text-green-400"
-                                : "bg-primary/10 text-primary"
-                            )}
-                          >
-                            {badge}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+      {open && dropdownRectRef.current && (
+        <DropdownContent
+          groups={groups}
+          currentModel={currentModel}
+          loading={loading}
+          error={error}
+          open={open}
+          onClose={() => setOpen(false)}
+          onRefresh={fetchModels}
+          onSelect={handleSelect}
+          saving={saving}
+          triggerRect={dropdownRectRef.current}
+        />
       )}
     </div>
   );

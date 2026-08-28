@@ -3,77 +3,115 @@
 @tailwind utilities;
 
 /*
- * Claude.ai-inspired theme (light): warm cream + terracotta accent.
- * shadcn/ui CSS variables are defined as HSL triplets; a set of legacy
- * aliases (used by pre-existing App.css components) is kept in sync below.
+ * Grok.com inspired theme - Monochrome dark aesthetic
+ * Background: Almost black (#0B0F19)
+ * Surfaces: Slightly lighter (#131722)
+ * Text: Off-white (#E4E6EB)
+ * Accent: Subtle indigo (#6366F1)
+ * Borders: Very subtle white opacity (rgba(255,255,255,0.08))
  */
-:root {
-  --background: 40 23% 97%;          /* warm off-white #FAF9F7 */
-  --foreground: 30 1% 12%;           /* near-black warm gray #1F1E1D */
-  --card: 40 20% 98%;                /* #FCFBF9 */
-  --card-foreground: 30 1% 12%;
-  --popover: 40 20% 98%;
-  --popover-foreground: 30 1% 12%;
-  --primary: 16 53% 50%;             /* terracotta #C15F3C */
-  --primary-foreground: 40 20% 98%;
-  --secondary: 48 5% 92%;            /* warm cream #F0EEE6 */
-  --secondary-foreground: 30 1% 12%;
-  --muted: 48 5% 92%;
-  --muted-foreground: 30 6% 45%;
-  --accent: 48 5% 92%;
-  --accent-foreground: 30 1% 12%;
-  --destructive: 0 70% 55%;
-  --destructive-foreground: 40 20% 98%;
-  --border: 45 15% 90%;              /* subtle warm gray #EAE7E1 */
-  --input: 45 15% 90%;
-  --ring: 16 53% 50%;
-  --radius: 0.625rem;
 
-  /* Legacy aliases (App.css) */
-  --bg-primary: #faf9f7;
-  --bg-secondary: #f0eee6;
-  --bg-card: #fcfbf9;
-  --text-primary: #1f1e1d;
-  --text-secondary: #75706a;
-  --accent-green: #16a34a;
-  --accent-red: #d9534f;
-  --accent-blue: #c15f3c;
-  --border-color: #eae7e1;
-  --shadow: 0 1px 3px rgba(31, 30, 29, 0.08);
+:root {
+  /* Light Mode - Keep for fallback but rarely used */
+  --background: 0 0% 100%;
+  --foreground: 222 47% 4%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 4%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 4%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 14% 96%;
+  --secondary-foreground: 222 47% 4%;
+  --muted: 220 14% 96%;
+  --muted-foreground: 215 20% 40%;
+  --accent: 220 14% 96%;
+  --accent-foreground: 222 47% 4%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 239 84% 67%;
+  --radius: 0.75rem;
+
+  /* Legacy aliases */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f1f5f9;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --accent-blue: #6366f1;
+  --border-color: #e2e8f0;
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
 }
 
+/* Grok-style Dark Theme (DEFAULT) */
 .dark {
-  --background: 222 47% 11%;
-  --foreground: 210 40% 98%;
-  --card: 217 33% 17%;
+  /* Core colors */
+  --background: 225 20% 4%;        /* #0B0F19 - Almost black with slight blue tint */
+  --foreground: 210 40% 98%;       /* #F8FAFC - Bright cream white */
+  --card: 225 15% 7%;              /* #131722 - Slightly lighter surface */
   --card-foreground: 210 40% 98%;
-  --popover: 222 47% 11%;
+  --popover: 225 15% 7%;
   --popover-foreground: 210 40% 98%;
-  --primary: 217 91% 60%;
-  --primary-foreground: 222 47% 11%;
-  --secondary: 217 33% 17%;
+  
+  /* Accent - Subtle indigo */
+  --primary: 239 84% 67%;          /* #6366F1 - Indigo */
+  --primary-foreground: 0 0% 100%;
+  
+  /* Muted surfaces */
+  --secondary: 225 10% 10%;        /* #1A1B26 - Subtle hover */
   --secondary-foreground: 210 40% 98%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 217 33% 17%;
+  --muted: 225 10% 10%;
+  --muted-foreground: 215 20% 65%; /* Muted text - brighter */
+  --accent: 225 10% 10%;
   --accent-foreground: 210 40% 98%;
-  --destructive: 0 63% 31%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 217 33% 17%;
-  --input: 217 33% 17%;
-  --ring: 16 60% 55%;
-
-  /* Legacy aliases (App.css) */
-  --bg-primary: #1f1e1d;
-  --bg-secondary: #2a2825;
-  --bg-card: #2a2825;
-  --text-primary: #f2efe9;
-  --text-secondary: #a8a29e;
-  --accent-green: #22c55e;
+  
+  /* States */
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  
+  /* Borders - Very subtle */
+  --border: 225 10% 15%;           /* ~rgba(255,255,255,0.08) */
+  --input: 225 10% 15%;
+  --ring: 239 84% 67%;
+  
+  /* Legacy aliases */
+  --bg-primary: #0B0F19;
+  --bg-secondary: #131722;
+  --bg-card: #1A1B26;
+  --text-primary: #F8FAFC;         /* Bright cream white */
+  --text-secondary: #CBD5E1;       /* Brighter secondary */
+  --accent-green: #10b981;
   --accent-red: #ef4444;
-  --accent-blue: #d97757;
-  --border-color: #3d3a35;
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --accent-blue: #6366f1;
+  --border-color: rgba(255,255,255,0.08);
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Force dark mode as default by making :root use dark values when no .light class */
+:root:not(.light) {
+  --background: 225 20% 4%;
+  --foreground: 210 40% 98%;
+  --card: 225 15% 7%;
+  --card-foreground: 210 40% 98%;
+  --popover: 225 15% 7%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 225 10% 10%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 225 10% 10%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 225 10% 10%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 225 10% 15%;
+  --input: 225 10% 15%;
+  --ring: 239 84% 67%;
 }
 
 @layer base {
@@ -83,53 +121,132 @@
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
   body {
     background: hsl(var(--background));
     color: hsl(var(--foreground));
     min-height: 100vh;
-    line-height: 1.5;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-      Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    line-height: 1.6;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 }
 
-/* Message entry animation */
-@keyframes message-in {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.animate-message-in {
-  animation: message-in 0.28s ease-out both;
-}
-
-/* Typing indicator (three pulsing dots) */
-@keyframes typing-bounce {
-  0%, 80%, 100% {
-    transform: translateY(0);
-    opacity: 0.35;
-  }
-  40% {
-    transform: translateY(-4px);
-    opacity: 1;
-  }
-}
-.typing-dot {
+/* Premium scrollbar */
+::-webkit-scrollbar {
   width: 6px;
   height: 6px;
-  border-radius: 9999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 3px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.35);
+}
+
+/* Selection */
+::selection {
+  background: hsl(var(--primary) / 0.25);
+  color: hsl(var(--primary-foreground));
+}
+
+/* Smooth transitions */
+button, a, input, textarea, select, [role="button"] {
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+/* Glassmorphism utility - more subtle for Grok */
+.glass {
+  background: hsl(var(--card) / 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid hsl(var(--border));
+}
+
+/* Input box specific - floating look */
+.input-glass {
+  background: hsl(var(--card) / 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid hsl(var(--border));
+}
+
+/* Markdown styling */
+.prose {
+  color: hsl(var(--foreground));
+  max-width: none;
+}
+.prose p { margin: 0.75em 0; line-height: 1.7; }
+.prose code { 
+  background: hsl(var(--muted));
+  padding: 0.15em 0.4em;
+  border-radius: 0.375rem;
+  font-size: 0.875em;
+  font-weight: 500;
+}
+.prose pre { 
+  background: hsl(var(--muted));
+  border-radius: 0.75rem;
+  padding: 1rem;
+  overflow-x: auto;
+  border: 1px solid hsl(var(--border));
+}
+.prose pre code { 
+  background: transparent;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.prose strong { font-weight: 600; }
+.prose a { color: hsl(var(--primary)); text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
+.prose blockquote { 
+  border-left: 3px solid hsl(var(--primary));
+  padding-left: 1rem;
+  margin: 1em 0;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+.prose ul, .prose ol { padding-left: 1.5rem; margin: 0.75em 0; }
+.prose li { margin: 0.25em 0; }
+.prose h1 { font-size: 1.5rem; font-weight: 700; margin: 1.5em 0 0.75em; }
+.prose h2 { font-size: 1.25rem; font-weight: 600; margin: 1.25em 0 0.5em; }
+.prose h3 { font-size: 1.125rem; font-weight: 600; margin: 1em 0 0.5em; }
+.prose hr { border-color: hsl(var(--border)); margin: 1.5em 0; }
+
+/* Message animation */
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-message-in { animation: message-in 0.3s ease-out both; }
+
+/* Typing indicator */
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-5px); opacity: 1; }
+}
+.typing-dot {
+  width: 7px; height: 7px; border-radius: 9999px;
   background: hsl(var(--muted-foreground));
-  animation: typing-bounce 1.2s infinite ease-in-out;
+  animation: typing-bounce 1.3s infinite ease-in-out;
 }
-.typing-dot:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.typing-dot:nth-child(3) {
-  animation-delay: 0.3s;
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Focus styles */
+*:focus-visible {
+  outline: none;
+  ring: 2px;
+  ring-color: hsl(var(--ring));
+  ring-offset: 2px;
+  ring-offset-color: hsl(var(--background));
 }

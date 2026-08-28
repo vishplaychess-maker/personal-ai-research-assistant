@@ -1,6 +1,6 @@
 /**
- * Sidebar - Session list with search, CRUD, health indicators, theme toggle.
- * White/Blue theme (Tailwind + shadcn/ui); active session highlighted in blue.
+ * Sidebar - Minimal session list (Grok style).
+ * No heavy borders, subtle hover states, clean typography.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -151,26 +151,30 @@ export function Sidebar({
   const isSearchActive = searchQuery.trim().length > 0;
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-3 py-3">
-        <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <MessageSquare className="h-4 w-4" />
-          </span>
-          Research
-        </span>
-        <Button size="icon" variant="ghost" onClick={onCreateSession} title="New session">
+    <aside className="flex h-full w-64 shrink-0 flex-col bg-background border-r border-white/5">
+      {/* Header - Minimal */}
+      <header className="flex items-center justify-between border-b border-white/5 px-3 py-3">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-5 w-5 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">Research</span>
+        </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={onCreateSession}
+          title="New session"
+          className="h-8 w-8 rounded-xl transition-colors hover:bg-white/5"
+        >
           <Plus className="h-4 w-4" />
         </Button>
-      </div>
+      </header>
 
-      {/* Search */}
-      <div className="px-3 py-2">
-        <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-2 focus-within:ring-1 focus-within:ring-ring">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+      {/* Search - Clean */}
+      <div className="px-3 py-2 border-b border-white/5">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
           <input
-            className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="h-9 w-full rounded-xl bg-white/3 border border-transparent px-9 py-0 text-sm outline-none placeholder:text-muted-foreground/40 focus:border-primary/30 focus:bg-white/5 transition-all"
             type="text"
             placeholder="Search conversations"
             value={searchQuery}
@@ -181,7 +185,7 @@ export function Sidebar({
           />
           {searchQuery && (
             <button
-              className="text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/40 transition-colors hover:text-foreground"
               onClick={handleClearSearch}
               title="Clear search"
             >
@@ -189,7 +193,7 @@ export function Sidebar({
             </button>
           )}
           {isSearching && (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground/40" />
           )}
         </div>
       </div>
@@ -200,109 +204,108 @@ export function Sidebar({
           {isSearchActive ? (
             <>
               {searchError && (
-                <div className="px-3 py-2 text-xs text-destructive">{searchError}</div>
+                <div className="mb-2 px-3 py-2 text-xs text-destructive">{searchError}</div>
               )}
               {isSearching && searchResults.length === 0 ? (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  Searching...
-                </div>
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">Searching…</div>
               ) : !isSearching && searchResults.length === 0 ? (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  No results found
-                </div>
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">No results found</div>
               ) : (
                 searchResults.map((result) => (
                   <div
                     key={result.message_id}
                     className={cn(
-                      "mb-1 cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-muted",
-                      result.session_id === activeSessionId && "bg-muted"
+                      "mb-1 cursor-pointer rounded-lg px-3 py-2 transition-colors hover:bg-white/3",
+                      result.session_id === activeSessionId && "bg-white/5"
                     )}
                     onClick={() => handleSearchResultClick(result)}
                   >
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {result.session_title}
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {result.snippet}
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">
-                      {result.role} · {formatDate(result.created_at)}
-                    </div>
+                    <div className="truncate text-sm font-medium text-foreground">{result.session_title}</div>
+                    <div className="truncate text-xs text-muted-foreground">{result.snippet}</div>
+                    <div className="mt-1 text-[10px] text-muted-foreground/50">{result.role} · {formatDate(result.created_at)}</div>
                   </div>
                 ))
               )}
             </>
           ) : loadingSessions ? (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Loading...
-            </div>
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">Loading…</div>
           ) : sessions.length === 0 ? (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No sessions yet
+            <div className="px-3 py-8 text-center">
+              <MessageSquare className="mx-auto mb-2 h-8 w-8 opacity-20" />
+              <p className="text-sm text-muted-foreground">No conversations yet</p>
+              <p className="mt-1 text-xs text-muted-foreground/50">Click + to start a new conversation</p>
             </div>
           ) : (
-            sessions.map((session) => (
-              <div
-                key={session.id}
-                className={cn(
-                  "group mb-1 flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
-                  session.id === activeSessionId
-                    ? "bg-secondary text-foreground"
-                    : "hover:bg-secondary/60"
-                )}
-                onClick={() => onSelectSession(session.id)}
-              >
-                <MessageSquare className="h-4 w-4 shrink-0 opacity-70" />
-                {renamingId === session.id ? (
-                  <input
-                    className="h-7 w-full rounded border bg-background px-2 text-sm outline-none"
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={() => handleRenameSubmit(session.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleRenameSubmit(session.id);
-                      if (e.key === "Escape") setRenamingId(null);
-                    }}
-                    autoFocus
+            sessions.map((session) => {
+              const isActive = session.id === activeSessionId;
+              return (
+                <div
+                  key={session.id}
+                  className={cn(
+                    "group mb-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150",
+                    isActive ? "bg-white/5 text-foreground" : "hover:bg-white/3"
+                  )}
+                  onClick={() => onSelectSession(session.id)}
+                >
+                  <div className={cn("flex-1 flex items-center gap-2 min-w-0", isActive ? "ml-1" : "ml-2")}>
+                    <MessageSquare className={cn(
+                      "h-4 w-4 shrink-0 transition-colors",
+                      isActive ? "text-primary" : "text-muted-foreground/40"
+                    )} />
+                    {renamingId === session.id ? (
+                      <input
+                        className="h-7 w-full rounded border bg-background px-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => handleRenameSubmit(session.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleRenameSubmit(session.id);
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <>
+                        <span className={cn("truncate font-medium", isActive ? "text-foreground" : "text-foreground/80")}>
+                          {session.title}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground/40">
+                          {formatDate(session.updated_at)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <div
+                    className="hidden shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 group-hover:flex transition-opacity duration-150"
                     onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <>
-                    <span className="flex-1 truncate">{session.title}</span>
-                    <span className="shrink-0 text-[10px] opacity-60">
-                      {formatDate(session.updated_at)}
-                    </span>
-                    <div
-                      className="hidden shrink-0 items-center gap-0.5 group-hover:flex"
-                      onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-foreground hover:bg-white/5 transition-all"
+                      title="Rename"
+                      onClick={() => handleRenameStart(session)}
                     >
-                      <button
-                        className="rounded p-1 opacity-70 transition-opacity hover:opacity-100"
-                        title="Rename"
-                        onClick={() => handleRenameStart(session)}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        className="rounded p-1 opacity-70 transition-opacity hover:opacity-100"
-                        title="Delete"
-                        onClick={() => onDeleteSession(session.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      className="h-7 w-7 rounded-lg text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-all"
+                      title="Delete"
+                      onClick={() => onDeleteSession(session.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       </ScrollArea>
 
-      {/* Footer */}
-      <div className="border-t px-3 py-2">
-        <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+      {/* Footer - Minimal */}
+      <footer className="border-t border-white/5 px-3 py-3">
+        {/* Health Status - Very subtle */}
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground/60">
           <span className="flex items-center gap-1">
             <span
               className={cn(
@@ -321,22 +324,30 @@ export function Sidebar({
             />
             LLM
           </span>
-          <span className="ml-auto">
+          <span className="flex items-center gap-1">
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                health?.chromadb === "ok" ? "bg-green-500" : "bg-destructive"
+              )}
+            />
+            DB
+          </span>
+          <span className="ml-auto text-[10px] font-medium text-muted-foreground/50">
             {healthOk === 3 ? "All OK" : `${healthOk}/3`}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+
+        {/* Action Buttons - Minimal */}
+        <div className="flex items-center gap-0.5">
           <Button
             size="icon"
             variant="ghost"
             onClick={toggleTheme}
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
           >
-            {theme === "dark" ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           {onOpenSettings && (
             <Button
@@ -344,17 +355,24 @@ export function Sidebar({
               variant="ghost"
               onClick={onOpenSettings}
               title="Settings"
+              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
             >
               <SettingsIcon className="h-4 w-4" />
             </Button>
           )}
           {onLogout && (
-            <Button size="icon" variant="ghost" onClick={onLogout} title="Sign out">
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onLogout}
+              title="Sign out"
+              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5 hover:text-destructive"
+            >
               <LogOut className="h-4 w-4" />
             </Button>
           )}
         </div>
-      </div>
+      </footer>
     </aside>
   );
 }

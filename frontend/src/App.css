@@ -187,8 +187,8 @@
 }
 .sidebar-item:hover { background: rgba(255, 255, 255, 0.05); }
 .sidebar-item.active {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: hsl(var(--primary) / 0.12);
+  border: 1px solid hsl(var(--primary) / 0.2);
 }
 
 .sidebar-item-icon { font-size: 0.85rem; flex-shrink: 0; }
@@ -326,7 +326,7 @@
   transition: all var(--transition);
 }
 .doc-toggle-btn:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--accent-blue); color: var(--text-primary); }
-.doc-toggle-btn.active { border-color: var(--accent-blue); color: var(--accent-blue); }
+.doc-toggle-btn.active { border-color: hsl(var(--primary)); color: hsl(var(--primary)); }
 
 .doc-count-badge {
   background: var(--accent-blue); color: #fff; font-size: 0.6rem;
@@ -526,7 +526,7 @@
   transition: all var(--transition);
 }
 .mem-toggle-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); border-color: #a78bfa; color: var(--text-primary); }
-.mem-toggle-btn.active { border-color: #a78bfa; color: #a78bfa; }
+.mem-toggle-btn.active { border-color: hsl(var(--primary)); color: hsl(var(--primary)); background: hsl(var(--primary) / 0.08); }
 .mem-toggle-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .mem-count-badge {
@@ -762,7 +762,7 @@
 }
 
 .citation-popup-marker {
-  background: var(--accent-blue); color: #fff;
+  background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
   padding: 0.1rem 0.5rem; border-radius: 3px;
   font-size: 0.7rem; font-weight: 700;
 }
@@ -935,8 +935,8 @@
   background: rgba(255, 255, 255, 0.05);
 }
 .model-selector-item.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--accent-blue);
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
 }
 
 .model-selector-item-name {
@@ -980,9 +980,9 @@
   color: var(--text-primary);
 }
 .sp-toggle-btn.active {
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
-  background: rgba(59, 130, 246, 0.08);
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.08);
 }
 
 /* ── System Prompt Editor (Modal) ──────────────────────── */
@@ -1409,13 +1409,13 @@
 
 /* Inline code */
 .markdown-body .md-inline-code {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
   border-radius: 4px;
   padding: 0.1rem 0.35rem;
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 0.8em;
-  color: #93c5fd;
+  color: hsl(var(--primary));
 }
 
 /* Blockquotes */
