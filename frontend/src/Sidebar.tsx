@@ -156,7 +156,7 @@ export function Sidebar({
       <header className="flex items-center justify-between border-b border-white/10 px-3 py-3">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-5 w-5 icon-secondary" />
-          <span className="text-sm font-medium text-foreground">Research</span>
+          <span className="text-sm font-medium text-foreground">Thunder AI</span>
         </div>
         <Button
           size="icon"

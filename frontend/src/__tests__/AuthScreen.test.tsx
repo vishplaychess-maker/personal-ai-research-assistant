@@ -50,9 +50,9 @@ describe("AuthScreen", () => {
     expect(screen.getByPlaceholderText("your password")).toBeTruthy();
   });
 
-  it("renders the AI Research Assistant title", async () => {
+  it("renders the Thunder AI title", async () => {
     await renderAuthScreen();
-    expect(screen.getByText("AI Research Assistant")).toBeTruthy();
+    expect(screen.getByText("Thunder AI")).toBeTruthy();
   });
 
   it("shows switch to register link", async () => {

@@ -11,9 +11,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.ico", "robots.txt"],
       manifest: {
-        name: "Personal AI Research Assistant",
-        short_name: "AI Research",
-        description: "Your personal AI-powered research assistant with document analysis, web search, and memory.",
+        name: "Thunder AI",
+        short_name: "Thunder AI",
+        description: "Thunder AI — your AI research assistant with document analysis, web search, and memory.",
         theme_color: "#09090B",
         background_color: "#09090B",
         display: "standalone",

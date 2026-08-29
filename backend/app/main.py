@@ -207,7 +207,7 @@ def _create_default_user():
 
 
 app = FastAPI(
-    title="Personal AI Research Assistant",
+    title="Thunder AI",
     version="0.3.0",
     lifespan=lifespan,
 )

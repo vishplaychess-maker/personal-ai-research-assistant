@@ -229,7 +229,7 @@ export function ChatArea({
             <div className="mb-4 text-6xl opacity-20">
               <MessageSquare className="mx-auto h-16 w-16" />
             </div>
-            <h2 className="mb-2 text-xl font-medium text-foreground">Start a research conversation</h2>
+            <h2 className="mb-2 text-xl font-medium text-foreground">Start a conversation with Thunder AI</h2>
             <p className="text-base">Select a session from the sidebar or create a new one to begin.</p>
           </div>
         </div>
@@ -331,6 +331,7 @@ export function ChatArea({
             {!hasMessages && !isStreaming && (
               <div className="flex flex-1 items-center justify-center px-4 min-h-[calc(100vh-200px)]">
                 <div className="w-full max-w-xl animate-fade-in-up">
+                  <h1 className="mb-6 text-center text-2xl font-medium text-foreground">Ask Thunder AI anything</h1>
                   {/* Centered Input Box - Grok Style */}
                   <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
                     {/* Image preview */}
@@ -356,7 +357,7 @@ export function ChatArea({
                       <textarea
                         ref={inputRef}
                         className="max-h-[160px] min-h-[56px] w-full flex-1 resize-none bg-transparent px-5 py-4 text-base leading-relaxed text-foreground placeholder:text-placeholder focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder="Ask anything about your research…"
+                        placeholder="Ask Thunder AI anything…"
                         value={input}
                         onChange={(e) => onInputChange(e.target.value)}
                         onKeyDown={onKeyDown}

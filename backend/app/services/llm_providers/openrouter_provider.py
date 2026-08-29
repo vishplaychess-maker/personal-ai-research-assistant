@@ -44,7 +44,7 @@ class OpenRouterProvider(LLMProvider):
             "Authorization": f"Bearer {self._api_key or settings.openrouter_api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/personal-ai-research-assistant",
-            "X-Title": "Personal AI Research Assistant",
+            "X-Title": "Thunder AI",
         }
 
     def _build_messages(
