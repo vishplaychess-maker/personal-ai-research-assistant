@@ -272,3 +272,31 @@ class ScheduledTask(Base):
 
     def __repr__(self):
         return f"<ScheduledTask(id={self.id}, prompt='{self.prompt[:30]}...', cron='{self.cron_expression}', active={self.is_active})>"
+
+
+class MCPServer(Base):
+    """A user-configured stdio MCP server (Model Context Protocol)."""
+
+    __tablename__ = "mcp_servers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(40), nullable=False)          # ^[a-z0-9]+(?:_[a-z0-9]+)*$
+    command = Column(String(255), nullable=False)
+    args_json = Column(Text, nullable=False, default="[]")        # JSON array of strings
+    env_json = Column(Text, nullable=True)                        # JSON object or null
+    enabled = Column(Boolean, nullable=False, default=True)
+    tool_allowlist_json = Column(Text, nullable=True)             # JSON array of bare tool names or null
+    tools_json = Column(Text, nullable=True)                      # JSON array of {name,description,inputSchema}
+    last_discovered_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    def __repr__(self):
+        return f"<MCPServer(id={self.id}, name='{self.name}', enabled={self.enabled})>"

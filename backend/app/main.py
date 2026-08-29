@@ -135,6 +135,28 @@ def _migrate_database():
             conn.execute(sa_text("CREATE INDEX ix_scheduled_tasks_user_id ON scheduled_tasks (user_id)"))
             conn.execute(sa_text("CREATE INDEX ix_scheduled_tasks_session_id ON scheduled_tasks (session_id)"))
 
+        # Add mcp_servers table if missing
+        if "mcp_servers" not in existing_tables:
+            conn.execute(sa_text("""
+                CREATE TABLE mcp_servers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name VARCHAR(40) NOT NULL,
+                    command VARCHAR(255) NOT NULL,
+                    args_json TEXT NOT NULL DEFAULT '[]',
+                    env_json TEXT,
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    tool_allowlist_json TEXT,
+                    tools_json TEXT,
+                    last_discovered_at TIMESTAMP,
+                    last_error TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """))
+            conn.execute(sa_text("CREATE INDEX ix_mcp_servers_user_id ON mcp_servers (user_id)"))
+
         conn.commit()
 
 
