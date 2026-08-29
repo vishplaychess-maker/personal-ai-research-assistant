@@ -79,6 +79,13 @@ introducing visual automation, decentralized integrations, and shareable workflo
 
 ---
 
+## Status
+
+- **Phase 1 (MCP Integration):** design approved 2026-08-29. Full spec:
+  `docs/superpowers/specs/2026-08-29-mcp-integration-design.md`. Next:
+  implementation plan (writing-plans), then step-by-step build on
+  `feat/mcp-integration`.
+
 ## Phase 1 — MCP Integration: agreed constraints
 
 - **Branch:** `feat/mcp-integration`, cut from `feat/playwright-web-tool` after
