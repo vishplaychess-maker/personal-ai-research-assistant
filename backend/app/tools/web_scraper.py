@@ -18,6 +18,7 @@ Usage (standalone):
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 from typing import Optional
@@ -113,8 +114,22 @@ async def _scrape_async(url: str) -> str:
 
 
 def _scrape_sync(url: str) -> str:
-    """Synchronous wrapper around the async scraper."""
-    return asyncio.run(_scrape_async(url))
+    """Run the async scraper from either a sync OR an already-async context.
+
+    ``asyncio.run()`` raises if a loop is already running (e.g. the async SSE
+    streaming route calls ``prepare_chat_context`` synchronously on the loop
+    thread). Detect that case and run the coroutine to completion in a
+    one-shot worker thread that owns its own event loop.
+    ``Future.result()`` re-raises any exception from the thread, so callers'
+    existing try/except still works.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_scrape_async(url))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(_scrape_async(url))).result()
 
 
 # ── LangChain tool definition ─────────────────────────────
@@ -187,3 +202,35 @@ def extract_urls(text: str) -> list[str]:
             seen.add(url_clean)
             unique.append(url_clean)
     return unique
+
+
+if __name__ == "__main__":
+    # Runnable check for the sync/async bridge — stubs the real scraper so it
+    # needs no browser or network. Run: `python -m app.tools.web_scraper`
+    async def _fake(url: str) -> str:
+        await asyncio.sleep(0)
+        if url == "boom":
+            raise ValueError("scrape failed")
+        return f"scraped:{url}"
+
+    _scrape_async = _fake  # _scrape_sync reads this from module globals
+
+    # 1. no loop running → asyncio.run branch
+    assert _scrape_sync("https://a") == "scraped:https://a"
+
+    # 2. called from inside a running loop → worker-thread branch
+    async def _from_loop(arg: str) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, _scrape_sync, arg
+        )
+
+    assert asyncio.run(_from_loop("https://b")) == "scraped:https://b"
+
+    # 3. errors propagate out of the worker thread
+    try:
+        asyncio.run(_from_loop("boom"))
+        raise AssertionError("expected ValueError to propagate")
+    except ValueError as exc:
+        assert str(exc) == "scrape failed"
+
+    print("web_scraper sync/async bridge self-check OK")

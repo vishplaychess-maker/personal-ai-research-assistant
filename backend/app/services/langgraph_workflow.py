@@ -372,6 +372,24 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
 
     system_prompt = _build_system_prompt(state)
 
+    # ── CAG: return an identical prior answer without an LLM call ──────
+    # Session-scoped; skipped when regenerating, when a command is pending,
+    # for image prompts, and when RAG context was injected (can go stale).
+    from app.services import cache_service
+
+    cache_question = None
+    if (
+        not state.get("regenerate")
+        and not state.get("pending_command")
+        and not image_url
+        and not state.get("sources_used")
+    ):
+        cache_question = user_input
+        _cached = cache_service.get(state.get("session_id"), user_input)
+        if _cached is not None:
+            state["response"] = "[Cached] " + _cached
+            return state
+
     try:
         response = generate_response(
             messages=history,
@@ -437,6 +455,16 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
             db.commit()
             db.refresh(assistant_msg)
             state["assistant_message_id"] = assistant_msg.id
+
+    # CAG: cache the answer for identical future repeats in this session.
+    # Skip when a command/code path fired — those must not be replayed blindly.
+    if (
+        cache_question
+        and not state.get("pending_command")
+        and not state.get("code_result")
+        and not state.get("error")
+    ):
+        cache_service.set(state.get("session_id"), cache_question, state["response"])
 
     # Clear regenerate flag after use
     if state.get("regenerate"):

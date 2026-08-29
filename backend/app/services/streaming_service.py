@@ -297,6 +297,33 @@ async def stream_chat_response(
         "memories_used": context.memories_used,
     })
 
+    # ── CAG: serve an identical, context-free repeat from cache ────────
+    # Only when the last turn is a plain-text user question and no RAG
+    # context was injected (RAG answers can go stale as documents change).
+    from app.services import cache_service
+
+    cache_question = None
+    _last = context.history[-1] if context.history else None
+    if (
+        _last
+        and _last.get("role") == "user"
+        and isinstance(_last.get("content"), str)
+        and not context.sources_used
+    ):
+        cache_question = _last["content"]
+        cached = cache_service.get(context.session_id, cache_question)
+        if cached is not None:
+            yield format_sse("token", {"token": "[Cached] "})
+            yield format_sse("token", {"token": cached})
+            yield format_sse("complete", {
+                "message_id": None,
+                "citations": context.citations,
+                "sources_used": context.sources_used,
+                "memories_used": context.memories_used,
+                "content": "[Cached] " + cached,
+            })
+            return
+
     try:
         # Stream tokens from the configured LLM provider
         provider = get_provider(config=context.provider_config)
@@ -317,6 +344,12 @@ async def stream_chat_response(
                 if code:
                     result = await run_python_code_async(code)
                     full_response_text += "\n\n" + format_code_result(code, result)
+                # CAG: cache this answer for identical future repeats in this
+                # session. Skip when code ran (replay must not re-execute it).
+                if cache_question and not code:
+                    cache_service.set(
+                        context.session_id, cache_question, full_response_text
+                    )
                 # Yield complete event with metadata
                 yield format_sse("complete", {
                     "message_id": None,  # Will be filled after DB save
