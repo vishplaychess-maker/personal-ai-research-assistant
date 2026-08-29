@@ -19,10 +19,9 @@ def test_runs_from_sync_context():
 
 def test_runs_from_inside_running_loop():
     async def driver():
-        # We are on a running loop here; run_coro_sync must offload to a thread.
-        return await asyncio.get_running_loop().run_in_executor(
-            None, run_coro_sync, lambda: _ok(5)
-        )
+        # A loop IS running on this thread; run_coro_sync must detect it and
+        # offload to a worker thread rather than call asyncio.run() directly.
+        return run_coro_sync(lambda: _ok(5))
 
     assert asyncio.run(driver()) == 10
 
@@ -30,6 +29,17 @@ def test_runs_from_inside_running_loop():
 def test_exception_propagates():
     try:
         run_coro_sync(lambda: _boom())
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert str(exc) == "kaboom"
+
+
+def test_exception_propagates_from_running_loop():
+    async def driver():
+        return run_coro_sync(lambda: _boom())
+
+    try:
+        asyncio.run(driver())
         raise AssertionError("expected ValueError")
     except ValueError as exc:
         assert str(exc) == "kaboom"
