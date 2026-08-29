@@ -18,12 +18,13 @@ Usage (standalone):
 """
 
 import asyncio
-import concurrent.futures
 import logging
 import re
 from typing import Optional
 
 from langchain_core.tools import tool
+
+from app.services.async_bridge import run_coro_sync
 
 logger = logging.getLogger(__name__)
 
@@ -114,22 +115,8 @@ async def _scrape_async(url: str) -> str:
 
 
 def _scrape_sync(url: str) -> str:
-    """Run the async scraper from either a sync OR an already-async context.
-
-    ``asyncio.run()`` raises if a loop is already running (e.g. the async SSE
-    streaming route calls ``prepare_chat_context`` synchronously on the loop
-    thread). Detect that case and run the coroutine to completion in a
-    one-shot worker thread that owns its own event loop.
-    ``Future.result()`` re-raises any exception from the thread, so callers'
-    existing try/except still works.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(_scrape_async(url))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(_scrape_async(url))).result()
+    """Run the async scraper from either a sync or an already-async context."""
+    return run_coro_sync(lambda: _scrape_async(url))
 
 
 # ── LangChain tool definition ─────────────────────────────
