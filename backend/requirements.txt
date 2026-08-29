@@ -2,12 +2,19 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
 pydantic==2.9.0
-pydantic-settings==2.5.0
+pydantic-settings==2.5.2  # bumped from 2.5.0: mcp 1.12.4 requires pydantic-settings>=2.5.2
 httpx==0.27.2
 chromadb==1.5.9
 langgraph==0.3.2
 langgraph-checkpoint==2.0.16
 langchain-core==0.3.41
+# ── MCP (Model Context Protocol) — Phase 1 (stdio transport, Python servers only) ──
+# mcp 1.12.4 is the newest 1.x compatible with the pinned stack: mcp>=1.13.0 requires
+# pydantic>=2.11 (we pin pydantic==2.9.0); starlette stays <0.39 via fastapi==0.115.0.
+mcp==1.12.4
+# reference stdio server: `python -m mcp_server_fetch`, exposes a `fetch` tool.
+# mcp-server-fetch>=2026.x requires mcp>=1.29, so pinned to the last mcp>=1.1.3 release.
+mcp-server-fetch==2025.4.7
 pypdf==5.4.0
 python-multipart==0.0.20
 reportlab==4.3.1

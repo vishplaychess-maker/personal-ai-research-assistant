@@ -132,6 +132,8 @@ per tool call. Acceptable for this phase.
 `await session.call_tool(name, arguments, read_timeout_seconds=…) -> CallToolResult`
 (`.content`: list of content blocks, `TextContent.text`; `.is_error`: bool).
 
+**Verified 2026-08-29 (in-container stdio spike):** `mcp==1.12.4` + `mcp-server-fetch==2025.4.7` (tool `fetch`, protocol `2025-06-18`); error flag attribute is **`isError`** — `CallToolResult` fields: `meta, content, structuredContent, isError` (so use `res.isError`, not `res.is_error`); `list_tools()` `Tool` fields: `name, title, description, inputSchema, outputSchema, annotations, meta`.
+
 ---
 
 ## 5. Tool registry — `backend/app/services/tool_registry.py` (the seam)
