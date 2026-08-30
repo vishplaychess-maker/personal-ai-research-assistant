@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Mapping
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
