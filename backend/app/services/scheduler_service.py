@@ -55,6 +55,12 @@ def shutdown_scheduler() -> None:
     if scheduler and scheduler.running:
         scheduler.shutdown()
         logger.info("Scheduler shutdown")
+    # Drop the instance so a later start_scheduler() builds a fresh
+    # AsyncIOScheduler bound to the current event loop. Without this, a second
+    # app lifespan (e.g. successive TestClient(app) contexts in one test module)
+    # re-start()s a scheduler pinned to the first, now-closed loop ->
+    # "RuntimeError: Event loop is closed".
+    scheduler = None
 
 
 def load_scheduled_tasks() -> None:
