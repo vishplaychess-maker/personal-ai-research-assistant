@@ -179,3 +179,33 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     )
 
     return "\n\n".join(parts)
+
+
+def build_mcp_tools_block(tools) -> str:
+    """Render the '## MCP Tools' system-prompt section for the given RegisteredTools.
+
+    `tools` is a list of tool_registry.RegisteredTool (source == "mcp").
+    Returns "" when the list is empty.
+    """
+    mcp = [t for t in tools if getattr(t, "source", None) == "mcp"]
+    if not mcp:
+        return ""
+
+    lines = [
+        "## MCP Tools",
+        "You may call these external tools. To call one, output EXACTLY this, "
+        "alone on its own line:",
+        '[MCP_CALL: <tool_name> {"arg": "value"}]',
+        "The tool result is returned to you; then continue your answer. "
+        "Emit at most 3 calls per reply.",
+        "",
+        "Available tools:",
+    ]
+    for t in mcp:
+        props = ""
+        schema = t.input_schema or {}
+        if isinstance(schema, dict) and schema.get("properties"):
+            props = " Input keys: " + ", ".join(sorted(schema["properties"].keys()))
+        desc = (t.description or "").strip().replace("\n", " ")
+        lines.append(f"- {t.name} — {desc}{props}")
+    return "\n".join(lines)
