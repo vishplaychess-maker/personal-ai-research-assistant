@@ -44,3 +44,27 @@ def test_run_dispatches_known(monkeypatch):
     monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", lambda c, t, a: ("RESULT", False))
     out = run_mcp_calls([("mcp__s__t", {"a": 1})], db=None, user_id=1)
     assert "RESULT" in out
+
+
+def test_run_call_tool_exception_becomes_error_block(monkeypatch):
+    from app.services.mcp_service import MCPServerCfg
+    cfg = MCPServerCfg(id=1, name="s", command="python", args=(), env=None, tool_allowlist=None)
+
+    def _boom(c, t, a):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: (cfg, "t"))
+    monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", _boom)
+    out = run_mcp_calls([("mcp__s__t", {})], db=None, user_id=1)
+    assert "[error] RuntimeError: boom" in out
+
+
+def test_run_joins_multiple_blocks(monkeypatch):
+    from app.services.mcp_service import MCPServerCfg
+    cfg = MCPServerCfg(id=1, name="s", command="python", args=(), env=None, tool_allowlist=None)
+    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: (cfg, "t"))
+    monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", lambda c, t, a: ("RESULT", False))
+    out = run_mcp_calls([("mcp__s__t1", {}), ("mcp__s__t2", {})], db=None, user_id=1)
+    assert out.count("RESULT") == 2
+    assert out.count("=== MCP Tool Result") == 2
+    assert "=== End of MCP Tool Result ===\n\n=== MCP Tool Result" in out
