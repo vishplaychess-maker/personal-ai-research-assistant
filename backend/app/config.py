@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # When true, the agent can propose shell commands for user approval.
     enable_terminal_tool: bool = False
 
+    # ── MCP tools (Phase 1) ──────────────────────────────
+    enable_mcp_tool: bool = False
+    mcp_call_timeout_s: int = 30
+    mcp_discovery_timeout_s: int = 20
+
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
     llm_provider: str = "ollama"
