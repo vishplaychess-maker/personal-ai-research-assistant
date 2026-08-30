@@ -65,6 +65,8 @@ services:
       - MODELSLAB_BASE_URL=${MODELSLAB_BASE_URL:-https://modelslab.com/api/v1}
       - MODELSLAB_MODEL=${MODELSLAB_MODEL:-meta-llama/Llama-3.3-70B-Instruct}
       - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
+      - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
+      - MCP_CALL_TIMEOUT_S=${MCP_CALL_TIMEOUT_S:-30}
     depends_on:
       chromadb:
         condition: service_started
