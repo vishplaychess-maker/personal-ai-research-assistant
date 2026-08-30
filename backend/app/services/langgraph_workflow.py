@@ -50,6 +50,7 @@ from app.services.memory_service import (
     MemoryExtractionResult,
 )
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
+from app.services import tool_registry
 from app.tools.web_scraper import extract_urls, web_scraper
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code
@@ -58,7 +59,7 @@ from app.tools.terminal_executor import (
     run_command,
     format_result_message,
 )
-from app.services.system_prompts import build_base_prompt
+from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,7 @@ class WorkflowState(TypedDict):
     command_approved: Optional[bool]     # True=user approved, False=denied, None=no command
     command_result: Optional[str]        # Output of the executed command
     code_result: Optional[str]           # Output of executed Python code (sandbox)
+    mcp_result: Optional[str]            # Output of executed MCP tool calls
     regenerate: bool                     # Whether generate_answer should re-run with results
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
@@ -294,6 +296,17 @@ def _build_system_prompt(state: WorkflowState) -> str:
     if web_context:
         system_parts.append(web_context)
 
+    # MCP tools catalog (never break generation on failure)
+    if settings.enable_mcp_tool and state.get("db") is not None:
+        try:
+            mcp_block = build_mcp_tools_block(
+                tool_registry.list_tools(state["db"], state.get("user_id", 1))
+            )
+            if mcp_block:
+                system_parts.append(mcp_block)
+        except Exception as exc:
+            logger.warning("MCP prompt block failed (non-fatal): %s", exc)
+
     # Command output context (after execution)
     command_result = state.get("command_result", "")
     if command_result:
@@ -303,6 +316,11 @@ def _build_system_prompt(state: WorkflowState) -> str:
     code_result = state.get("code_result", "")
     if code_result:
         system_parts.append(code_result)
+
+    # MCP tool call result (passthrough — set by generate_answer in a later task)
+    mcp_result = state.get("mcp_result", "")
+    if mcp_result:
+        system_parts.append(mcp_result)
 
     return "\n\n".join(system_parts)
 
@@ -849,6 +867,7 @@ def run_research_workflow(
         "command_approved": None,
         "command_result": "",
         "code_result": "",
+        "mcp_result": "",
         "regenerate": False,
         "error": None,
         "db": db,

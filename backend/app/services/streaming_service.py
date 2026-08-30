@@ -31,7 +31,8 @@ from app.services.memory_service import (
 )
 from app.services.rag_service import retrieve_chunks, format_rag_context, build_citation_list
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
-from app.services.system_prompts import build_base_prompt
+from app.services import tool_registry
+from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 from app.config import settings
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code_async
@@ -73,6 +74,7 @@ class ChatContext:
         citations: List[Dict[str, Any]],
         sources_used: bool,
         memories_used: bool,
+        user_id: int = 1,
         model_name: Optional[str] = None,
         provider_config: Optional[dict] = None,
     ):
@@ -83,6 +85,7 @@ class ChatContext:
         self.citations = citations
         self.sources_used = sources_used
         self.memories_used = memories_used
+        self.user_id = user_id
         self.model_name = model_name
         self.provider_config = provider_config
 
@@ -199,6 +202,15 @@ def prepare_chat_context(
         logger.warning("RAG retrieval failed (non-fatal): %s", exc)
         system_parts.append("If you don't know something, say so.")
 
+    # 6b. MCP tools catalog (never break the chat on failure)
+    if settings.enable_mcp_tool:
+        try:
+            mcp_block = build_mcp_tools_block(tool_registry.list_tools(db, user_id))
+            if mcp_block:
+                system_parts.append(mcp_block)
+        except Exception as exc:
+            logger.warning("MCP prompt block failed (non-fatal): %s", exc)
+
     # 7. Agentic web scraping — detect URLs, invoke web_scraper tool
     try:
         from app.tools.web_scraper import web_scraper, extract_urls
@@ -263,6 +275,7 @@ def prepare_chat_context(
         citations=citations,
         sources_used=sources_used,
         memories_used=memories_used,
+        user_id=user_id,
         model_name=session_model,
         provider_config=provider_config,
     )
