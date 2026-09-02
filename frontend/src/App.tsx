@@ -10,9 +10,8 @@ import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { API } from "./api";
-import type { Session, Message, Citation, Document, Memory, HealthStatus } from "./types";
+import type { Session, Message, Citation, Document, Memory, HealthStatus, SessionExport } from "./types";
 import "./App.css";
-
 // ── App Component ─────────────────────────────────────────
 
 function App() {
@@ -158,6 +157,43 @@ function App() {
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (activeSessionId === id) { setActiveSessionId(null); setMessages([]); }
     } catch { /* ignore */ }
+  };
+
+  // ── Session export / import (F5) ───────────────────────
+
+  const handleExportSession = async (id: number) => {
+    try {
+      const data = await API.exportSession(id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(data.thunder_ai_export.session.title || "session").replace(/[^\w\- ]+/g, "_").replace(/ +/g, "_")}.agent.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Export failed");
+    }
+  };
+
+  const handleImportSession = async (file: File) => {
+    try {
+      const payload: SessionExport = JSON.parse(await file.text());
+      if (!payload.thunder_ai_export || !payload.thunder_ai_export.session) {
+        throw new Error("Not a valid Thunder AI agent file");
+      }
+      const result = await API.importSession(payload);
+      await loadSessions();
+      setActiveSessionId(result.session_id);
+      setMessages([]);
+      setChatError(null);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Import failed");
+    }
   };
 
   // ── Document loading ───────────────────────────────────
@@ -452,6 +488,8 @@ function App() {
         onCreateSession={handleCreateSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
+        onExportSession={handleExportSession}
+        onImportSession={handleImportSession}
         onOpenSettings={() => setShowSettings(true)}
         onLogout={logout}
       />

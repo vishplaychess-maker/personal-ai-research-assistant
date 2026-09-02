@@ -80,3 +80,36 @@ class SystemPromptResponse(BaseModel):
 class SessionModelResponse(BaseModel):
     id: int
     model: Optional[str] = None
+
+
+# ── Export / Import schemas ─────────────────────────────────
+
+
+class ExportSessionSchedule(BaseModel):
+    cron_expression: Optional[str] = None
+    prompt: Optional[str] = None
+    is_active: bool = False
+
+
+class ExportSessionData(BaseModel):
+    title: str
+    model: Optional[str] = None
+    system_prompt: Optional[str] = None
+
+
+class ExportPayload(BaseModel):
+    version: str = "1.0"
+    exported_at: str
+    session: ExportSessionData
+    schedule: ExportSessionSchedule
+    memory: dict  # {"enabled": bool}
+
+
+class ThunderAIExport(BaseModel):
+    thunder_ai_export: ExportPayload
+
+
+class ImportResult(BaseModel):
+    session_id: int
+    title: str
+    schedule_created: bool

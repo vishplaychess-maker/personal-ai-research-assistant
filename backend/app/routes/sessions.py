@@ -1,11 +1,12 @@
 import os
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import Document, ResearchSession, User
+from app.models.models import Document, ResearchSession, ScheduledTask, User
 from app.schemas.sessions import (
     SessionCreate,
     SessionUpdate,
@@ -14,12 +15,15 @@ from app.schemas.sessions import (
     SystemPromptUpdate,
     SystemPromptResponse,
     SessionModelResponse,
+    ThunderAIExport,
+    ImportResult,
 )
 from app.services.chromadb_client import delete_chunks, delete_collection
 from app.config import settings
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.llm_providers import get_provider
+from app.services.settings_service import get_memory_enabled
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -152,6 +156,72 @@ def list_sessions(
         .all()
     )
     return sessions
+
+
+@router.post("/import", response_model=ImportResult, status_code=201)
+def import_session(
+    payload: ThunderAIExport,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
+):
+    """Import a session configuration from an export payload.
+
+    Creates a new session with the imported config. Does NOT import messages,
+    documents, or memories — only the agent's configuration (prompt, model,
+    schedule, memory setting).
+    """
+    export = payload.thunder_ai_export
+
+    if export.version != "1.0":
+        raise HTTPException(status_code=400, detail=f"Unsupported export version: {export.version}")
+
+    # Create the session
+    session = ResearchSession(
+        title=export.session.title,
+        user_id=current_user.id,
+        model=export.session.model,
+        system_prompt=export.session.system_prompt,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    # Create scheduled task if schedule data is present
+    schedule_created = False
+    if export.schedule.cron_expression and export.schedule.prompt:
+        # Validate cron expression
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            CronTrigger.from_crontab(export.schedule.cron_expression)
+        except Exception:
+            # Skip schedule creation if cron is invalid, but don't fail the import
+            pass
+        else:
+            task = ScheduledTask(
+                user_id=current_user.id,
+                session_id=session.id,
+                prompt=export.schedule.prompt,
+                cron_expression=export.schedule.cron_expression,
+                is_active=export.schedule.is_active,
+            )
+            db.add(task)
+            db.commit()
+            schedule_created = True
+
+            # Register with scheduler if active
+            if export.schedule.is_active:
+                try:
+                    from app.services.scheduler_service import add_task_to_scheduler
+                    add_task_to_scheduler(task)
+                except Exception:
+                    pass  # Best-effort: don't fail import if scheduler is down
+
+    return ImportResult(
+        session_id=session.id,
+        title=session.title,
+        schedule_created=schedule_created,
+    )
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -298,3 +368,65 @@ def update_system_prompt(
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         using_default=True,
     )
+
+
+# ── Export / Import (F5: Shareable Agents) ─────────────────
+
+
+@router.get("/{session_id}/export")
+def export_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export a session's configuration as a shareable JSON payload."""
+    session = _get_session_or_404(db, session_id, user_id=current_user.id)
+
+    # Fetch scheduled tasks for this session (active ones)
+    tasks = (
+        db.query(ScheduledTask)
+        .filter(
+            ScheduledTask.session_id == session_id,
+            ScheduledTask.user_id == current_user.id,
+        )
+        .order_by(ScheduledTask.created_at)
+        .all()
+    )
+
+    # Use the first active task's schedule, or the most recent task overall
+    schedule_cron = None
+    schedule_prompt = None
+    schedule_active = False
+    for t in tasks:
+        if t.is_active:
+            schedule_cron = t.cron_expression
+            schedule_prompt = t.prompt
+            schedule_active = True
+            break
+    if tasks and not schedule_active:
+        # Fall back to most recent task's config (inactive)
+        latest = tasks[-1]
+        schedule_cron = latest.cron_expression
+        schedule_prompt = latest.prompt
+
+    memory_enabled = get_memory_enabled(db)
+
+    return {
+        "thunder_ai_export": {
+            "version": "1.0",
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "session": {
+                "title": session.title,
+                "model": session.model,
+                "system_prompt": session.system_prompt,
+            },
+            "schedule": {
+                "cron_expression": schedule_cron,
+                "prompt": schedule_prompt,
+                "is_active": schedule_active,
+            },
+            "memory": {
+                "enabled": memory_enabled,
+            },
+        }
+    }

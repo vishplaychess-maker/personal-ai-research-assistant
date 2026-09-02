@@ -20,6 +20,8 @@ import type {
   ScheduledTask,
   ScheduledTaskCreate,
   ScheduledTaskUpdate,
+  SessionExport,
+  ImportResult,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 
@@ -153,6 +155,15 @@ export const API = {
   },
   deleteSession(id: number) {
     return request<void>(`/api/sessions/${id}`, { method: "DELETE" });
+  },
+  exportSession(id: number) {
+    return request<SessionExport>(`/api/sessions/${id}/export`);
+  },
+  importSession(payload: SessionExport) {
+    return request<ImportResult>("/api/sessions/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
 
   // Messages

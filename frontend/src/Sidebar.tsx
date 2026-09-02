@@ -9,6 +9,8 @@ import {
   X,
   Pencil,
   Trash2,
+  Download,
+  Upload,
   LogOut,
   Sun,
   Moon,
@@ -41,6 +43,8 @@ interface SidebarProps {
   onCreateSession: () => void;
   onDeleteSession: (id: number) => void;
   onRenameSession: (id: number, title: string) => void;
+  onExportSession?: (id: number) => void;
+  onImportSession?: (file: File) => void;
   onLogout?: () => void;
   onOpenSettings?: () => void;
 }
@@ -54,11 +58,15 @@ export function Sidebar({
   onCreateSession,
   onDeleteSession,
   onRenameSession,
+  onExportSession,
+  onImportSession,
   onLogout,
   onOpenSettings,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -167,7 +175,33 @@ export function Sidebar({
         >
           <Plus className="h-4 w-4" />
         </Button>
+        {onImportSession && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => importInputRef.current?.click()}
+            title="Import agent"
+            className="h-8 w-8 rounded-xl transition-colors hover:bg-white/5"
+          >
+            <Upload className="h-4 w-4" />
+          </Button>
+        )}
       </header>
+
+      {/* Import hidden input */}
+      {onImportSession && (
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json,.agent.json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) onImportSession(file);
+            e.target.value = "";
+          }}
+        />
+      )}
 
       {/* Search - Clean */}
       <div className="px-3 py-2 border-b border-white/10">
@@ -287,6 +321,15 @@ export function Sidebar({
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
+                    {onExportSession && (
+                      <button
+                        className="h-7 w-7 rounded-lg icon-muted hover:icon-primary hover:bg-white/5 transition-all"
+                        title="Export agent"
+                        onClick={() => onExportSession(session.id)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button
                       className="h-7 w-7 rounded-lg icon-muted hover:text-destructive hover:bg-destructive/10 transition-all"
                       title="Delete"

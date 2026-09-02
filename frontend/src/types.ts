@@ -241,3 +241,31 @@ export interface ScheduledTaskUpdate {
   cron_expression?: string;
   is_active?: boolean;
 }
+
+// ── Shareable Agents (F5) ──────────────────────────────────
+
+export interface SessionExport {
+  thunder_ai_export: {
+    version: string;
+    exported_at: string;
+    session: {
+      title: string;
+      model: string | null;
+      system_prompt: string | null;
+    };
+    schedule: {
+      cron_expression: string | null;
+      prompt: string | null;
+      is_active: boolean;
+    };
+    memory: {
+      enabled: boolean;
+    };
+  };
+}
+
+export interface ImportResult {
+  session_id: number;
+  title: string;
+  schedule_created: boolean;
+}
