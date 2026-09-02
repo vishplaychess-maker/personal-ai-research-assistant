@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter
 
 from app.config import settings
-from app.schemas.sessions import ModelInfo, ModelListResponse
+from app.schemas.sessions import ModelInfo, ModelListResponse, is_free_model
 from app.services.llm_providers import get_provider
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -71,7 +71,7 @@ async def list_models(provider: Optional[str] = None):
                   "Check your API key and network connection.",
         )
 
-    models = [ModelInfo(name=name) for name in model_names]
+    models = [ModelInfo(name=name, is_free=is_free_model(name, provider_name)) for name in model_names]
     return ModelListResponse(models=models, error=None)
 
 
@@ -117,7 +117,7 @@ async def _list_ollama_models() -> ModelListResponse:
         size_str = _format_size(size_bytes) if size_bytes else None
         modified_at = m.get("modified_at", None)
 
-        models.append(ModelInfo(name=name, size=size_str, modified_at=modified_at))
+        models.append(ModelInfo(name=name, size=size_str, modified_at=modified_at, is_free=True))
 
     return ModelListResponse(models=models, error=None)
 

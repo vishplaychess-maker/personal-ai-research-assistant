@@ -105,6 +105,7 @@ export interface ModelInfo {
   name: string;
   size: string | null;
   modified_at: string | null;
+  is_free?: boolean | null;
 }
 
 export interface ModelListResponse {

@@ -1,7 +1,7 @@
-"""Client for local (stdio) MCP servers: connect, discover tools, call a tool.
+"""Client for MCP servers (stdio + SSE): connect, discover tools, call a tool.
 
-Spawn-per-operation: each discover / call opens a fresh subprocess via
-stdio_client (a cancellation-shielded context manager) and closes it on exit.
+Spawn-per-operation: each discover / call opens a fresh connection via
+stdio_client or sse_client (cancellation-shielded) and closes it on exit.
 No persistent connection pool this phase.
 """
 
@@ -65,12 +65,27 @@ def _params(cfg: MCPServerCfg) -> StdioServerParameters:
     )
 
 
+def _is_sse(cfg: MCPServerCfg) -> bool:
+    return cfg.command.startswith("http://") or cfg.command.startswith("https://")
+
+
 async def _with_session(cfg: MCPServerCfg, fn):
     try:
-        async with stdio_client(_params(cfg)) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                return await fn(session)
+        if _is_sse(cfg):
+            # SSE transport - command holds the URL, args may be empty
+            try:
+                from mcp.client.sse import sse_client
+            except ImportError:
+                raise MCPError("SSE transport not available: mcp[sse] not installed")
+            async with sse_client(cfg.command) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await fn(session)
+        else:
+            async with stdio_client(_params(cfg)) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await fn(session)
     except MCPError:
         raise
     except Exception as exc:  # spawn failure, protocol error, timeout during init

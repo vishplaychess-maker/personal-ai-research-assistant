@@ -65,12 +65,29 @@ def extract_text(file_path: str, content_type: str) -> List[Dict]:
     Raises:
         ValueError: If extraction fails or content_type unsupported.
     """
-    if content_type == "text/plain" or content_type.startswith("text/") or content_type in ("application/json", "application/x-yaml", "application/xml", "application/x-yaml", "application/xml", "application/x-toml"):
-        return extract_text_from_txt(file_path)
-    elif content_type == "application/pdf":
+    if content_type == "application/pdf":
         return extract_text_from_pdf(file_path)
+    elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        # DOCX - try python-docx, fallback to txt
+        try:
+            from docx import Document as DocxDocument
+            doc = DocxDocument(file_path)
+            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            if not text.strip():
+                raise ValueError("DOCX is empty")
+            return [{"text": text, "page_number": None}]
+        except ImportError:
+            return extract_text_from_txt(file_path)
+        except Exception:
+            return extract_text_from_txt(file_path)
+    elif content_type == "text/plain" or content_type.startswith("text/") or content_type in ("application/json", "application/x-yaml", "application/xml", "application/x-yaml", "application/xml", "application/x-toml") or content_type in ("text/markdown", "application/msword"):
+        return extract_text_from_txt(file_path)
     else:
-        raise ValueError(f"Unsupported content type: {content_type}")
+        # Fallback: try as plain text for code/docs files (.md, .py, etc.)
+        try:
+            return extract_text_from_txt(file_path)
+        except Exception:
+            raise ValueError(f"Unsupported content type: {content_type}")
 
 
 # ── Chunking ────────────────────────────────────────────────

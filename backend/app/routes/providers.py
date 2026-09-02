@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import User
-from app.schemas.sessions import ModelInfo
+from app.schemas.sessions import ModelInfo, is_free_model
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.llm_providers import get_provider
@@ -217,7 +217,7 @@ def provider_models(
                 provider=row.provider_name,
                 provider_label=PROVIDER_LABELS.get(row.provider_name, row.provider_name),
                 provider_id=row.id,
-                models=[ModelInfo(name=n) for n in names],
+                models=[ModelInfo(name=n, is_free=is_free_model(n, row.provider_name)) for n in names],
             )
         )
     return groups

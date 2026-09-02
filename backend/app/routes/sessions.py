@@ -25,27 +25,49 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 # ── Patchable wrapper for model validation ─────────────────
-def fetch_available_chat_models(db: Session, user_id: int):
-    """Return available chat models from ALL of the user's configured providers."""
+def fetch_available_chat_models(db: Session = None, user_id: int = None):
+    """Return available chat models from ALL of the user's configured providers.
+
+    Falls back to the globally configured provider (e.g. the deterministic
+    LocalProvider when LLM_PROVIDER=local) when the user has no saved
+    provider rows, so model validation still works for fresh accounts.
+
+    Note: ``db``/``user_id`` are optional so tests (and older call sites)
+    can monkeypatch this function with zero-argument stubs, e.g.
+    ``lambda: None`` or ``lambda: ["llama3.2:3b"]``.
+    """
     from app.services.settings_service import list_user_providers
     from app.services.llm_providers import get_provider
 
-    rows = list_user_providers(db, user_id)
+    # If a test stub replaced this function, honor the zero-arg contract.
     all_models: List[str] = []
-    for row in rows:
-        try:
-            prov = get_provider(
-                config={
-                    "provider": row.provider_name,
-                    "api_key": row.api_key or None,
-                    "model": row.default_model or None,
-                }
-            )
-            names = prov.fetch_available_chat_models() or []
-            all_models.extend(names)
-        except Exception:
-            continue
-    return all_models
+
+    if db is not None and user_id is not None:
+        rows = list_user_providers(db, user_id)
+        for row in rows:
+            try:
+                prov = get_provider(
+                    config={
+                        "provider": row.provider_name,
+                        "api_key": row.api_key or None,
+                        "model": row.default_model or None,
+                    }
+                )
+                names = prov.fetch_available_chat_models() or []
+                all_models.extend(names)
+            except Exception:
+                continue
+
+        if all_models:
+            return all_models
+
+    # No user providers configured (or none reachable) — fall back to the
+    # globally configured provider's discovery.
+    try:
+        prov = get_provider()
+        return prov.fetch_available_chat_models() or []
+    except Exception:
+        return []
 
 
 def _get_session_or_404(

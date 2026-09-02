@@ -149,6 +149,7 @@ def format_rag_context(chunks: List[RetrievedChunk]) -> str:
         "\n=== End of Retrieved Documents ===\n"
         "Instructions:\n"
         "- Answer based on the retrieved documents above.\n"
+        "'- Do NOT fabricate citations.\n'"
         "- You MUST cite the source document name and page number at the end of each "
         "sentence or paragraph that uses it.\n"
         "- Citation format (exactly): [Source: filename, Page: X]. "

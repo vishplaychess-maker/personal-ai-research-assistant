@@ -49,7 +49,7 @@ def test_list_models_excludes_embedding_only_models(monkeypatch):
         return response
 
     monkeypatch.setattr(models_route.httpx.AsyncClient, "get", fake_get)
-    result = asyncio.run(list_models())
+    result = asyncio.run(list_models(provider="ollama"))
 
     assert [model.name for model in result.models] == ["llama3.2:3b"]
 
@@ -88,7 +88,7 @@ def test_model_selection_fails_closed_when_discovery_is_unavailable(db, monkeypa
     research_session = ResearchSession(title="Discovery Down", user_id=user.id)
     db.add(research_session)
     db.commit()
-    monkeypatch.setattr(sessions_route, "fetch_available_chat_models", lambda: None)
+    monkeypatch.setattr(sessions_route, "fetch_available_chat_models", lambda db, user_id: None)
 
     with pytest.raises(HTTPException) as exc:
         update_session_model(

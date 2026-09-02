@@ -54,6 +54,10 @@ from app.services import tool_registry
 from app.tools.web_scraper import extract_urls, web_scraper
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code
+from app.tools.mcp_tool import (
+    extract_mcp_calls as _extract_mcp_calls,
+    run_mcp_calls as _run_mcp_calls,
+)
 from app.tools.terminal_executor import (
     extract_proposed_command,
     run_command,
@@ -63,6 +67,8 @@ from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 
 
 logger = logging.getLogger(__name__)
+
+MAX_MCP_RETRIES = 3
 
 
 # ── Patchable generate_response wrapper ───────────────────
@@ -108,6 +114,7 @@ class WorkflowState(TypedDict):
     command_result: Optional[str]        # Output of the executed command
     code_result: Optional[str]           # Output of executed Python code (sandbox)
     mcp_result: Optional[str]            # Output of executed MCP tool calls
+    mcp_retry_count: int                 # Hermes self-correction loop counter
     regenerate: bool                     # Whether generate_answer should re-run with results
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
@@ -433,6 +440,34 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         state["response"] = ""
         return state
 
+    # ── MCP tool calls ([MCP_CALL: …]) — Hermes auto-correction loop ──
+    if (
+        settings.enable_mcp_tool
+        and not state.get("regenerate")
+        and not state.get("pending_command")
+    ):
+        mcp_calls = _extract_mcp_calls(response)
+        if mcp_calls:
+            result = _run_mcp_calls(
+                mcp_calls, state.get("db"), state.get("user_id", 1)
+            )
+            # Hermes self-correction: if tool returned error, append retry guidance
+            if "[error]" in result.lower() and state.get("mcp_retry_count", 0) < MAX_MCP_RETRIES:
+                result += f"\n\n[Self-Correction: Tool failed (attempt {state.get('mcp_retry_count',0)+1}/{MAX_MCP_RETRIES}). Analyze the error and try a different approach. Ensure final answer is accurate.]"
+            state["mcp_result"] = result
+            state["mcp_retry_count"] = state.get("mcp_retry_count", 0)
+            state["regenerate"] = True
+            if db is not None:
+                placeholder = Message(
+                    session_id=state["session_id"],
+                    role=MessageRole.assistant,
+                    content=response,
+                )
+                db.add(placeholder)
+                db.commit()
+                db.refresh(placeholder)
+                state["assistant_message_id"] = placeholder.id
+
     # ── Detect proposed command ──────────────────────────
     if settings.enable_terminal_tool and not state.get("regenerate"):
         command = extract_proposed_command(response)
@@ -480,12 +515,14 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         cache_question
         and not state.get("pending_command")
         and not state.get("code_result")
+        and not state.get("mcp_result")
         and not state.get("error")
     ):
         cache_service.set(state.get("session_id"), cache_question, state["response"])
 
-    # Clear regenerate flag after use
-    if state.get("regenerate"):
+    # Clear regenerate flag after use (keep it when MCP dispatched so the
+    # test/route sees it and regenerate_answer re-runs with the result).
+    if state.get("regenerate") and not state.get("mcp_result"):
         state["regenerate"] = False
 
     return state
@@ -586,7 +623,11 @@ def regenerate_answer(state: WorkflowState) -> WorkflowState:
         return state
 
     command_result = state.get("command_result", "")
-    if not command_result and not state.get("code_result", ""):
+    if (
+        not command_result
+        and not state.get("code_result", "")
+        and not state.get("mcp_result", "")
+    ):
         # No result to inject — skip regeneration
         return state
 
@@ -617,6 +658,29 @@ def regenerate_answer(state: WorkflowState) -> WorkflowState:
             provider_config=provider_config,
         )
         state["response"] = response
+
+        # Hermes auto-correction: if new response contains MCP calls that error, retry
+        if settings.enable_mcp_tool and not state.get("pending_command"):
+            new_calls = _extract_mcp_calls(response)
+            if new_calls:
+                new_result = _run_mcp_calls(new_calls, state.get("db"), state.get("user_id", 1))
+                retry = state.get("mcp_retry_count", 0)
+                if "[error]" in new_result.lower() and retry < MAX_MCP_RETRIES:
+                    # Append error + self-reflection guidance and retry
+                    state["mcp_result"] = (state.get("mcp_result","") + "\n\n" + new_result +
+                        f"\n\n[Self-Correction {retry+1}/{MAX_MCP_RETRIES}: Tool failed. Analyze error, try different approach.]")
+                    state["mcp_retry_count"] = retry + 1
+                    state["response"] = response + "\n\n[Fixing error... retrying tool execution]"
+                    state["regenerate"] = True
+                    logger.info(f"MCP auto-correction retry {retry+1}/{MAX_MCP_RETRIES} for session {state.get('session_id')}")
+                elif "[error]" in new_result.lower():
+                    # Max retries reached, include error and ask user for help
+                    state["mcp_result"] = state.get("mcp_result","") + "\n\n" + new_result + "\n\n[Max retries reached. Please check tool configuration or try different parameters.]"
+                    state["response"] = response
+                else:
+                    # Success, update result
+                    state["mcp_result"] = new_result
+                    state["response"] = response
 
         # Update the placeholder message in the DB
         msg_id = state.get("assistant_message_id")
@@ -719,6 +783,8 @@ def _route_after_generate(state: WorkflowState) -> str:
         return "error_end"
     if state.get("code_result"):
         return "regenerate_code"
+    if state.get("mcp_result"):
+        return "regenerate_code"
     if state.get("pending_command") and state.get("command_approved") is None:
         return "ask_approval"
     return "save_output"
@@ -729,6 +795,14 @@ def _route_after_approval(state: WorkflowState) -> str:
     if state.get("command_approved"):
         return "execute_terminal"
     return "skip_terminal"
+
+
+def _route_after_regenerate(state: WorkflowState) -> str:
+    """Hermes loop: if auto-correction requested, loop; otherwise save."""
+    if state.get("regenerate") and state.get("mcp_retry_count", 0) > 0:
+        # Still in retry loop - re-run LLM with error context
+        return "retry_mcp"
+    return "save_output"
 
 
 # ── Build graph ────────────────────────────────────────────
@@ -783,7 +857,14 @@ def build_workflow() -> StateGraph:
     # After execute/skip -> regenerate -> save -> extract_memory -> END
     workflow.add_edge("execute_terminal", "regenerate_answer")
     workflow.add_edge("skip_terminal", "regenerate_answer")
-    workflow.add_edge("regenerate_answer", "save_output")
+    workflow.add_conditional_edges(
+        "regenerate_answer",
+        _route_after_regenerate,
+        {
+            "retry_mcp": "regenerate_answer",
+            "save_output": "save_output",
+        },
+    )
     workflow.add_edge("save_output", "extract_memory")
     workflow.add_edge("extract_memory", END)
 
@@ -868,6 +949,7 @@ def run_research_workflow(
         "command_result": "",
         "code_result": "",
         "mcp_result": "",
+        "mcp_retry_count": 0,
         "regenerate": False,
         "error": None,
         "db": db,

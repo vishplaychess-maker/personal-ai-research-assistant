@@ -116,7 +116,7 @@ def test_list_models_ollama_unavailable():
         mock_get.side_effect = httpx.ConnectError("Connection refused")
 
         with TestClient(app) as c:
-            resp = c.get("/api/models")
+            resp = c.get("/api/models?provider=ollama")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -134,7 +134,7 @@ def test_list_models_ollama_timeout():
         mock_get.side_effect = httpx.TimeoutException("Timed out")
 
         with TestClient(app) as c:
-            resp = c.get("/api/models")
+            resp = c.get("/api/models?provider=ollama")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -442,7 +442,7 @@ def test_embedding_only_model_cannot_be_selected():
     import app.routes.sessions as sessions_route
 
     # Ensure availability lookup is deterministic (returns a known list)
-    def fake_available():
+    def fake_available(*args, **kwargs):
         return ["llama3.2:3b", "llama3.2:1b"]
 
     original = sessions_route.fetch_available_chat_models
@@ -471,7 +471,7 @@ def test_unavailable_chat_model_is_rejected():
     from app.main import app
     import app.routes.sessions as sessions_route
 
-    def fake_available():
+    def fake_available(*args, **kwargs):
         return ["llama3.2:3b"]
 
     original = sessions_route.fetch_available_chat_models

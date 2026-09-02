@@ -21,6 +21,7 @@ import { Label } from "./components/ui/label";
 import { cn } from "./lib/utils";
 import type { ModelInfo, ProviderConfig, ScheduledTask } from "./types";
 import { ScheduledTasks } from "./ScheduledTasks";
+import { MCPTab } from "./MCPTab";
 
 const PROVIDER_OPTIONS = [
   { value: "openrouter", label: "OpenRouter" },
@@ -45,7 +46,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) {
-  const [activeTab, setActiveTab] = useState<"providers" | "scheduler">("providers");
+  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp">("providers");
   
   // ── Providers state ──────────────────────────────────────
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -146,15 +147,16 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
   // ── Render ───────────────────────────────────────────────
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh]">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto pr-1">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler")} className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp")} className="w-full">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="scheduler">Scheduled Tasks</TabsTrigger>
+            <TabsTrigger value="mcp">MCP Servers</TabsTrigger>
           </TabsList>
 
           {/* ── Providers Tab ── */}
@@ -326,6 +328,11 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
               activeSessionId={activeSessionId}
               onClose={() => {}}
             />
+          </TabsContent>
+
+          {/* ── MCP Servers Tab ── */}
+          <TabsContent value="mcp">
+            <MCPTab />
           </TabsContent>
         </Tabs>
       </DialogContent>

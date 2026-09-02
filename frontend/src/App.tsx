@@ -74,6 +74,7 @@ function App() {
   // Streaming state
   const { isStreaming, streamedContent, startStream, cancelStream } = useStreaming();
   const [generationStopped, setGenerationStopped] = useState(false);
+  const [pendingToolApproval, setPendingToolApproval] = useState<{ tool: string; args: any; server?: string } | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionListRequestRef = useRef(0);
@@ -250,6 +251,20 @@ function App() {
     }
   };
 
+  const handleDocumentUpload = async (file: File) => {
+    if (!file || !activeSessionId) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      await API.uploadDocument(activeSessionId, file);
+      loadDocuments(activeSessionId);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleDeleteDocument = async (docId: number) => {
     try {
       await API.deleteDocument(docId);
@@ -347,10 +362,11 @@ function App() {
     if (!overrideText) setInput("");
 
     startStream(activeSessionId, text, imageUrl, {
-      onStart: () => setGenerationStopped(false),
+      onStart: () => { setGenerationStopped(false); setPendingToolApproval(null); },
       onToken: () => {},
       onComplete: (result) => {
         setGenerationStopped(false);
+        setPendingToolApproval(null);
         if (result.sourcesUsed && result.messageId) {
           setSourcesUsedIds((prev) => new Set(prev).add(result.messageId));
         }
@@ -367,20 +383,38 @@ function App() {
         setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message", image_url: imageUrl });
         setSending(false);
         setGenerationStopped(false);
+        setPendingToolApproval(null);
       },
       onCancelled: () => {
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
         setSending(false);
         setGenerationStopped(true);
+        setPendingToolApproval(null);
         setTimeout(() => setGenerationStopped(false), 3000);
+      },
+      onToolApproval: (data) => {
+        setPendingToolApproval(data);
       },
     });
   };
 
   const handleRetry = useCallback(() => {
     if (!retryTarget || !activeSessionId || isStreaming) return;
-    handleSend(retryTarget.message, retryTarget.image_url);
+    handleSend(retryTarget.image_url, retryTarget.message);
   }, [retryTarget, activeSessionId, isStreaming]);
+
+  const handleToolApprove = useCallback(() => {
+    if (!pendingToolApproval) return;
+    setPendingToolApproval(null);
+    // Send approval as next message - backend interprets as tool approval
+    handleSend(undefined, "yes");
+  }, [pendingToolApproval]);
+
+  const handleToolReject = useCallback(() => {
+    if (!pendingToolApproval) return;
+    setPendingToolApproval(null);
+    handleSend(undefined, "no");
+  }, [pendingToolApproval]);
 
   // ═══════════════════════════════════════════════════════
   // Auth gate — after all hooks, before derived state & render
@@ -430,7 +464,7 @@ function App() {
         onCitationClick={(citation: Citation) => setSelectedCitation(citation)}
         input={input}
         onInputChange={setInput}
-        onSend={() => handleSend()}
+        onSend={(imageUrl) => handleSend(imageUrl)}
         onKeyDown={(e: React.KeyboardEvent) => {
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
         }}
@@ -457,6 +491,14 @@ function App() {
         showMemories={showMemories}
         onToggleMemory={handleToggleMemory}
         onToggleMemories={() => { setShowMemories(!showMemories); loadMemories(); }}
+        documents={documents}
+        uploading={uploading}
+        uploadError={uploadError}
+        onDocumentUpload={handleDocumentUpload}
+        onDeleteDocument={handleDeleteDocument}
+        pendingToolApproval={pendingToolApproval}
+        onApproveTool={handleToolApprove}
+        onRejectTool={handleToolReject}
       />
 
       {/* Document panel */}

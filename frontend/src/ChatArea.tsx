@@ -24,6 +24,9 @@ import {
   ChevronDown,
   Image as ImageIcon,
   X,
+  Paperclip,
+  Upload,
+  File as FileIcon,
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ModelSelector } from "./ModelSelector";
@@ -128,6 +131,18 @@ interface ChatAreaProps {
   showMemories: boolean;
   onToggleMemory: () => void;
   onToggleMemories: () => void;
+
+  // Document upload
+  documents?: import("./types").Document[];
+  uploading?: boolean;
+  uploadError?: string | null;
+  onDocumentUpload?: (file: File) => void;
+  onDeleteDocument?: (id: number) => void;
+
+  // Tool approval (MCP / terminal)
+  pendingToolApproval?: { tool: string; args: any; server?: string } | null;
+  onApproveTool?: () => void;
+  onRejectTool?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -163,12 +178,22 @@ export function ChatArea({
   showMemories,
   onToggleMemory,
   onToggleMemories,
+  documents = [],
+  uploading = false,
+  uploadError = null,
+  onDocumentUpload,
+  onDeleteDocument,
+  pendingToolApproval = null,
+  onApproveTool,
+  onRejectTool,
 }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingEndRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);  // Base64 image data URL
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
 
   const indicators = useMemo(() => ({
     hasSources: sourcesUsedIds.size > 0,
@@ -220,6 +245,59 @@ export function ChatArea({
   // ── Voice output ────────────────────
   const tts = useSpeechSynthesis();
 
+  // ── Document upload helpers ─────────────────
+  const activeDoc = documents && documents.length > 0 ? documents[0] : null;
+  const getDocStatusLabel = () => {
+    if (uploading) return "Uploading...";
+    if (!activeDoc) return null;
+    if (activeDoc.status === "processing") return "Processing / Embedding...";
+    if (activeDoc.status === "ready") return "Ready ✓";
+    if (activeDoc.status === "failed") return "Failed ✕";
+    return activeDoc.status;
+  };
+  const handleDocumentFile = (file: File) => {
+    if (!onDocumentUpload) return;
+    const allowed = [".pdf", ".txt", ".md", ".docx"];
+    const ext = "." + file.name.split(".").pop()?.toLowerCase();
+    if (!allowed.includes(ext) && !allowed.some((a) => file.name.toLowerCase().endsWith(a))) {
+      return;
+    }
+    onDocumentUpload(file);
+  };
+
+  // ── Drag and Drop ───────────────────────────
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) {
+      setIsDragging(false);
+      dragCounterRef.current = 0;
+    }
+  };
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounterRef.current = 0;
+    if (!activeSession || !onDocumentUpload) return;
+    const files = Array.from(e.dataTransfer.files);
+    const valid = files.find((f) => /\.(pdf|txt|md|docx)$/i.test(f.name));
+    if (valid) handleDocumentFile(valid);
+  };
+
   // ── Empty State (no active session) ──────
   if (!activeSession) {
     return (
@@ -238,7 +316,23 @@ export function ChatArea({
   }
 
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col bg-background relative">
+    <main
+      className="flex h-full min-w-0 flex-1 flex-col bg-background relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag Overlay */}
+      {isDragging && activeSession && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm border-2 border-dashed border-primary/50 rounded-xl m-2 pointer-events-none">
+          <div className="flex flex-col items-center gap-3 text-primary">
+            <Upload className="h-10 w-10 animate-bounce" />
+            <p className="text-sm font-medium">Drop PDF, TXT, MD or DOCX to upload</p>
+            <p className="text-xs text-secondary">Will be indexed for RAG</p>
+          </div>
+        </div>
+      )}
       {/* Header - Minimal */}
       <header className="relative z-10 flex items-center justify-between border-b px-4 py-3 bg-background/60 backdrop-blur-xl sticky top-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -334,6 +428,26 @@ export function ChatArea({
                   <h1 className="mb-6 text-center text-2xl font-medium text-foreground">Ask Thunder AI anything</h1>
                   {/* Centered Input Box - Grok Style */}
                   <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+                    {/* Document Status Pill */}
+                    {(uploading || activeDoc) && (
+                      <div className="relative mb-2 flex items-center gap-2 px-1">
+                        <div className="flex items-center gap-2 rounded-full bg-white/5 border border-white/10 px-3 py-1.5 text-xs shadow-sm">
+                          <FileIcon className="h-3.5 w-3.5 text-primary shrink-0" />
+                          <span className="max-w-[160px] truncate font-medium">
+                            📄 {activeDoc?.filename || "Uploading..."}
+                          </span>
+                          <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", uploading ? "bg-primary/20 text-primary animate-pulse" : activeDoc?.status==="ready" ? "bg-green-500/15 text-green-400" : activeDoc?.status==="failed" ? "bg-destructive/15 text-destructive" : "bg-white/10 text-secondary")}>
+                            {getDocStatusLabel()}
+                          </span>
+                          {activeDoc && onDeleteDocument && (
+                            <button onClick={()=>onDeleteDocument(activeDoc.id)} className="ml-1 p-0.5 rounded-full hover:bg-white/10 hover:text-destructive transition-colors" title="Remove document">
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                        {uploadError && <span className="text-xs text-destructive truncate">{uploadError}</span>}
+                      </div>
+                    )}
                     {/* Image preview */}
                     {attachedImage && (
                       <div className="relative mb-2 flex items-center gap-2 px-1">
@@ -404,6 +518,29 @@ export function ChatArea({
                         className="h-11 w-11 shrink-0 rounded-xl transition-colors hover:bg-white/5"
                       >
                         <ImageIcon className="h-4 w-4" />
+                      </Button>
+                      {/* Paperclip - Document Upload */}
+                      <input
+                        type="file"
+                        accept=".pdf,.txt,.md,.docx"
+                        className="hidden"
+                        id="doc-upload-centered"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleDocumentFile(file);
+                          e.target.value = "";
+                        }}
+                        disabled={isStreaming}
+                      />
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => document.getElementById("doc-upload-centered")?.click()}
+                        disabled={isStreaming}
+                        title="Attach document (PDF, TXT, MD, DOCX)"
+                        className="h-11 w-11 shrink-0 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-primary/30 transition-all"
+                      >
+                        <Paperclip className="h-4 w-4" />
                       </Button>
 <Button
                       className="h-11 w-11 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
@@ -560,6 +697,27 @@ export function ChatArea({
                   </div>
                 )}
 
+                {/* Tool Approval Card (MCP / Terminal) */}
+                {pendingToolApproval && (
+                  <div className="my-3 animate-message-in flex justify-center">
+                    <div className="w-full max-w-[85%] rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+                      <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
+                        <AlertTriangle className="h-4 w-4" />
+                        Tool approval required
+                      </div>
+                      <div className="mt-2 text-xs font-mono bg-black/30 rounded p-2 overflow-x-auto">
+                        <div className="text-white"><span className="text-muted-foreground">Tool:</span> {pendingToolApproval.tool}</div>
+                        {pendingToolApproval.server && <div className="text-white"><span className="text-muted-foreground">Server:</span> {pendingToolApproval.server}</div>}
+                        <div className="text-white"><span className="text-muted-foreground">Args:</span> {JSON.stringify(pendingToolApproval.args, null, 2)}</div>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <Button size="sm" onClick={onApproveTool} className="bg-green-600 hover:bg-green-700 text-white">Approve & Run</Button>
+                        <Button size="sm" variant="outline" onClick={onRejectTool}>Reject</Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
                 <div ref={streamingEndRef} />
               </>
@@ -587,6 +745,26 @@ export function ChatArea({
           <div className="relative z-10 px-4 pb-6">
             <div className="mx-auto max-w-3xl">
               <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+                {/* Document Status Pill */}
+                {(uploading || activeDoc) && (
+                  <div className="relative mb-2 flex items-center gap-2 px-1">
+                    <div className="flex items-center gap-2 rounded-full bg-white/5 border border-white/10 px-3 py-1.5 text-xs shadow-sm">
+                      <FileIcon className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <span className="max-w-[160px] truncate font-medium">
+                        📄 {activeDoc?.filename || "Uploading..."}
+                      </span>
+                      <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", uploading ? "bg-primary/20 text-primary animate-pulse" : activeDoc?.status==="ready" ? "bg-green-500/15 text-green-400" : activeDoc?.status==="failed" ? "bg-destructive/15 text-destructive" : "bg-white/10 text-secondary")}>
+                        {getDocStatusLabel()}
+                      </span>
+                      {activeDoc && onDeleteDocument && (
+                        <button onClick={()=>onDeleteDocument(activeDoc.id)} className="ml-1 p-0.5 rounded-full hover:bg-white/10 hover:text-destructive transition-colors" title="Remove document">
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                    {uploadError && <span className="text-xs text-destructive truncate">{uploadError}</span>}
+                  </div>
+                )}
                 {/* Image preview */}
                 {attachedImage && (
                   <div className="relative mb-2 flex items-center gap-2 px-1">
@@ -631,6 +809,29 @@ export function ChatArea({
                     ) : (
                       <Mic className="h-4 w-4" />
                     )}
+                  </Button>
+                  {/* Paperclip - Document Upload */}
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md,.docx"
+                    className="hidden"
+                    id="doc-upload"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleDocumentFile(file);
+                      e.target.value = "";
+                    }}
+                    disabled={isStreaming}
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => document.getElementById("doc-upload")?.click()}
+                    disabled={isStreaming}
+                    title="Attach document (PDF, TXT, MD, DOCX)"
+                    className="h-10 w-10 shrink-0 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-primary/30 hover:text-primary transition-all"
+                  >
+                    <Paperclip className="h-4 w-4" />
                   </Button>
                   {/* Image upload button */}
                   <input

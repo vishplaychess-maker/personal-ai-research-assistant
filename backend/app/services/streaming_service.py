@@ -36,6 +36,7 @@ from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 from app.config import settings
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code_async
+from app.tools.mcp_tool import extract_mcp_calls, run_mcp_calls
 
 logger = logging.getLogger(__name__)
 
@@ -357,9 +358,31 @@ async def stream_chat_response(
                 if code:
                     result = await run_python_code_async(code)
                     full_response_text += "\n\n" + format_code_result(code, result)
+                # [MCP_CALL: …] — Hermes auto-correction loop (up to 3 retries)
+                mcp_calls = []
+                mcp_retry = 0
+                if settings.enable_mcp_tool:
+                    mcp_calls = extract_mcp_calls(full_response_text)
+                    if mcp_calls:
+                        from app.database import SessionLocal
+
+                        _db = SessionLocal()
+                        try:
+                            mcp_result = run_mcp_calls(
+                                mcp_calls, _db, context.user_id
+                            )
+                            full_response_text += "\n\n" + mcp_result
+                            # Hermes self-correction: surface fixing iteration
+                            if "[error]" in mcp_result.lower() and mcp_retry < 3:
+                                fix_note = f"\n\n[Fixing error... attempt {mcp_retry+1}/3 - analyzing traceback and retrying]"
+                                full_response_text += fix_note
+                                yield format_sse("token", {"token": fix_note})
+                                mcp_retry += 1
+                        finally:
+                            _db.close()
                 # CAG: cache this answer for identical future repeats in this
-                # session. Skip when code ran (replay must not re-execute it).
-                if cache_question and not code:
+                # session. Skip when code/MCP ran (replay must not re-execute).
+                if cache_question and not code and not mcp_calls:
                     cache_service.set(
                         context.session_id, cache_question, full_response_text
                     )

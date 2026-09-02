@@ -30,12 +30,13 @@ export interface StreamCallbacks {
   onComplete?: (result: StreamResult) => void;
   onError?: (error: StreamError) => void;
   onCancelled?: () => void;
+  onToolApproval?: (data: { tool: string; args: any; server: string }) => void;
 }
 
 // ── SSE Parser ────────────────────────────────────────────
 
 interface ParsedEvent {
-  type: "start" | "token" | "complete" | "error" | "cancelled";
+  type: "start" | "token" | "complete" | "error" | "cancelled" | "tool_approval_required";
   data: Record<string, unknown>;
 }
 
@@ -265,6 +266,14 @@ actualCallbacks.onError?.({
                 });
                 finish();
                 return;
+              }
+              case "tool_approval_required": {
+                actualCallbacks.onToolApproval?.({
+                  tool: event.data.tool as string,
+                  args: event.data.args,
+                  server: event.data.server as string,
+                });
+                break;
               }
             }
           }

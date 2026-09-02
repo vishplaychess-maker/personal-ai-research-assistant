@@ -292,4 +292,29 @@ export const API = {
   getSchedulerHealth() {
     return request<{ running: boolean; jobs_count: number }>("/api/scheduler/health");
   },
+
+  // ── MCP Servers ────────────────────────────────────────────
+  listMcpServers() {
+    return request<any[]>("/api/mcp/servers");
+  },
+  createMcpServer(data: { name: string; command: string; args: string[]; env?: any; enabled?: boolean; tool_allowlist?: string[] | null }) {
+    return request<any>("/api/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  updateMcpServer(id: number, data: any) {
+    return request<any>(`/api/mcp/servers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+  deleteMcpServer(id: number) {
+    return request<void>(`/api/mcp/servers/${id}`, { method: "DELETE" });
+  },
+  discoverMcpServer(id: number) {
+    return request<{ tools: any[]; error: string | null }>(`/api/mcp/servers/${id}/discover`, {
+      method: "POST",
+    });
+  },
 };

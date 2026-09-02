@@ -9,6 +9,7 @@ build/
 *.egg
 .venv/
 venv/
+env/
 
 # Node
 node_modules/
@@ -30,6 +31,7 @@ npm-debug.log*
 
 # Docker persistent volume data
 chromadb_data/
+chroma_db/
 
 # OS
 .DS_Store

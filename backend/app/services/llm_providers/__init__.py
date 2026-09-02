@@ -35,6 +35,9 @@ def _build_provider(
     model: Optional[str] = None,
 ) -> LLMProvider:
     """Instantiate a provider by name, with optional per-user overrides."""
+    if provider_name == "local":
+        from app.services.llm_providers.local_provider import LocalProvider
+        return LocalProvider(api_key=api_key, model=model)
     if provider_name == "ollama":
         from app.services.llm_providers.ollama_provider import OllamaProvider
         return OllamaProvider(model=model)
@@ -87,6 +90,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
     if _provider_instance is not None:
         expected = _provider_instance.name.lower()
         alias_map = {
+            "local": "local",
             "ollama": "ollama",
             "openrouter": "openrouter",
             "nvidia": "nvidia nim",

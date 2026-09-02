@@ -133,6 +133,15 @@ When "Past memories about this user" appears in the prompt, use it to
 personalize your response (tone, format, style, citations, etc.).
 """""
 
+SELF_REFLECTION_PROMPT = """## Self-Reflection and Auto-Correction
+If your tool execution fails, analyze the error traceback and immediately try a DIFFERENT approach. CRITICAL RULE: DO NOT repeat the exact same tool call or command that just failed. For example, if a file is not found, use a directory listing tool (like `ls` or `list_directory`) to verify the path before attempting to read again. Ensure you acknowledge the error explicitly in your response.
+- Carefully read the error traceback or stderr output.
+- Identify the root cause (e.g., missing file, permission, syntax error, wrong arguments).
+- Propose a corrected tool call or alternative solution with DIFFERENT parameters.
+- Verify your logic before retrying. Do not repeat the same failing call.
+- After up to 3 retries, if still failing, explain the issue and ask the user for help.
+"""
+
 RAG_CITATION_RULE = """## Citing Sources (Retrieved Documents)
 When you answer a question using the "Retrieved Documents" context block:
 1. You MUST cite where the information came from at the end of each sentence or paragraph that uses it.
@@ -170,6 +179,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     parts.append(CODE_REVIEW_TOOL_CONTEXT)
 
     parts.append(MEMORY_TOOL_CONTEXT)
+
+    parts.append(SELF_REFLECTION_PROMPT)
 
     parts.append(RAG_CITATION_RULE)
 

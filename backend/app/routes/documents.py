@@ -33,7 +33,7 @@ from app.schemas.documents import (
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.document_processor import extract_text, chunk_text
-from app.services.embeddings_client import generate_embeddings_batch
+import app.services.embeddings_client as embeddings_client
 from app.services.chromadb_client import add_chunks, delete_chunks, delete_collection
 
 router = APIRouter(tags=["documents"])
@@ -73,6 +73,10 @@ ALLOWED_MIME_TYPES = {
     "text/markdown",
     "application/x-tex",
     "text/x-dockerfile",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "text/markdown",
+    "application/octet-stream",
 }
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
@@ -107,12 +111,16 @@ def _validate_file(filename: str, content_type: str, file_size: int) -> None:
             detail=f"Invalid file extension '{ext}'. Allowed: .pdf, .txt",
         )
 
-    # Check MIME type
+    # Check MIME type - allow if extension is valid and MIME is generic
     if content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type '{content_type}'. Allowed: application/pdf, text/plain",
-        )
+        # Allow generic octet-stream for allowed extensions (browser may send generic MIME for .md/.docx)
+        if content_type not in ("application/octet-stream", "") and not content_type.startswith("text/"):
+            # Still allow if extension is explicitly allowed - be permissive for drag-drop
+            if ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type '{content_type}'. Allowed: application/pdf, text/plain",
+                )
 
     # Check file size
     if file_size > MAX_FILE_SIZE:
@@ -193,7 +201,7 @@ async def upload_document(
 
         # Step 3: Generate embeddings
         texts = [c["text"] for c in chunks]
-        embeddings = generate_embeddings_batch(texts)
+        embeddings = embeddings_client.generate_embeddings_batch(texts)
 
         # Step 4: Store in ChromaDB
         chroma_ids = []

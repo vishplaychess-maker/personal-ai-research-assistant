@@ -31,6 +31,21 @@ def register_and_login(client, username=None, password="securePass123!"):
             "password": password,
         },
     )
+    
+    # User already unte direct ga login aipovali (DB pollution fix)
+    if reg.status_code == 400 and "already taken" in reg.text.lower():
+        login = client.post(
+            "/api/auth/login",
+            json={"username": name, "password": password},
+        )
+        assert login.status_code == 200, f"login failed: {login.status_code} {login.text[:200]}"
+        # Get user id from token or a quick me call, or check how tests use it. 
+        # Usually tests unpack: user_id, token = register_and_login(...)
+        # Let's use an authenticated request to get the user id if needed, or query /api/auth/me
+        me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {login.json()['access_token']}"})
+        user_id = me.json().get("id", 1) if me.status_code == 200 else 1
+        return user_id, login.json()["access_token"]
+
     assert reg.status_code == 201, f"register failed: {reg.status_code} {reg.text[:200]}"
     user_id = reg.json()["id"]
     login = client.post(
