@@ -116,6 +116,9 @@ class WorkflowState(TypedDict):
     mcp_result: Optional[str]            # Output of executed MCP tool calls
     mcp_retry_count: int                 # Hermes self-correction loop counter
     regenerate: bool                     # Whether generate_answer should re-run with results
+    # ── Plan-then-execute (F6 Capability 1, v1 preview-only) ──
+    proposed_plan: List[Dict[str, Any]]   # Plan steps from generate_plan
+    plan_pending: bool                    # True if a plan is shown to the user
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
     db: Optional[Any]
@@ -158,6 +161,51 @@ def load_context(state: WorkflowState) -> WorkflowState:
     ]
 
     state["messages"] = history
+    return state
+
+
+# ── Node: generate_plan ─────────────────────────────────────
+# F6 Capability 1 (v1): the plan is a review-only preview. We ask the LLM
+# for a step list, store it in state, and let the graph continue normally —
+# running the plan is deferred to a later capability (execute_plan is a stub).
+
+
+def generate_plan(state: WorkflowState) -> WorkflowState:
+    """Generate an optional multi-step plan for the user's request.
+
+    Non-fatal: any provider failure or bad output yields an empty plan, so a
+    planning error never breaks the chat.
+    """
+    if state.get("error"):
+        return state
+
+    from app.services.planning_service import generate_plan_for_query
+
+    db: DBSession = state.get("db")
+    provider_config = get_user_llm_config(db, state.get("user_id", 1)) if db else None
+    if state.get("model_name") and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = state["model_name"]
+
+    plan = generate_plan_for_query(
+        query=state.get("user_input", ""),
+        messages=state.get("messages", []),
+        provider_config=provider_config,
+        model_name=state.get("model_name"),
+        system_prompt=state.get("system_prompt"),
+    )
+    state["proposed_plan"] = plan
+    state["plan_pending"] = bool(plan)
+    return state
+
+
+# ── Node: execute_plan (F6 Capability 1 stub) ──────────────
+# v1 plan is a preview only, so this is a no-op pass-through. It is wired
+# so a later capability can drive tool execution from the approved plan.
+
+
+def execute_plan(state: WorkflowState) -> WorkflowState:
+    """Stub: executes an approved plan. No-op in v1 (preview only)."""
     return state
 
 
@@ -814,6 +862,8 @@ def build_workflow() -> StateGraph:
 
     # Register nodes
     workflow.add_node("load_context", load_context)
+    workflow.add_node("generate_plan", generate_plan)
+    workflow.add_node("execute_plan", execute_plan)
     workflow.add_node("retrieve_memories", retrieve_memories)
     workflow.add_node("retrieve_context", retrieve_context)
     workflow.add_node("browse_web", browse_web)
@@ -827,7 +877,8 @@ def build_workflow() -> StateGraph:
 
     # Define edges
     workflow.set_entry_point("load_context")
-    workflow.add_edge("load_context", "retrieve_memories")
+    workflow.add_edge("load_context", "generate_plan")
+    workflow.add_edge("generate_plan", "retrieve_memories")
     workflow.add_edge("retrieve_memories", "retrieve_context")
     workflow.add_edge("retrieve_context", "browse_web")
     workflow.add_edge("browse_web", "generate_answer")
@@ -951,6 +1002,8 @@ def run_research_workflow(
         "mcp_result": "",
         "mcp_retry_count": 0,
         "regenerate": False,
+        "proposed_plan": [],
+        "plan_pending": False,
         "error": None,
         "db": db,
         "model_name": None,

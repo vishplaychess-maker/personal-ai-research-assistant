@@ -78,6 +78,7 @@ class ChatContext:
         user_id: int = 1,
         model_name: Optional[str] = None,
         provider_config: Optional[dict] = None,
+        user_input: Optional[str] = None,
     ):
         self.session_id = session_id
         self.user_message = user_message
@@ -89,6 +90,7 @@ class ChatContext:
         self.user_id = user_id
         self.model_name = model_name
         self.provider_config = provider_config
+        self.user_input = user_input
 
 
 def prepare_chat_context(
@@ -279,6 +281,7 @@ def prepare_chat_context(
         user_id=user_id,
         model_name=session_model,
         provider_config=provider_config,
+        user_input=user_input,
     )
 
 
@@ -310,6 +313,21 @@ async def stream_chat_response(
         "sources_used": context.sources_used,
         "memories_used": context.memories_used,
     })
+
+    # ── F6 Cap 1: emit an optional plan preview (never blocks the chat) ──
+    from app.services.planning_service import generate_plan_for_query
+
+    try:
+        plan = generate_plan_for_query(
+            query=context.user_input or "",
+            messages=[m for m in context.history if isinstance(m.get("content"), str)],
+            provider_config=context.provider_config,
+            model_name=context.model_name,
+        )
+        yield format_sse("plan", {"steps": plan})
+    except Exception as exc:
+        logger.warning("Plan preview failed (non-fatal): %s", exc)
+        yield format_sse("plan", {"steps": []})
 
     # ── CAG: serve an identical, context-free repeat from cache ────────
     # Only when the last turn is a plain-text user question and no RAG

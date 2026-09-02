@@ -29,6 +29,7 @@ import {
   File as FileIcon,
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { PlanCard } from "./PlanCard";
 import { ModelSelector } from "./ModelSelector";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
@@ -143,6 +144,10 @@ interface ChatAreaProps {
   pendingToolApproval?: { tool: string; args: any; server?: string } | null;
   onApproveTool?: () => void;
   onRejectTool?: () => void;
+
+  // F6 Capability 1 — plan preview (v1, read-only + cancel)
+  planSteps?: Array<Record<string, unknown>>;
+  onPlanCancel?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -186,6 +191,8 @@ export function ChatArea({
   pendingToolApproval = null,
   onApproveTool,
   onRejectTool,
+  planSteps = [],
+  onPlanCancel,
 }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingEndRef = useRef<HTMLDivElement>(null);
@@ -642,6 +649,17 @@ export function ChatArea({
                     </div>
                   </div>
                 ))}
+
+                {/* F6 Capability 1 — Plan preview card */}
+                {isStreaming && planSteps.length > 0 && onPlanCancel && (
+                  <div className="flex justify-start">
+                    <PlanCard
+                      steps={planSteps}
+                      onRun={() => {}}
+                      onCancel={onPlanCancel}
+                    />
+                  </div>
+                )}
 
                 {/* Streaming Message */}
                 {isStreaming && (

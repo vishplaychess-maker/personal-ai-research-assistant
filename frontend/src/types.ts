@@ -136,6 +136,7 @@ export interface StreamError {
 export interface StreamCallbacks {
   onStart?: () => void;
   onToken?: (token: string) => void;
+  onPlan?: (steps: Array<Record<string, unknown>>) => void;
   onComplete?: (result: StreamResult) => void;
   onError?: (error: StreamError) => void;
   onCancelled?: () => void;

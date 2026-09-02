@@ -77,6 +77,7 @@ function App() {
   const { isStreaming, streamedContent, startStream, cancelStream } = useStreaming();
   const [generationStopped, setGenerationStopped] = useState(false);
   const [pendingToolApproval, setPendingToolApproval] = useState<{ tool: string; args: any; server?: string } | null>(null);
+  const [planSteps, setPlanSteps] = useState<Array<Record<string, unknown>>>([]);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionListRequestRef = useRef(0);
@@ -421,8 +422,9 @@ function App() {
     if (!overrideText) setInput("");
 
     startStream(activeSessionId, text, imageUrl, {
-      onStart: () => { setGenerationStopped(false); setPendingToolApproval(null); },
+      onStart: () => { setGenerationStopped(false); setPendingToolApproval(null); setPlanSteps([]); },
       onToken: () => {},
+      onPlan: (steps) => setPlanSteps(steps),
       onComplete: (result) => {
         setGenerationStopped(false);
         setPendingToolApproval(null);
@@ -561,6 +563,8 @@ function App() {
         pendingToolApproval={pendingToolApproval}
         onApproveTool={handleToolApprove}
         onRejectTool={handleToolReject}
+        planSteps={planSteps}
+        onPlanCancel={() => setPlanSteps([])}
       />
 
       {/* Document panel */}
