@@ -11,6 +11,7 @@ import {
   Trash2,
   Download,
   Upload,
+  Share2,
   LogOut,
   Sun,
   Moon,
@@ -45,6 +46,7 @@ interface SidebarProps {
   onRenameSession: (id: number, title: string) => void;
   onExportSession?: (id: number) => void;
   onImportSession?: (file: File) => void;
+  onShareSession?: (id: number) => void;
   onLogout?: () => void;
   onOpenSettings?: () => void;
 }
@@ -60,6 +62,7 @@ export function Sidebar({
   onRenameSession,
   onExportSession,
   onImportSession,
+  onShareSession,
   onLogout,
   onOpenSettings,
 }: SidebarProps) {
@@ -321,6 +324,15 @@ export function Sidebar({
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
+                    {onShareSession && (
+                      <button
+                        className="h-7 w-7 rounded-lg icon-muted hover:text-primary hover:bg-white/5 transition-all"
+                        title="Share agent card"
+                        onClick={() => onShareSession(session.id)}
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     {onExportSession && (
                       <button
                         className="h-7 w-7 rounded-lg icon-muted hover:icon-primary hover:bg-white/5 transition-all"

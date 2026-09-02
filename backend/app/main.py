@@ -24,6 +24,7 @@ from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
 from app.routes.mcp import router as mcp_router
+from app.routes.share import router as share_router
 
 
 def _migrate_database():
@@ -262,6 +263,7 @@ app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(scheduler_router)
 app.include_router(mcp_router)
+app.include_router(share_router)
 
 
 @app.get("/api/health")

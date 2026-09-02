@@ -300,3 +300,34 @@ class MCPServer(Base):
 
     def __repr__(self):
         return f"<MCPServer(id={self.id}, name='{self.name}', enabled={self.enabled})>"
+
+
+class SharedAgent(Base):
+    """A minimal, immutable snapshot of an exported agent for public sharing.
+
+    Created when a user clicks "Share" on a session. The fields are copied at
+    share time so that deleting/renaming the source session never breaks an
+    already-published link (see frontend privacy contract: only snapshot data,
+    never the session's private content).
+
+    Table is auto-created by ``Base.metadata.create_all`` on startup.
+    """
+
+    __tablename__ = "shared_agents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    share_id = Column(String(12), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("research_sessions.id"), nullable=False)
+    title = Column(String(255), nullable=False)
+    model = Column(String(100), nullable=True)
+    system_prompt = Column(Text, nullable=True)
+    preview_message = Column(Text, nullable=True)
+    tool_count = Column(Integer, nullable=False, default=0)
+    has_schedule = Column(Boolean, nullable=False, default=False)
+    cover_image_url = Column(Text, nullable=True)
+    view_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<SharedAgent(share_id='{self.share_id}', title='{self.title}')>"

@@ -22,6 +22,7 @@ import type {
   ScheduledTaskUpdate,
   SessionExport,
   ImportResult,
+  ShareCreateResult,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 
@@ -163,6 +164,11 @@ export const API = {
     return request<ImportResult>("/api/sessions/import", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+  createShare(sessionId: number) {
+    return request<ShareCreateResult>(`/api/sessions/${sessionId}/share`, {
+      method: "POST",
     });
   },
 

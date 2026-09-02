@@ -52,6 +52,9 @@ function App() {
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Shareable Agent Card feedback (transient "copied" notice)
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+
   // Memory state
   const [memories, setMemories] = useState<Memory[]>([]);
   const [showMemories, setShowMemories] = useState(false);
@@ -193,6 +196,26 @@ function App() {
       setChatError(null);
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "Import failed");
+    }
+  };
+
+  // ── Shareable Agent Card (F6) ─────────────────────────
+
+  const handleShareSession = async (id: number) => {
+    try {
+      const result = await API.createShare(id);
+      const url = result.share_url || `${window.location.origin}/share/agents/${result.share_id}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareNotice("Share link copied to clipboard");
+      } catch {
+        setShareNotice("Share link created");
+      }
+      setChatError(null);
+      // Auto-dismiss the notice after a short delay.
+      setTimeout(() => setShareNotice(null), 3500);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Share failed");
     }
   };
 
@@ -490,6 +513,7 @@ function App() {
         onRenameSession={handleRenameSession}
         onExportSession={handleExportSession}
         onImportSession={handleImportSession}
+        onShareSession={handleShareSession}
         onOpenSettings={() => setShowSettings(true)}
         onLogout={logout}
       />
@@ -584,6 +608,13 @@ function App() {
       {/* Citation popup */}
       {selectedCitation && (
         <CitationPopup citation={selectedCitation} onClose={() => setSelectedCitation(null)} />
+      )}
+
+      {/* Share notice */}
+      {shareNotice && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-full border border-white/10 bg-background/90 px-4 py-2 text-sm text-foreground shadow-lg backdrop-blur">
+          {shareNotice}
+        </div>
       )}
 
       {/* System prompt editor modal */}

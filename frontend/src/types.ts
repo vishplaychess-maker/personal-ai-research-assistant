@@ -269,3 +269,22 @@ export interface ImportResult {
   title: string;
   schedule_created: boolean;
 }
+
+// ── Shareable Agent Card (F6) ──────────────────────────────
+
+export interface ShareCreateResult {
+  share_id: string;
+  share_url: string;
+}
+
+export interface PublicSharedAgent {
+  share_id: string;
+  title: string;
+  model: string | null;
+  system_prompt: string | null;
+  preview_message: string | null;
+  tool_count: number;
+  has_schedule: boolean;
+  cover_image_url: string | null;
+  views: number;
+}

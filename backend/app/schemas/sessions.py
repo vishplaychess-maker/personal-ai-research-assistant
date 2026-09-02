@@ -113,3 +113,34 @@ class ImportResult(BaseModel):
     session_id: int
     title: str
     schedule_created: bool
+
+
+# ── Shareable Agent Card (F6) ──────────────────────────────
+
+
+class ShareCreateResult(BaseModel):
+    """Returned to the owner when they publish a share link."""
+
+    share_id: str
+    share_url: str
+
+
+class PublicSharedAgent(BaseModel):
+    """Public-safe snapshot rendered on the share card page.
+
+    Deliberately excludes session_id, user_id and view_count internals that
+    could be used to enumerate/associate records. view_count is exposed (as
+    views) because it's the growth metric, but nothing else about the owner.
+    """
+
+    share_id: str
+    title: str
+    model: Optional[str] = None
+    system_prompt: Optional[str] = None
+    preview_message: Optional[str] = None
+    tool_count: int = 0
+    has_schedule: bool = False
+    cover_image_url: Optional[str] = None
+    views: int = 0
+
+    model_config = {"from_attributes": True}
