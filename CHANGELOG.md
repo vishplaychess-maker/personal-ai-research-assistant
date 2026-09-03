@@ -24,8 +24,21 @@ All notable changes to the Personal AI Research Assistant.
   `langgraph_workflow._build_system_prompt`. All defensive — never breaks chat.
 - Config: optional `SKILLS_DIR` (`skills_dir` setting); defaults to
   `<package>/skills`.
-- Sample skill `backend/app/skills/web-research/SKILL.md` demonstrates the
-  format (name, description, step instructions, rules).
+- `manager.py`: `SkillManager` — canonical discovery engine with precedence
+  (bundled `<backend>/skills` → user-global `~/.thunder/skills` → project-local
+  `.thunder/skills` → `extra_paths`), `get_skill_index()` (L1) and
+  `get_skill_body()` (L2). Later-listed source wins; symlink escapes guarded.
+  The bundled path is resolved from the module so it works regardless of the
+  process working directory (e.g. `/app/skills` in Docker).
+- `tools/skill_tool.py`: native `@tool skill(name)` (L3) — returns the skill
+  body and lists up to 25 resource files for the skill directory.
+- **Marker protocol (free-model text fallback):** the model requests a skill by
+  emitting `<skill>name</skill>`, `[USE_SKILL: name]`, or `USE SKILL: name`.
+  `extract_skill_calls` detects these; `process_skill_markers` strips markers
+  from the user-visible answer. Wired into `streaming_service.stream_chat_response`
+  (on `done`) and `langgraph_workflow.generate_answer` (before saving to state).
+- Example skills (bundled): `commit-message`, `code-review`, `web-research` —
+  now in `backend/skills/` (the consolidated bundled location).
 
 ### Deep Research Mode (DuckDuckGo web search — free, no API key)
 - Added `web_search` tool and `run_deep_research` helper (`backend/app/tools/web_search.py`)

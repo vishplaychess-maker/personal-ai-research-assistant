@@ -1,118 +1,70 @@
 """
 Skill discovery + progressive disclosure for the AI Research Agent.
 
-Claude-style skills live in ``backend/app/skills/<skill-name>/SKILL.md``.
-Each file has YAML frontmatter (``name``, ``description``, optional
-``pinned``). Discovery works in two "layers":
+Thin, backward-compatible facade over :class:`app.skills.manager.SkillManager`,
+the canonical discovery engine. The manager searches bundled, user-global,
+project-local, and configured ``extra_paths`` locations with "later wins"
+precedence, and guards against symlink escapes.
+
+Progressive disclosure works in two layers:
 
 L1 — Progressive disclosure (cheap):
-    ``skills_catalog()`` scans the skills directory once and renders ONLY the
-    ``name`` + ``description`` of every skill into a compact prompt block. This
-    keeps the system prompt small so small/free models with limited context can
-    still "see" what capabilities exist without loading every skill body.
+    ``skills_catalog()`` (→ :meth:`SkillManager.get_skill_index`) renders ONLY
+    the ``name`` + ``description`` of each skill into a compact prompt block,
+    keeping the system prompt small for limited-context models.
 
 L2 — On-demand loading (expensive, only when needed):
     ``load_skill_body(name)`` returns the full ``SKILL.md`` body for a single
     named skill. The model requests a skill by emitting the marker::
 
-        [USE_SKILL: <skill-name>]
+        <skill>skill-name</skill>
 
-    The backend detects this marker (``extract_skill_calls``) — e.g. in the
-    user message or a generated answer — loads the skill body, and injects it
-    into context so the model can follow the skill's instructions.
+    ``extract_skill_calls`` detects these tags and the caller injects the body.
 
-Everything is defensive: missing directory, unparseable files, or unknown
+Everything is defensive: missing directories, unparseable files, or unknown
 skill names all degrade to no-ops so the chat is never broken.
 """
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from app.config import settings
-from app.skills.parser import Skill, parse_skill_md
+from app.skills.manager import SkillManager
+from app.skills.parser import Skill
 
 logger = logging.getLogger(__name__)
 
 # Marker the model emits to request a skill's full body (L2).
+SKILL_TAG_PATTERN = re.compile(r"<skill>\s*([a-z0-9-]+)\s*</skill>", re.IGNORECASE)
+
+# Back-compat alias: older [USE_SKILL: <name>] markers are still recognised.
 USE_SKILL_PATTERN = re.compile(r"\[USE_SKILL:\s*([a-z0-9-]+)\s*\]", re.IGNORECASE)
 
+# Plain-text free-model fallback marker: "USE SKILL: name" (line-orientated).
+PLAIN_SKILL_PATTERN = re.compile(r"(?im)^\s*USE\s+SKILL:\s*([a-z0-9-]+)")
 
-def _skills_root() -> Path:
-    """Absolute path to the skills directory (defaults to this package's folder)."""
-    configured = getattr(settings, "skills_dir", None)
-    if configured:
-        return Path(configured)
-    # Default: <package>/skills
-    return Path(__file__).resolve().parent
+# Canonical manager instance. Uses app settings so env-configured
+# ``EXTRA_PATHS`` are honoured on top of the bundled skills directory.
+SKILL_MANAGER = SkillManager(settings)
 
 
-def discover_skills(dir_path: Optional[str] = None) -> List[Skill]:
-    """Scan the skills directory and return all parseable skills.
-
-    Finds every ``SKILL.md`` in a direct subdirectory (one level deep). Skips
-    files that fail to parse or have an invalid name. Never raises.
-    """
-    root = Path(dir_path) if dir_path else _skills_root()
-    skills: List[Skill] = []
-    try:
-        if not root.exists():
-            logger.info("Skills directory not found: %s", root)
-            return skills
-        for entry in root.iterdir():
-            if not entry.is_dir():
-                continue
-            skill_file = entry / "SKILL.md"
-            if not skill_file.exists():
-                continue
-            skill = parse_skill_md(skill_file, source="local")
-            if skill is not None:
-                skills.append(skill)
-    except Exception as exc:  # noqa: BLE001 — discovery must never break chat
-        logger.warning("Skill discovery failed (non-fatal): %s", exc)
-    return skills
+def discover_skills() -> List[Skill]:
+    """Return all discovered skills (canonical discovery with precedence)."""
+    return SKILL_MANAGER.discover_skills()
 
 
-def get_skill(name: str, dir_path: Optional[str] = None) -> Optional[Skill]:
-    """Return a single skill by name, or None if it does not exist."""
-    normalized = (name or "").strip().lower()
-    if not normalized:
-        return None
-    for skill in discover_skills(dir_path):
-        if skill.name == normalized:
-            return skill
-    return None
-
-
-def skills_catalog(dir_path: Optional[str] = None) -> str:
+def skills_catalog() -> str:
     """L1 — render a compact catalog of available skills (name + description)."""
-    skills = discover_skills(dir_path)
-    if not skills:
-        return ""
-
-    # Pinned skills first, then alphabetical.
-    skills = sorted(skills, key=lambda s: (not s.pinned, s.name))
-
-    lines = ["=== Skills Available ==="]
-    lines.append(
-        "The assistant has the following optional skills. Only the skill's "
-        "name and description are shown here. To USE one, emit the marker "
-        "[USE_SKILL: <skill-name>] and the full skill instructions will be loaded."
-    )
-    for s in skills:
-        desc = (s.description or "No description.").strip().replace("\n", " ")
-        lines.append(f"- **{s.name}**: {desc}")
-    lines.append("=== End of Skills ===")
-    return "\n".join(lines)
+    return SKILL_MANAGER.get_skill_index()
 
 
-def load_skill_body(name: str, dir_path: Optional[str] = None) -> str:
+def load_skill_body(name: str) -> str:
     """L2 — return the full body of a single skill as a formatted block.
 
     Returns "" when the skill is unknown so callers can no-op safely.
     """
-    skill = get_skill(name, dir_path)
+    skill = SKILL_MANAGER.get_skill_body(name)
     if skill is None:
         logger.info("Skill '%s' not found; L2 load skipped", name)
         return ""
@@ -125,36 +77,65 @@ def load_skill_body(name: str, dir_path: Optional[str] = None) -> str:
 
 
 def extract_skill_calls(text: Optional[str]) -> List[str]:
-    """Extract all [USE_SKILL: <name>] marker names from text.
+    """Extract all skill markers from text.
 
-    Returns a de-duplicated list of requested skill names (lowercased, in
-    first-seen order).
+    Recognises the canonical ``<skill>name</skill>`` tag plus the legacy
+    ``[USE_SKILL: <name>]`` and plain ``USE SKILL: name`` forms (free-model
+    fallback). Returns a de-duplicated list of requested skill names in
+    first-seen order.
     """
     if not text:
         return []
     seen: List[str] = []
-    for m in USE_SKILL_PATTERN.finditer(text):
-        name = m.group(1).strip().lower()
-        if name and name not in seen:
-            seen.append(name)
+    for pattern in (SKILL_TAG_PATTERN, USE_SKILL_PATTERN, PLAIN_SKILL_PATTERN):
+        for m in pattern.finditer(text):
+            name = m.group(1).strip().lower()
+            if name and name not in seen:
+                seen.append(name)
     return seen
+
+
+def _strip_skill_markers(text: str) -> str:
+    """Remove all recognised skill markers from text (user never sees them)."""
+    cleaned = SKILL_TAG_PATTERN.sub("", text)
+    cleaned = USE_SKILL_PATTERN.sub("", cleaned)
+    cleaned = PLAIN_SKILL_PATTERN.sub("", cleaned)
+    return cleaned.strip()
+
+
+def process_skill_markers(text: str) -> str:
+    """Detect skill markers in assistant output and strip them from the
+    user-visible response.
+
+    This is the free-model text fallback (STEP 4): small/free models that
+    cannot do native tool-calling emit a plain marker (e.g. ``<skill>name</skill>``
+    or ``USE SKILL: name``) inside their text. ``extract_skill_calls`` returns
+    the requested skill names so the caller can load their bodies (L2) and
+    inject them into the next iteration; this function removes the markers so
+    they never leak into the chat.
+
+    Returns the cleaned text (no markers).
+    """
+    if not text:
+        return text
+    return _strip_skill_markers(text)
 
 
 SKILLS_TOOL_CONTEXT = """\
 ## Skills Tool (Progressive Disclosure)
 The assistant has optional "skills" — folders containing a SKILL.md with
 step-by-step instructions for specialised tasks. Only each skill's name and
-description are in your context by default (see "=== Skills Available ===").
+description are in your context by default (see "=== Available Skills ===").
 
 When the user's request matches a listed skill, ACTIVATE it by emitting the
 marker on its own line:
 
-[USE_SKILL: <skill-name>]
+<skill>skill-name</skill>
 
 Rules:
-- Use the EXACT skill name from the "Skills Available" listing.
+- Use the EXACT skill name from the "Available Skills" listing.
 - Only request ONE skill at a time.
-- After you emit [USE_SKILL: ...], the full skill instructions will appear in
+- After you emit <skill>...</skill>, the full skill instructions will appear in
   your context; follow them precisely.
 - If no listed skill applies, ignore this tool and answer normally.
 """

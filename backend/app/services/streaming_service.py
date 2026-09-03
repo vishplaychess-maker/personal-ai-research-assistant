@@ -436,6 +436,28 @@ async def stream_chat_response(
                                 mcp_retry += 1
                         finally:
                             _db.close()
+                # Skills (L2, free-model fallback): if the model emitted a skill
+                # marker in its text (<skill>name</skill> | USE SKILL: name |
+                # [USE_SKILL: name]), load the body and strip the markers from
+                # the user-visible response. Bounded — single load, no loop.
+                try:
+                    from app.skills.loader import (
+                        extract_skill_calls,
+                        load_skill_body,
+                        process_skill_markers,
+                    )
+                    skill_names = extract_skill_calls(full_response_text)
+                    if skill_names:
+                        blocks = []
+                        for sname in skill_names:
+                            body_block = load_skill_body(sname)
+                            if body_block:
+                                blocks.append(body_block)
+                        full_response_text = process_skill_markers(full_response_text)
+                        if blocks:
+                            full_response_text += "\n\n" + "\n\n".join(blocks)
+                except Exception as exc:
+                    logger.warning("Skill marker processing failed (non-fatal): %s", exc)
                 # CAG: cache this answer for identical future repeats in this
                 # session. Skip when code/MCP ran (replay must not re-execute).
                 if cache_question and not code and not mcp_calls:

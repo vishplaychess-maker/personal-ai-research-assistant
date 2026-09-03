@@ -585,6 +585,27 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
                     saved_directives, state.get("user_id", 1),
                 )
             response = cleaned
+        # Skills (L2): strip skill markers from the visible answer and, when a
+        # marker like <skill>name</skill> appears, append the loaded body so it
+        # is available to the pending command / regeneration paths. Defensive.
+        try:
+            from app.skills.loader import (
+                extract_skill_calls,
+                load_skill_body,
+                process_skill_markers,
+            )
+            skill_names = extract_skill_calls(response)
+            if skill_names:
+                blocks = []
+                for sname in skill_names:
+                    body_block = load_skill_body(sname)
+                    if body_block:
+                        blocks.append(body_block)
+                response = process_skill_markers(response)
+                if blocks:
+                    response += "\n\n" + "\n\n".join(blocks)
+        except Exception as exc:
+            logger.warning("Skill marker processing failed (non-fatal): %s", exc)
         state["response"] = response
     except (ConnectionError, TimeoutError, RuntimeError) as exc:
         state["error"] = str(exc)

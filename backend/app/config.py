@@ -1,6 +1,11 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
+from typing import List
 
+# Bundled skills directory (<backend>/skills, e.g. /app/skills in Docker).
+# The SkillManager discovers this as its primary "bundled" location regardless
+# of the process working directory.
+_DEFAULT_SKILLS_DIR = str(Path(__file__).resolve().parent.parent / "skills")
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -78,6 +83,27 @@ class Settings(BaseSettings):
     # Only name+description are injected (L1); full bodies load on demand via
     # [USE_SKILL: <name>] (L2). Defaults to <package>/skills.
     skills_dir: str = ""
+    # Extra directories to search for skills (in addition to the bundled
+    # "skills/", user-global, and project-local locations the SkillManager
+    # discovers by default). Defaults to the package <app>/skills directory so
+    # bundled skills are always discoverable.
+    extra_paths: List[str] = [_DEFAULT_SKILLS_DIR]
+
+    # ── Thunder skills (progressive disclosure) ───────────────
+    # Master switch for the skills feature.
+    thunder_skills_enabled: bool = True
+    # Extra skill paths, colon/newline separated (merged into discovery).
+    thunder_skills_paths: str = ""
+    # Comma-separated list of skill names to disable/blacklist.
+    thunder_skills_disabled: str = ""
+    # Invocation mode: "auto" (manager decides) | "marker" (<skill> text) | "tool".
+    # Default "auto" lets free models use the text marker and capable models
+    # use the native `skill` tool.
+    thunder_skills_invocation: str = "auto"
+    # Max tokens the L1 skill index may consume in the system prompt.
+    thunder_skills_index_budget_tokens: int = 600
+    # Max number of skills shown in the L1 index.
+    thunder_skills_max_indexed: int = 20
 
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
