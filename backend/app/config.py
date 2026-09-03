@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
     llm_provider: str = "ollama"
-    default_model: str = "llama3.2:3b"
+    default_model: str = "dolphin-mistral"
     ollama_tags_timeout: int = 5
 
     # OpenRouter (OpenAI-compatible API)
