@@ -1,9 +1,8 @@
 """
 web_search tool + Deep Research helper for the AI Research Agent.
 
-Uses Tavily (https://tavily.com/) to run real-time web searches. Lets the
-agent answer questions about current events, latest research, or anything it
-does not already know — without requiring the user to paste a URL.
+Uses DuckDuckGo (via the ``duckduckgo-search`` package) for real-time web
+search. 100 % free — no API key required.
 
 Two pieces:
 
@@ -12,13 +11,13 @@ Two pieces:
    is available on the web.
 
 2. ``run_deep_research`` — the autonomous "Search -> Scrape -> Synthesize"
-   helper. Searches with Tavily (top-N), then scrapes the top few most
+   helper. Searches with DuckDuckGo (top-N), then scrapes the top few most
    relevant URLs with the ``web_scraper`` tool, and returns a single formatted
    context block ready to be injected into the system prompt. Bounded by
    ``deep_research_max_scrape`` so the loop can never spin forever.
 
-Both degrade gracefully: without a TAVILY_API_KEY (or on any API error) the
-search returns a clear no-op message and never breaks the chat.
+Both degrade gracefully: on any import/API error the search returns an empty
+list and never breaks the chat.
 """
 
 import logging
@@ -30,50 +29,57 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-def _get_tavily_client():
-    """Return a configured TavilyClient, or None if no API key is set."""
-    if not settings.tavily_api_key:
-        return None
-    try:
-        from tavily import TavilyClient
-
-        return TavilyClient(api_key=settings.tavily_api_key)
-    except Exception as exc:  # noqa: BLE001 — import/setup must never break chat
-        logger.warning("Tavily client init failed (non-fatal): %s", exc)
-        return None
+# DuckDuckGo backends to try, most reliable first. "auto" rotates through the
+# native html/lite/bing endpoints; "html" and "lite" are the two primary
+# DuckDuckGo pages. Trying a couple with a short backoff materially improves the
+# hit rate against DuckDuckGo's aggressive rate limiting on shared/cloud IPs.
+_DDG_BACKENDS = ("auto", "html", "lite")
 
 
 def search_web(
     query: str,
     max_results: Optional[int] = None,
 ) -> List[Dict[str, str]]:
-    """Run a Tavily web search and return a list of result dicts.
+    """Run a DuckDuckGo web search and return a list of result dicts.
 
     Each result dict has ``title``, ``url`` and ``snippet`` keys. Returns an
-    empty list if Tavily is unconfigured or the search fails.
+    empty list if the search fails or the library is unavailable. Does a small
+    bounded retry across backends so a single rate-limit blip does not kill it.
     """
+    import time
+
     limit = max_results or settings.deep_research_max_results
-    client = _get_tavily_client()
-    if client is None:
-        logger.info("web_search skipped: TAVILY_API_KEY not configured")
-        return []
 
     try:
-        response = client.search(query=query, max_results=limit)
-    except Exception as exc:  # noqa: BLE001 — search must never break chat
-        logger.warning("Tavily search failed (non-fatal): %s", exc)
+        from duckduckgo_search import DDGS
+    except ImportError:
+        logger.warning("duckduckgo-search package not installed")
         return []
 
-    results = response.get("results", []) if isinstance(response, dict) else []
+    results = None
+
+    for backend in _DDG_BACKENDS:
+        try:
+            results = DDGS().text(keywords=query, max_results=limit, backend=backend)
+        except Exception as exc:  # noqa: BLE001 — search must never break chat
+            logger.warning("DuckDuckGo search (%s) failed (non-fatal): %s", backend, exc)
+            results = None
+        if results:
+            break
+        # Short backoff between backend attempts to appease rate limiting.
+        time.sleep(0.5)
+
+    if not results:
+        logger.warning("DuckDuckGo search returned no results")
+        return []
+
     parsed: List[Dict[str, str]] = []
     for item in results:
         if not isinstance(item, dict):
             continue
-        url = (item.get("url") or "").strip()
+        url = (item.get("href") or "").strip()
         title = (item.get("title") or "").strip()
-        # Tavily returns "content" (a snippet) and/or "raw_content".
-        snippet = (item.get("content") or item.get("raw_content") or "").strip()
+        snippet = (item.get("body") or "").strip()
         if url:
             parsed.append({"url": url, "title": title, "snippet": snippet[:500]})
     return parsed
@@ -99,8 +105,7 @@ def web_search(query: str) -> str:
     results = search_web(query)
     if not results:
         return (
-            "[Web Search] No results found or web search is unavailable "
-            "(check that TAVILY_API_KEY is configured)."
+            "[Web Search] No results found or web search is unavailable."
         )
 
     lines = [f"=== Web Search Result for '{query}' ==="]
@@ -115,7 +120,7 @@ def web_search(query: str) -> str:
 def run_deep_research(query: str) -> str:
     """Autonomous Search -> Scrape -> Synthesize context builder.
 
-    Searches the web with Tavily for *query*, then scrapes the top few
+    Searches the web with DuckDuckGo for *query*, then scrapes the top few
     results with the web_scraper tool, and returns a single formatted context
     block the LLM can synthesize into a report with citations.
 

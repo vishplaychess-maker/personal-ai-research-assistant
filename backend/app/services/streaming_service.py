@@ -274,7 +274,7 @@ def prepare_chat_context(
 
     # 7b. Deep Research Mode — autonomous Tavily search + scrape when the user
     # did not supply a URL and deep research is enabled+configured.
-    if settings.enable_deep_research and settings.tavily_api_key and not web_scraped:
+    if settings.enable_deep_research and not web_scraped:
         try:
             from app.tools.web_search import run_deep_research
 

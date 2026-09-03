@@ -63,13 +63,11 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
-    # ── Deep Research (web search via Tavily) ─────────────
-    # When enabled and a TAVILY_API_KEY is set, the agent can autonomously
-    # search the web (Tavily), scrape the top results, and synthesize a report.
+    # ── Deep Research (web search via DuckDuckGo — free, no API key) ──
+    # When enabled, the agent can autonomously search the web, scrape the
+    # top results, and synthesize a report with citations.
     enable_deep_research: bool = True
-    # Tavily API key for live web search (deep research mode). Leave empty to disable.
-    tavily_api_key: str = ""
-    # How many search results to fetch from Tavily per research pass.
+    # How many search results to fetch per research pass.
     deep_research_max_results: int = 5
     # How many of the top results to scrape per pass (hard cap — bounds the
     # search -> scrape -> synthesize loop so it can never run away).

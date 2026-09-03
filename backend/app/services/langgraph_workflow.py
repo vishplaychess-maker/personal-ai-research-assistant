@@ -329,11 +329,10 @@ def browse_web(state: WorkflowState) -> WorkflowState:
 
 # ── Node: deep_research (autonomous web search) ────────────
 # F6 Deep Research Mode: when the user hasn't supplied a URL to read, search
-# the live web with Tavily and scrape the top results so the LLM can
-# synthesize a fresh, cited report. Bounded (never loops): only runs when a
-# TAVILY_API_KEY is configured AND deep research is enabled AND no explicit
-# URLs were already scraped, and it performs a single, capped search+scrape
-# pass.
+# the live web with DuckDuckGo (free, no API key) and scrape the top results
+# so the LLM can synthesize a fresh, cited report. Bounded (never loops):
+# only runs when deep research is enabled AND no explicit URLs were already
+# scraped, and it performs a single, capped search+scrape pass.
 
 
 def deep_research(state: WorkflowState) -> WorkflowState:
@@ -346,7 +345,7 @@ def deep_research(state: WorkflowState) -> WorkflowState:
     # Only run when deep research is enabled, Tavily is configured, and the
     # user did not already hand us URLs to read (explicit URLs are handled by
     # the browse_web node and would duplicate scraping).
-    if not settings.enable_deep_research or not settings.tavily_api_key:
+    if not settings.enable_deep_research:
         state["deep_research_context"] = ""
         state["deep_research_used"] = False
         return state
