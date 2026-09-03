@@ -101,6 +101,15 @@ export interface ProviderModelGroup {
   models: ModelInfo[];
 }
 
+// ── Agent Directives (F6 Cap 3 "Lessons Learned") ─────────
+
+export interface AgentDirective {
+  id: number;
+  content: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 // ── Model Types ───────────────────────────────────────────
 
 export interface ModelInfo {

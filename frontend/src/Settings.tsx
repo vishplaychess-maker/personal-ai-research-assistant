@@ -22,6 +22,7 @@ import { cn } from "./lib/utils";
 import type { ModelInfo, ProviderConfig, ScheduledTask } from "./types";
 import { ScheduledTasks } from "./ScheduledTasks";
 import { MCPTab } from "./MCPTab";
+import { AgentDirectives } from "./AgentDirectives";
 
 const PROVIDER_OPTIONS = [
   { value: "openrouter", label: "OpenRouter" },
@@ -50,7 +51,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) {
-  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp">("providers");
+  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp" | "directives">("providers");
   
   // ── Providers state ──────────────────────────────────────
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -156,11 +157,12 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp")} className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp" | "directives")} className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="scheduler">Scheduled Tasks</TabsTrigger>
             <TabsTrigger value="mcp">MCP Servers</TabsTrigger>
+            <TabsTrigger value="directives">Lessons Learned</TabsTrigger>
           </TabsList>
 
           {/* ── Providers Tab ── */}
@@ -337,6 +339,17 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
           {/* ── MCP Servers Tab ── */}
           <TabsContent value="mcp">
             <MCPTab />
+          </TabsContent>
+
+          {/* ── Agent Directives (Lessons Learned) Tab ── */}
+          <TabsContent value="directives">
+            <DialogHeader>
+              <DialogTitle>Lessons Learned</DialogTitle>
+              <DialogDescription>
+                Manage the standing rules the agent has saved across your chats.
+              </DialogDescription>
+            </DialogHeader>
+            <AgentDirectives />
           </TabsContent>
         </Tabs>
       </DialogContent>

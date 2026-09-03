@@ -17,6 +17,7 @@ import type {
   SessionModelResponse,
   ProviderConfig,
   ProviderModelGroup,
+  AgentDirective,
   ScheduledTask,
   ScheduledTaskCreate,
   ScheduledTaskUpdate,
@@ -277,6 +278,20 @@ export const API = {
   },
   listAllProviderModels() {
     return request<ProviderModelGroup[]>("/api/providers/models");
+  },
+
+  // ── Agent Directives (F6 Cap 3 "Lessons Learned") ────────
+  listDirectives() {
+    return request<AgentDirective[]>("/api/directives");
+  },
+  toggleDirective(id: number, isActive: boolean) {
+    return request<AgentDirective>(`/api/directives/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    });
+  },
+  deleteDirective(id: number) {
+    return request<void>(`/api/directives/${id}`, { method: "DELETE" });
   },
 
   // ── Scheduler ────────────────────────────────────────────

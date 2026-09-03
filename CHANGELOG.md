@@ -33,6 +33,19 @@ All notable changes to the Personal AI Research Assistant.
 - New tests: `tests/test_evaluation.py` (10 passing).
 
 #### Capability 3: Self-improving agent (persistent failure memory + dynamic directives)
+- Management UI for the agent's learned "Lessons Learned":
+  - New `Agent Directives` tab in Settings (`frontend/src/AgentDirectives.tsx`) that
+    lists every saved directive with its content and Active/Inactive status.
+  - Each directive has an Enable/Disable toggle (calls `PATCH /api/directives/{id}`)
+    and a Delete button (calls `DELETE /api/directives/{id}`), with a friendly
+    empty state and graceful loading/error handling.
+- New backend routes (`backend/app/routes/directives.py`, registered in `main.py`):
+  `GET /api/directives`, `PATCH /api/directives/{id}`, and
+  `DELETE /api/directives/{id}` — all owner-scoped (a user can only see/toggle/
+  delete their own directives) and CSRF-protected.
+- Frontend API layer updated (`frontend/src/api.ts`) with `listDirectives`,
+  `toggleDirective`, and `deleteDirective`; `AgentDirective` type added to
+  `frontend/src/types.ts`.
 - New `AgentDirective` table (`backend/app/models/models.py`) storing durable
   "lessons learned" per user, with a guarded startup migration in
   `backend/app/main.py` (created only if the table is missing).

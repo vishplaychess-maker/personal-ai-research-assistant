@@ -20,6 +20,7 @@ from app.routes.memories import router as memories_router
 from app.routes.settings import router as settings_router
 from app.routes.models import router as models_router
 from app.routes.providers import router as providers_router
+from app.routes.directives import router as directives_router
 from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
@@ -279,6 +280,7 @@ app.include_router(memories_router)
 app.include_router(settings_router)
 app.include_router(models_router)
 app.include_router(providers_router)
+app.include_router(directives_router)
 app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(scheduler_router)
