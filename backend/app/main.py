@@ -164,6 +164,21 @@ def _migrate_database():
             """))
             conn.execute(sa_text("CREATE INDEX ix_mcp_servers_user_id ON mcp_servers (user_id)"))
 
+        # F6 Cap 3: agent_directives table (self-improving agent lessons)
+        existing_tables = inspector.get_table_names()
+        if "agent_directives" not in existing_tables:
+            conn.execute(sa_text("""
+                CREATE TABLE agent_directives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """))
+            conn.execute(sa_text("CREATE INDEX ix_agent_directives_user_id ON agent_directives (user_id)"))
+
         conn.commit()
 
 

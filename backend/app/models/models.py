@@ -333,3 +333,27 @@ class SharedAgent(Base):
 
     def __repr__(self):
         return f"<SharedAgent(share_id='{self.share_id}', title='{self.title}')>"
+
+
+class AgentDirective(Base):
+    """A persistent behavioural directive learned by the agent (F6 Cap 3).
+
+    The agent self-improves by saving durable "lessons learned" — standing
+    instructions it discovers from its own reflection (e.g. "Always cite
+    sources when answering from documents", "Prefer APA over MLA citations").
+    Active directives are injected into every future system prompt so the
+    agent behaves better over time without code changes.
+
+    Table is auto-created by ``Base.metadata.create_all`` on startup.
+    """
+
+    __tablename__ = "agent_directives"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<AgentDirective(id={self.id}, user_id={self.user_id}, is_active={self.is_active})>"

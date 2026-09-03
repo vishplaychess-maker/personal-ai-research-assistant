@@ -189,6 +189,16 @@ def prepare_chat_context(
     except Exception as exc:
         logger.warning("Memory retrieval failed (non-fatal): %s", exc)
 
+    # F6 Cap 3: inject standing "lessons learned" directives (if any)
+    try:
+        from app.services.system_prompts import directives_context
+
+        directive_block = directives_context(db, user_id)
+        if directive_block:
+            system_parts.append(directive_block)
+    except Exception as exc:
+        logger.warning("Directive prompt injection failed (non-fatal): %s", exc)
+
     # 6. Retrieve RAG context (if documents exist)
     sources_used = False
     citations = []

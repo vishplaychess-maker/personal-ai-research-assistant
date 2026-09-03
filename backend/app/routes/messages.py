@@ -397,6 +397,19 @@ async def stream_chat(
                         )
                     full_response_content = cleaned_content
 
+                    # save_directive tool (F6 Cap 3): persist [SAVE_DIRECTIVE: ...]
+                    # markers the LLM emitted during streaming (strip them too).
+                    from app.tools.directive_tool import process_directive_markers
+                    cleaned_content, saved_directives = process_directive_markers(
+                        full_response_content, db, user_id
+                    )
+                    if saved_directives:
+                        logger.info(
+                            "save_directive tool saved %d directive(s) for user %s",
+                            saved_directives, current_user.id,
+                        )
+                    full_response_content = cleaned_content
+
                     # Save assistant message to database
                     try:
                         assistant_msg = save_assistant_message(

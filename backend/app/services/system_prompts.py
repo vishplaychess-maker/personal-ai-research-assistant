@@ -133,8 +133,28 @@ When "Past memories about this user" appears in the prompt, use it to
 personalize your response (tone, format, style, citations, etc.).
 """""
 
-SELF_REFLECTION_PROMPT = """## Self-Reflection and Auto-Correction
-If your tool execution fails, analyze the error traceback and immediately try a DIFFERENT approach. CRITICAL RULE: DO NOT repeat the exact same tool call or command that just failed. For example, if a file is not found, use a directory listing tool (like `ls` or `list_directory`) to verify the path before attempting to read again. Ensure you acknowledge the error explicitly in your response.
+DIRECTIVES_TOOL_CONTEXT = """\
+## save_directive Tool (Lessons Learned)
+The agent continuously improves itself by persisting durable behavioural
+lessons. When you notice a general rule that would make future answers
+better (e.g. "Always cite sources when answering from documents", "Prefer
+APA over MLA citations", "Explain every terminal command before running
+it"), save it by emitting EXACTLY this marker in your response:
+
+[SAVE_DIRECTIVE: <the lesson to remember>]
+
+Rules:
+- Save general, reusable behavioural lessons — NOT one-off facts about the
+  user (those belong in [SAVE_MEMORY: ...]) and NOT secrets or credentials.
+- Keep the directive short, self-contained, and actionable (one sentence).
+- You may emit multiple markers if you discover several distinct lessons.
+- The marker is removed automatically - do not explain it to the user.
+
+When "=== Active Directives ===" appears below, follow those directives in
+every future reply.
+"""""
+
+SELF_REFLECTION_PROMPT = """## Self-Reflection and Auto-CorrectionIf your tool execution fails, analyze the error traceback and immediately try a DIFFERENT approach. CRITICAL RULE: DO NOT repeat the exact same tool call or command that just failed. For example, if a file is not found, use a directory listing tool (like `ls` or `list_directory`) to verify the path before attempting to read again. Ensure you acknowledge the error explicitly in your response.
 - Carefully read the error traceback or stderr output.
 - Identify the root cause (e.g., missing file, permission, syntax error, wrong arguments).
 - Propose a corrected tool call or alternative solution with DIFFERENT parameters.
@@ -180,6 +200,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
 
     parts.append(MEMORY_TOOL_CONTEXT)
 
+    parts.append(DIRECTIVES_TOOL_CONTEXT)
+
     parts.append(SELF_REFLECTION_PROMPT)
 
     parts.append(RAG_CITATION_RULE)
@@ -219,4 +241,24 @@ def build_mcp_tools_block(tools) -> str:
             props = " Input keys: " + ", ".join(sorted(schema["properties"].keys()))
         desc = (t.description or "").strip().replace("\n", " ")
         lines.append(f"- {t.name} — {desc}{props}")
+    return "\n".join(lines)
+
+
+def directives_context(db, user_id: int) -> str:
+    """Render standing "lessons learned" directives for a user.
+
+    Loads the user's active AgentDirective rows and formats them as the
+    '=== Active Directives ===' system-prompt section. Returns "" when there
+    are none, so prompt injection is a no-op for users with no directives.
+
+    Imported lazily by callers to keep the prompt module free of DB imports.
+    """
+    from app.tools.directive_tool import list_active_directives
+
+    directives = list_active_directives(db, user_id)
+    if not directives:
+        return ""
+
+    lines = ["=== Active Directives ===", "Follow these standing lessons in every reply:"]
+    lines.extend(f"- {d}" for d in directives)
     return "\n".join(lines)

@@ -342,6 +342,19 @@ def _build_system_prompt(state: WorkflowState) -> str:
     if memory_context:
         system_parts.append(memory_context)
 
+    # F6 Cap 3: inject standing "lessons learned" directives (if any)
+    if state.get("db") is not None:
+        try:
+            from app.services.system_prompts import directives_context
+
+            directive_block = directives_context(
+                state["db"], state.get("user_id", 1)
+            )
+            if directive_block:
+                system_parts.append(directive_block)
+        except Exception as exc:
+            logger.warning("Directive prompt injection failed (non-fatal): %s", exc)
+
     # RAG context
     retrieved_context = state.get("retrieved_context", "")
     if retrieved_context:
@@ -483,6 +496,17 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
                 logger.info(
                     "save_memory tool saved %d memory(ies) for user %s",
                     saved_count, state.get("user_id", 1),
+                )
+            response = cleaned
+            # save_directive tool (F6 Cap 3): persist [SAVE_DIRECTIVE: ...] markers
+            from app.tools.directive_tool import process_directive_markers
+            cleaned, saved_directives = process_directive_markers(
+                response, db, state.get("user_id", 1)
+            )
+            if saved_directives:
+                logger.info(
+                    "save_directive tool saved %d directive(s) for user %s",
+                    saved_directives, state.get("user_id", 1),
                 )
             response = cleaned
         state["response"] = response
@@ -784,7 +808,84 @@ def self_evaluate(state: WorkflowState) -> WorkflowState:
     )
     state["confidence"] = result.get("confidence")
     state["confidence_reason"] = result.get("reason")
+
+    # F6 Cap 3: self-improving agent — when confidence is low, ask the LLM to
+    # reflect on what would have made the answer better. Migrate any
+    # [SAVE_DIRECTIVE: ...] it emits into the state so the save_output node can
+    # persist it (and strip it) without it ever reaching the user.
+    confidence = result.get("confidence")
+    if (
+        isinstance(confidence, int)
+        and confidence < _SELF_IMPROVE_CONFIDENCE_THRESHOLD
+    ):
+        reflection = _request_directive_reflection(
+            state=state,
+            provider_config=provider_config,
+        )
+        if reflection:
+            db: DBSession = state.get("db")
+            if db is not None:
+                from app.tools.directive_tool import process_directive_markers
+                _, saved_directives = process_directive_markers(
+                    reflection, db, state.get("user_id", 1)
+                )
+                if saved_directives:
+                    logger.info(
+                        "self_evaluate learned %d directive(s) from low-confidence answer",
+                        saved_directives,
+                    )
+                # Strip any marker text that was persisted before storing the note.
+                from app.tools.directive_tool import SAVE_DIRECTIVE_PATTERN
+                reflection = SAVE_DIRECTIVE_PATTERN.sub("", reflection).strip()
+            state["reflection_note"] = reflection
+        else:
+            state.setdefault("reflection_note", "")
+
     return state
+
+
+# F6 Cap 3: low-confidence answers (below this score) trigger self-improvement.
+_SELF_IMPROVE_CONFIDENCE_THRESHOLD = 60
+
+_REFLECTION_PROMPT = (
+    "The answer above received a low confidence score. Reflect briefly on "
+    "what went wrong and what durable lesson would prevent repeating it. "
+    "If there is a general, reusable rule worth remembering, emit EXACTLY "
+    "one [SAVE_DIRECTIVE: <the lesson>] marker in your reflection. "
+    "Otherwise respond with 'nothing'."
+)
+
+
+def _request_directive_reflection(state: WorkflowState, provider_config) -> str:
+    """Ask the LLM why a low-confidence answer happened and return its reflection.
+
+    Best-effort and never raises. Returns "" when the LLM has nothing
+    to offer (or on any failure) so self-improvement can never break chat.
+    """
+    try:
+        raw = generate_response(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Assistant answer: {state.get('response', '')}\n\n"
+                        "Was this answer's low confidence justified, and what "
+                        "lesson should the agent remember for next time?"
+                    ),
+                }
+            ],
+            system_prompt=_REFLECTION_PROMPT,
+            model_name=state.get("model_name"),
+            provider_config=provider_config,
+        )
+        if not raw or not raw.strip():
+            return ""
+        if raw.strip().lower() in ("nothing", "none", "n/a"):
+            return ""
+        return raw.strip()
+    except Exception as exc:  # noqa: BLE001 — reflection must never break chat
+        logger.warning("Directive reflection failed (non-fatal): %s", exc)
+        return ""
 
 
 # ── Node: save_output ──────────────────────────────────────

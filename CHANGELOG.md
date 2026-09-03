@@ -32,6 +32,28 @@ All notable changes to the Personal AI Research Assistant.
   hidden when the score is null.
 - New tests: `tests/test_evaluation.py` (10 passing).
 
+#### Capability 3: Self-improving agent (persistent failure memory + dynamic directives)
+- New `AgentDirective` table (`backend/app/models/models.py`) storing durable
+  "lessons learned" per user, with a guarded startup migration in
+  `backend/app/main.py` (created only if the table is missing).
+- New `save_directive` tool (`backend/app/tools/directive_tool.py`) using the
+  existing marker protocol: the LLM emits `[SAVE_DIRECTIVE: <lesson>]`, the
+  pipeline persists an active `AgentDirective` row and strips the marker from
+  the user-visible response (mirrors `[SAVE_MEMORY: ...]`). Directives shorter
+  than 8 chars are skipped as trivial.
+- Active directives are injected into every future system prompt under an
+  `=== Active Directives ===` section (`backend/app/services/system_prompts.py`
+  `directives_context`), so the agent follows them from then on. Injection is
+  wired into both the streaming chat path (`streaming_service.py`) and the
+  LangGraph path (`langgraph_workflow.py` `_build_system_prompt`), and always
+  degrades to a no-op on failure.
+- Emit instruction added to the base system prompt (`DIRECTIVES_TOOL_CONTEXT`).
+- Self-reflection hook: the `self_evaluate` LangGraph node now triggers a
+  best-effort reflection LLM call when confidence is below 60, and persists any
+  `[SAVE_DIRECTIVE: ...]` it produces (advisory, never blocks or alters the answer).
+- Fully defended so the chat is never broken: directive lookup/persistence/
+  reflection all swallow errors and return clean fallbacks.
+
 #### Capability 1: Plan-then-execute (review-only preview)
 - Added plan generation (`backend/app/services/planning_service.py`) that proposes
   a step-by-step plan before an answer, surfaced to the user as a review-only
