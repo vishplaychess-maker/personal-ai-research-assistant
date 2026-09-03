@@ -25,6 +25,10 @@ const BRANDS: Record<string, { mark: string; ring: string }> = {
   nvidia: { mark: "NV", ring: "from-green-500/30 to-green-500/10 text-green-300 border-green-500/30" },
   huggingface: { mark: "HF", ring: "from-amber-500/30 to-amber-500/10 text-amber-300 border-amber-500/30" },
   modelslab: { mark: "ML", ring: "from-purple-500/30 to-purple-500/10 text-purple-300 border-purple-500/30" },
+  groq: { mark: "G", ring: "from-orange-500/30 to-lime-500/10 text-orange-300 border-orange-500/30" },
+  together: { mark: "T", ring: "from-teal-500/30 to-teal-500/10 text-teal-300 border-teal-500/30" },
+  mistral: { mark: "M", ring: "from-red-500/30 to-red-500/10 text-red-300 border-red-500/30" },
+  cohere: { mark: "C", ring: "from-zinc-300/30 to-zinc-300/10 text-zinc-200 border-zinc-300/30" },
   ollama: { mark: "O", ring: "from-zinc-400/30 to-zinc-400/10 text-zinc-300 border-zinc-400/30" },
   local: { mark: "L", ring: "from-cyan-500/30 to-cyan-500/10 text-cyan-300 border-cyan-500/30" },
 };
@@ -35,6 +39,10 @@ const LABELS: Record<string, string> = {
   nvidia: "NVIDIA",
   huggingface: "Hugging Face",
   modelslab: "ModelsLab",
+  groq: "Groq",
+  together: "Together AI",
+  mistral: "Mistral",
+  cohere: "Cohere",
   ollama: "Ollama",
   local: "Local",
 };

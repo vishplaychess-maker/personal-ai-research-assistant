@@ -65,6 +65,7 @@ class Settings(BaseSettings):
 
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
+    #           "groq" | "together" | "mistral" | "cohere"
     llm_provider: str = "ollama"
     default_model: str = "dolphin-mistral"
     ollama_tags_timeout: int = 5
@@ -103,6 +104,34 @@ class Settings(BaseSettings):
     modelslab_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     modelslab_max_tokens: int = 2048
     modelslab_temperature: float = 0.7
+
+    # Groq (OpenAI-compatible API)
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_max_tokens: int = 2048
+    groq_temperature: float = 0.7
+
+    # Together AI (OpenAI-compatible API)
+    together_api_key: str = ""
+    together_base_url: str = "https://api.together.xyz/v1"
+    together_model: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+    together_max_tokens: int = 2048
+    together_temperature: float = 0.7
+
+    # Mistral (OpenAI-compatible API)
+    mistral_api_key: str = ""
+    mistral_base_url: str = "https://api.mistral.ai/v1"
+    mistral_model: str = "mistral-small-latest"
+    mistral_max_tokens: int = 2048
+    mistral_temperature: float = 0.7
+
+    # Cohere (OpenAI-compatible API)
+    cohere_api_key: str = ""
+    cohere_base_url: str = "https://api.cohere.ai/v1"
+    cohere_model: str = "command-r-plus"
+    cohere_max_tokens: int = 2048
+    cohere_temperature: float = 0.7
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -31,7 +31,10 @@ from app.services.settings_service import (
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
-KNOWN_PROVIDERS = {"ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab"}
+KNOWN_PROVIDERS = {
+    "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
+    "groq", "together", "mistral", "cohere",
+}
 
 PROVIDER_LABELS = {
     "ollama": "Ollama",
@@ -40,6 +43,10 @@ PROVIDER_LABELS = {
     "huggingface": "Hugging Face",
     "google": "Google AI",
     "modelslab": "ModelsLab",
+    "groq": "Groq",
+    "together": "Together AI",
+    "mistral": "Mistral",
+    "cohere": "Cohere",
 }
 
 PREFIXES = {
@@ -47,6 +54,10 @@ PREFIXES = {
     "nvidia": "nvapi-",
     "huggingface": "hf_",
     "google": "AIza",
+    "groq": "gsk_",
+    "together": "tgp-",
+    "mistral": "",
+    "cohere": "",
 }
 
 

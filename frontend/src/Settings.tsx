@@ -29,6 +29,10 @@ const PROVIDER_OPTIONS = [
   { value: "huggingface", label: "Hugging Face" },
   { value: "google", label: "Google AI" },
   { value: "modelslab", label: "ModelsLab" },
+  { value: "groq", label: "Groq" },
+  { value: "together", label: "Together AI" },
+  { value: "mistral", label: "Mistral" },
+  { value: "cohere", label: "Cohere" },
   { value: "ollama", label: "Ollama" },
 ];
 

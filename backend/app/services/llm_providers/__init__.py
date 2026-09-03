@@ -56,6 +56,18 @@ def _build_provider(
     elif provider_name == "modelslab":
         from app.services.llm_providers.modelslab_provider import ModelsLabProvider
         return ModelsLabProvider(api_key=api_key, model=model)
+    elif provider_name == "groq":
+        from app.services.llm_providers.groq_provider import GroqProvider
+        return GroqProvider(api_key=api_key, model=model)
+    elif provider_name == "together":
+        from app.services.llm_providers.together_provider import TogetherProvider
+        return TogetherProvider(api_key=api_key, model=model)
+    elif provider_name == "mistral":
+        from app.services.llm_providers.mistral_provider import MistralProvider
+        return MistralProvider(api_key=api_key, model=model)
+    elif provider_name == "cohere":
+        from app.services.llm_providers.cohere_provider import CohereProvider
+        return CohereProvider(api_key=api_key, model=model)
     else:
         logger.warning(
             "Unknown LLM provider '%s', falling back to Ollama", provider_name
@@ -97,6 +109,10 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "huggingface": "hugging face",
             "google": "google ai",
             "modelslab": "modelslab",
+            "groq": "groq",
+            "together": "together ai",
+            "mistral": "mistral",
+            "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:
             _provider_instance = None
