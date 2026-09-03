@@ -6,6 +6,8 @@ Nodes:
   retrieve_memories       — Load relevant user memories if memory is enabled.
   retrieve_context        — If session has documents, retrieve relevant chunks via RAG.
   browse_web              — Agentic: detect URLs -> invoke web_scraper tool -> inject content.
+  deep_research           — Deep Research Mode: autonomous Tavily search + scrape when the
+                            user supplied no URL (bounded, never loops).
   generate_answer         — Call LLM; detect proposed commands; interrupt for approval if needed.
   ask_terminal_approval   — interrupt() — pause graph, return approval request to user.
   execute_terminal        — Run the approved command and store output.
@@ -15,8 +17,9 @@ Nodes:
   extract_memory          — After generating answer, extract any durable memory.
 
 Graph (normal path):
-  load_context -> retrieve_memories -> retrieve_context -> browse_web
-    -> generate_answer -> save_output -> extract_memory -> END
+  load_context -> generate_plan -> retrieve_memories -> retrieve_context
+    -> browse_web -> deep_research -> generate_answer
+    -> save_output -> extract_memory -> END
 
 Graph (terminal approval path):
   load_context -> retrieve_memories -> retrieve_context -> browse_web
@@ -52,6 +55,7 @@ from app.services.memory_service import (
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
 from app.services import tool_registry
 from app.tools.web_scraper import extract_urls, web_scraper
+from app.tools.web_search import run_deep_research
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code
 from app.tools.mcp_tool import (
@@ -108,6 +112,9 @@ class WorkflowState(TypedDict):
     memories_used: bool
     extraction_result: Optional[Dict[str, Any]]
     web_context: str
+    # ── Deep Research (F6, web search via Tavily) ───────────
+    deep_research_context: str     # Injected search+scrape context block
+    deep_research_used: bool       # True when autonomous web research ran
     # ── Terminal tool state ────────────────────────────────
     pending_command: Optional[str]       # Command proposed by LLM, awaiting approval
     command_approved: Optional[bool]     # True=user approved, False=denied, None=no command
@@ -320,6 +327,59 @@ def browse_web(state: WorkflowState) -> WorkflowState:
     return state
 
 
+# ── Node: deep_research (autonomous web search) ────────────
+# F6 Deep Research Mode: when the user hasn't supplied a URL to read, search
+# the live web with Tavily and scrape the top results so the LLM can
+# synthesize a fresh, cited report. Bounded (never loops): only runs when a
+# TAVILY_API_KEY is configured AND deep research is enabled AND no explicit
+# URLs were already scraped, and it performs a single, capped search+scrape
+# pass.
+
+
+def deep_research(state: WorkflowState) -> WorkflowState:
+    """Autonomously search the web and gather sources for the answer."""
+    if state.get("error"):
+        state["deep_research_context"] = state.get("deep_research_context", "")
+        state["deep_research_used"] = state.get("deep_research_used", False)
+        return state
+
+    # Only run when deep research is enabled, Tavily is configured, and the
+    # user did not already hand us URLs to read (explicit URLs are handled by
+    # the browse_web node and would duplicate scraping).
+    if not settings.enable_deep_research or not settings.tavily_api_key:
+        state["deep_research_context"] = ""
+        state["deep_research_used"] = False
+        return state
+
+    if state.get("web_context"):
+        # Explicit user-provided URL(s) were already scraped — skip autonomous
+        # search to avoid redundant work and re-scraping the same pages.
+        state["deep_research_context"] = ""
+        state["deep_research_used"] = False
+        return state
+
+    user_input = state.get("user_input", "")
+    if not user_input:
+        state["deep_research_context"] = ""
+        state["deep_research_used"] = False
+        return state
+
+    try:
+        context = run_deep_research(user_input)
+    except Exception as exc:  # noqa: BLE001 — research must never break chat
+        logger.warning("Deep research failed (non-fatal): %s", exc)
+        context = ""
+
+    state["deep_research_context"] = context
+    state["deep_research_used"] = bool(context)
+    if context:
+        logger.info(
+            "Deep research gathered context for user %s (query=%.60s)",
+            state.get("user_id", 1), user_input,
+        )
+    return state
+
+
 # ── Helper: build system prompt ────────────────────────────
 
 
@@ -366,6 +426,11 @@ def _build_system_prompt(state: WorkflowState) -> str:
     web_context = state.get("web_context", "")
     if web_context:
         system_parts.append(web_context)
+
+    # Deep research context (autonomous Tavily search + scrape)
+    deep_context = state.get("deep_research_context", "")
+    if deep_context:
+        system_parts.append(deep_context)
 
     # MCP tools catalog (never break generation on failure)
     if settings.enable_mcp_tool and state.get("db") is not None:
@@ -1011,6 +1076,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("retrieve_memories", retrieve_memories)
     workflow.add_node("retrieve_context", retrieve_context)
     workflow.add_node("browse_web", browse_web)
+    workflow.add_node("deep_research", deep_research)
     workflow.add_node("generate_answer", generate_answer)
     workflow.add_node("ask_terminal_approval", ask_terminal_approval)
     workflow.add_node("execute_terminal", execute_terminal)
@@ -1026,7 +1092,8 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("generate_plan", "retrieve_memories")
     workflow.add_edge("retrieve_memories", "retrieve_context")
     workflow.add_edge("retrieve_context", "browse_web")
-    workflow.add_edge("browse_web", "generate_answer")
+    workflow.add_edge("browse_web", "deep_research")
+    workflow.add_edge("deep_research", "generate_answer")
 
     # After generate: either terminal approval, error, or save
     workflow.add_conditional_edges(
@@ -1141,6 +1208,8 @@ def run_research_workflow(
         "memories_used": False,
         "extraction_result": None,
         "web_context": "",
+        "deep_research_context": "",
+        "deep_research_used": False,
         "pending_command": pending_command_from_db,
         "command_approved": None,
         "command_result": "",

@@ -4,6 +4,24 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Deep Research Mode (Tavily web search)
+- Added `web_search` tool and `run_deep_research` helper (`backend/app/tools/web_search.py`)
+  that use the Tavily API for real-time web search. The agent autonomously searches,
+  scrapes the top results, and synthesizes a cited report — no URL required.
+- New LangGraph `deep_research` node sits between `browse_web` and `generate_answer`:
+  when the user hasn't pasted a URL and deep research is enabled+configured, the node
+  searches the web, scrapes the top results via the existing `web_scraper`, and injects
+  the context into the system prompt. Bounded by `DEEP_RESEARCH_MAX_SCRAPE` (default 3).
+- Added `WEB_SEARCH_TOOL_CONTEXT` to the system prompt (`system_prompts.py`) with full
+  Search -> Scrape -> Synthesize -> Cite instructions.
+- Added `deep_research_context` / `deep_research_used` keys to `WorkflowState`
+  (`langgraph_workflow.py`) and the `prepare_chat_context` path (`streaming_service.py`).
+- Graceful degradation: when `TAVILY_API_KEY` is unset (or Tavily fails), deep research
+  silently no-ops and the agent answers from its existing knowledge.
+- Config: `TAVILY_API_KEY`, `ENABLE_DEEP_RESEARCH=true`, `DEEP_RESEARCH_MAX_RESULTS=5`,
+  `DEEP_RESEARCH_MAX_SCRAPE=3` (`.env.example`, `docker-compose.yml`, `config.py`).
+- Dependency: `tavily-python==0.5.1` added to `backend/requirements.txt`.
+
 ### Quick Provider Switcher (chat header)
 - Added a premium dropdown in the chat header (`frontend/src/ProviderSwitcher.tsx`) that
   shows the currently active LLM provider (branded mark + name) and lists every

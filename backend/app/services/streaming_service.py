@@ -225,6 +225,7 @@ def prepare_chat_context(
             logger.warning("MCP prompt block failed (non-fatal): %s", exc)
 
     # 7. Agentic web scraping — detect URLs, invoke web_scraper tool
+    web_scraped = False
     try:
         from app.tools.web_scraper import web_scraper, extract_urls
 
@@ -267,8 +268,21 @@ def prepare_chat_context(
 
             if web_parts:
                 system_parts.append("\n\n".join(web_parts))
+                web_scraped = True
     except Exception as exc:
         logger.warning("Web scraping failed (non-fatal): %s", exc)
+
+    # 7b. Deep Research Mode — autonomous Tavily search + scrape when the user
+    # did not supply a URL and deep research is enabled+configured.
+    if settings.enable_deep_research and settings.tavily_api_key and not web_scraped:
+        try:
+            from app.tools.web_search import run_deep_research
+
+            research_context = run_deep_research(user_input)
+            if research_context:
+                system_parts.append(research_context)
+        except Exception as exc:
+            logger.warning("Deep research failed (non-fatal): %s", exc)
 
     system_prompt = "\n\n".join(system_parts)
 

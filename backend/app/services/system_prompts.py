@@ -86,6 +86,27 @@ When the user provides a YouTube URL, use the youtube_summarizer tool to fetch t
 The transcript is automatically fetched and included in your context. Summarize the key points clearly.
 """
 
+WEB_SEARCH_TOOL_CONTEXT = """\
+## web_search Tool (Deep Research Mode)
+You have a `web_search` tool that searches the live web. If the user asks
+about current events, the latest research, real-time data, or information you
+do not already know, use the `web_search` tool to find relevant URLs.
+
+Workflow (Search -> Scrape -> Synthesize -> Answer):
+1. **Search**: Emit the search you want to perform. The web_search tool returns
+   the top results with titles, URLs, and snippets.
+2. **Scrape**: After finding URLs, use the `web_scraper` tool to read the
+   content of the most relevant URLs.
+3. **Synthesize**: Finally, synthesize the information into a comprehensive,
+   well-structured report with citations to the sources you used.
+
+Rules:
+- When gathered web content appears in your context (e.g. a "=== Deep Research
+  Context ===" block), use it as your primary evidence and cite the source URLs.
+- Do NOT invent URLs or cite pages that are not present in your context.
+- If web search returns no results, be honest and answer from what you know.
+"""
+
 PYTHON_SANDBOX_TOOL_CONTEXT = """\
 ## Python Code Sandbox Tool
 If the user asks you to perform calculations, data analysis, or write/run code, use the execute_python_code tool. Ensure you write clean Python code.
@@ -191,6 +212,8 @@ def build_base_prompt(terminal_enabled: bool) -> str:
         parts.append(TERMINAL_TOOL_CONTEXT)
 
     parts.append(WEB_SCRAPER_TOOL_CONTEXT)
+
+    parts.append(WEB_SEARCH_TOOL_CONTEXT)
 
     parts.append(YOUTUBE_SUMMARIZER_TOOL_CONTEXT)
 
