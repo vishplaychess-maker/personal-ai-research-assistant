@@ -4,6 +4,29 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Agent Skills (Claude-style SKILL.md, progressive disclosure)
+- New `backend/app/skills/` package implementing Claude-style Agent Skills.
+  Skills are folders containing a `SKILL.md` with YAML frontmatter (`name`,
+  `description`, optional `pinned`) plus markdown instructions.
+- `parser.py`: `Skill` dataclass + `parse_skill_md()` — parses frontmatter and
+  body, validates skill names (`^[a-z0-9]+(-[a-z0-9]+)*$`), caps description
+  at 250 chars. Defensive: returns `None` on unreadable/unparseable files.
+- `loader.py`: **progressive disclosure** in two layers —
+  - **L1 (cheap):** `skills_catalog()` scans the skills dir and renders ONLY
+    each skill's `name` + `description` into a compact prompt block, keeping
+    the system prompt small for limited-context models.
+  - **L2 (on demand):** `load_skill_body(name)` returns a single skill's full
+    `SKILL.md` body. The model requests it by emitting `[USE_SKILL: <name>]`
+    (regex `USE_SKILL_PATTERN`, extracted by `extract_skill_calls`).
+- Wired in: L1 catalog + `SKILLS_TOOL_CONTEXT` injected into `build_base_prompt`
+  (`system_prompts.py`); L2 loads any skill requested in the user message
+  upfront in both `streaming_service.prepare_chat_context` and
+  `langgraph_workflow._build_system_prompt`. All defensive — never breaks chat.
+- Config: optional `SKILLS_DIR` (`skills_dir` setting); defaults to
+  `<package>/skills`.
+- Sample skill `backend/app/skills/web-research/SKILL.md` demonstrates the
+  format (name, description, step instructions, rules).
+
 ### Deep Research Mode (DuckDuckGo web search — free, no API key)
 - Added `web_search` tool and `run_deep_research` helper (`backend/app/tools/web_search.py`)
   that use DuckDuckGo for real-time web search. 100% free, no API key required. The agent

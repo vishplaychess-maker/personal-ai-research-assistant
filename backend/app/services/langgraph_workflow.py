@@ -442,6 +442,18 @@ def _build_system_prompt(state: WorkflowState) -> str:
         except Exception as exc:
             logger.warning("MCP prompt block failed (non-fatal): %s", exc)
 
+    # L2 skills: load full skill body upfront when the user requests a skill
+    # via [USE_SKILL: <name>]. Deterministic — no regeneration loop.
+    try:
+        from app.skills.loader import extract_skill_calls, load_skill_body
+
+        for skill_name in extract_skill_calls(state.get("user_input", "")):
+            body_block = load_skill_body(skill_name)
+            if body_block:
+                system_parts.append(body_block)
+    except Exception as exc:
+        logger.warning("Skill (L2) injection failed (non-fatal): %s", exc)
+
     # Command output context (after execution)
     command_result = state.get("command_result", "")
     if command_result:

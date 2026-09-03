@@ -224,6 +224,20 @@ def prepare_chat_context(
         except Exception as exc:
             logger.warning("MCP prompt block failed (non-fatal): %s", exc)
 
+    # L2 skills: if the user explicitly requests a skill via [USE_SKILL: <name>],
+    # load its full body into the prompt so the model follows it this turn.
+    # Deterministic, no regeneration loop — the marker comes from the user
+    # message (or an earlier decision) and the body is loaded upfront.
+    try:
+        from app.skills.loader import extract_skill_calls, load_skill_body
+
+        for skill_name in extract_skill_calls(user_input):
+            body_block = load_skill_body(skill_name)
+            if body_block:
+                system_parts.append(body_block)
+    except Exception as exc:
+        logger.warning("Skill (L2) injection failed (non-fatal): %s", exc)
+
     # 7. Agentic web scraping — detect URLs, invoke web_scraper tool
     web_scraped = False
     try:

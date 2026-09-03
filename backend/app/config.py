@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # search -> scrape -> synthesize loop so it can never run away).
     deep_research_max_scrape: int = 3
 
+    # ── Agent skills (Claude-style SKILL.md, progressive disclosure) ──
+    # Directory containing one folder per skill, each with a SKILL.md file.
+    # Only name+description are injected (L1); full bodies load on demand via
+    # [USE_SKILL: <name>] (L2). Defaults to <package>/skills.
+    skills_dir: str = ""
+
     # ── Model / LLM provider settings ───────────────────
     # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
     #           "groq" | "together" | "mistral" | "cohere"

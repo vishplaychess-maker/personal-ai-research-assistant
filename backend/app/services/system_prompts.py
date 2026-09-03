@@ -5,6 +5,10 @@ Centralises the expert advisor persona and core behaviour rules so
 both the LangGraph workflow and the streaming service stay in sync.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # ── Core advisor behaviour rules ───────────────────────────
 # These rules are injected into every system prompt regardless of
 # which tools are enabled.  They define the agent's personality
@@ -228,6 +232,18 @@ def build_base_prompt(terminal_enabled: bool) -> str:
     parts.append(SELF_REFLECTION_PROMPT)
 
     parts.append(RAG_CITATION_RULE)
+
+    # L1 skills catalog: only the name+description of each skill (progressive
+    # disclosure). Full bodies load on demand via [USE_SKILL: <name>] (L2).
+    try:
+        from app.skills.loader import SKILLS_TOOL_CONTEXT, skills_catalog
+
+        catalog = skills_catalog()
+        if catalog:
+            parts.append(SKILLS_TOOL_CONTEXT)
+            parts.append(catalog)
+    except Exception as exc:
+        logger.warning("Skills catalog injection failed (non-fatal): %s", exc)
 
     parts.append(
         "Answer clearly, concisely, and with structure. "
