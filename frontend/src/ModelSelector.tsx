@@ -18,6 +18,7 @@ interface ModelSelectorProps {
   sessionId: number;
   currentModel: string | null;
   onModelChange: (model: string | null) => void;
+  refreshKey?: number;
 }
 
 // ── Helpers ───────────────────────────────────────────────
@@ -273,6 +274,7 @@ export function ModelSelector({
   sessionId,
   currentModel,
   onModelChange,
+  refreshKey,
 }: ModelSelectorProps) {
   const [groups, setGroups] = useState<ProviderModelGroup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -305,6 +307,12 @@ export function ModelSelector({
   useEffect(() => {
     fetchModels();
   }, [fetchModels]);
+
+  // Refetch when the quick provider switcher activates a new provider.
+  useEffect(() => {
+    if (refreshKey === undefined) return;
+    fetchModels();
+  }, [refreshKey, fetchModels]);
 
   // Close on outside click
   useEffect(() => {

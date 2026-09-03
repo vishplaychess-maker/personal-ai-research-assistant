@@ -32,6 +32,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PlanCard } from "./PlanCard";
 import { ConfidenceBadge } from "./ConfidenceBadge";
 import { ModelSelector } from "./ModelSelector";
+import { ProviderSwitcher } from "./ProviderSwitcher";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
@@ -202,6 +203,7 @@ export function ChatArea({
   const [attachedImage, setAttachedImage] = useState<string | null>(null);  // Base64 image data URL
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
+  const [providerRefreshKey, setProviderRefreshKey] = useState(0);
 
   const indicators = useMemo(() => ({
     hasSources: sourcesUsedIds.size > 0,
@@ -356,12 +358,18 @@ export function ChatArea({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Quick Provider Switcher */}
+          <ProviderSwitcher
+            onProviderSwitch={() => setProviderRefreshKey((k) => k + 1)}
+          />
+
           {/* Model Selector */}
           <ModelSelector
             key={activeSession.id}
             sessionId={activeSession.id}
             currentModel={sessionModel}
             onModelChange={onModelChange}
+            refreshKey={providerRefreshKey}
           />
 
           {/* System Prompt */}

@@ -4,6 +4,17 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Quick Provider Switcher (chat header)
+- Added a premium dropdown in the chat header (`frontend/src/ProviderSwitcher.tsx`) that
+  shows the currently active LLM provider (branded mark + name) and lists every
+  configured provider with a green dot/checkmark on the active one.
+- Switching is one click: calls `PUT /api/providers/{id}` with `{ is_active: true }`
+  (which deactivates all other providers for the user server-side), updates the
+  trigger instantly, and bumps a `refreshKey` that tells the `ModelSelector` to
+  reload the model list for the newly activated provider.
+- Includes an empty state ("Go to Settings to add a provider") and graceful
+  loading/error states; degrades cleanly when no providers are configured.
+
 ### F6 — Thoughtful Agent UX
 
 #### Capability 2: Self-evaluation / confidence score (advisory)
