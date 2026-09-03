@@ -55,6 +55,11 @@ def _migrate_database():
             conn.execute(sa_text("ALTER TABLE messages ADD COLUMN citations TEXT"))
         if "image_url" not in existing_msg_cols:
             conn.execute(sa_text("ALTER TABLE messages ADD COLUMN image_url TEXT"))
+        # F6 Cap 2: self-evaluation confidence score on assistant messages
+        if "confidence" not in existing_msg_cols:
+            conn.execute(sa_text("ALTER TABLE messages ADD COLUMN confidence INTEGER"))
+        if "confidence_reason" not in existing_msg_cols:
+            conn.execute(sa_text("ALTER TABLE messages ADD COLUMN confidence_reason TEXT"))
 
         # Migrate memories table columns
         existing_mem_cols = {c["name"] for c in inspector.get_columns("memories")}

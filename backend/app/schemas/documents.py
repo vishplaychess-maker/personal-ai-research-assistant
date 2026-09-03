@@ -62,6 +62,8 @@ class MessageResponse(BaseModel):
     content: str
     image_url: Optional[str] = None  # Base64-encoded image data URL for multimodal messages
     citations: Optional[str] = None  # JSON-serialized citation list
+    confidence: Optional[int] = None  # F6 Cap 2: 0-100 advisory score
+    confidence_reason: Optional[str] = None  # F6 Cap 2: one-line why
     created_at: datetime
 
     model_config = {"from_attributes": True}

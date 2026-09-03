@@ -404,6 +404,22 @@ async def stream_chat_response(
                     cache_service.set(
                         context.session_id, cache_question, full_response_text
                     )
+                # F6 Cap 2: advisory self-evaluation (never raises, null on error)
+                confidence = None
+                confidence_reason = None
+                try:
+                    from app.services.evaluation_service import evaluate_response
+                    _eval = evaluate_response(
+                        response=full_response_text,
+                        query=context.user_input or "",
+                        messages=[m for m in context.history if isinstance(m.get("content"), str)],
+                        provider_config=context.provider_config,
+                        model_name=context.model_name,
+                    )
+                    confidence = _eval.get("confidence")
+                    confidence_reason = _eval.get("reason")
+                except Exception:
+                    logger.warning("F6 self-evaluation skipped (non-fatal)", exc_info=True)
                 # Yield complete event with metadata
                 yield format_sse("complete", {
                     "message_id": None,  # Will be filled after DB save
@@ -411,6 +427,8 @@ async def stream_chat_response(
                     "sources_used": context.sources_used,
                     "memories_used": context.memories_used,
                     "content": full_response_text,
+                    "confidence": confidence,
+                    "confidence_reason": confidence_reason,
                 })
                 return
 
@@ -439,6 +457,8 @@ def save_assistant_message(
     content: str,
     citations: List[Dict[str, Any]],
     db: DBSession,
+    confidence: Optional[int] = None,
+    confidence_reason: Optional[str] = None,
 ) -> Message:
     """
     Persist the completed assistant message to the database.
@@ -448,6 +468,8 @@ def save_assistant_message(
         content: The full assistant response text.
         citations: List of citation dicts to serialize.
         db: Database session.
+        confidence: Optional F6 Cap 2 self-evaluation score (0-100).
+        confidence_reason: Optional one-line why for the score.
 
     Returns:
         The saved Message object.
@@ -458,6 +480,8 @@ def save_assistant_message(
         role=MessageRole.assistant,
         content=content,
         citations=citations_json,
+        confidence=confidence,
+        confidence_reason=confidence_reason,
     )
     db.add(assistant_msg)
     db.commit()

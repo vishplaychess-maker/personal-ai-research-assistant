@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PlanCard } from "./PlanCard";
+import { ConfidenceBadge } from "./ConfidenceBadge";
 import { ModelSelector } from "./ModelSelector";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
@@ -622,6 +623,12 @@ export function ChatArea({
                           <Brain className="h-3 w-3" />
                           Memory
                         </span>
+                      )}
+                      {msg.role === "assistant" && (
+                        <ConfidenceBadge
+                          confidence={msg.confidence}
+                          reason={msg.confidence_reason}
+                        />
                       )}
                       {msg.role === "assistant" && (
                         <button

@@ -29,6 +29,8 @@ export interface Message {
   content: string;
   image_url?: string | null;  // Base64-encoded image data URL for multimodal messages
   citations?: string | null;
+  confidence?: number | null;  // F6 Cap 2: 0-100 advisory score (None = n/a)
+  confidence_reason?: string | null;  // F6 Cap 2: one-line why
   created_at: string;
 }
 

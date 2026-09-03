@@ -374,10 +374,14 @@ async def stream_chat(
                 if sse_event.startswith("event: complete"):
                     # Parse the complete event data to get the content
                     lines = sse_event.strip().split("\n")
+                    confidence = None
+                    confidence_reason = None
                     for line in lines:
                         if line.startswith("data: "):
                             data = json.loads(line[6:])
                             full_response_content = data.get("content", "")
+                            confidence = data.get("confidence")
+                            confidence_reason = data.get("confidence_reason")
                             break
 
                     # save_memory tool: persist [SAVE_MEMORY: ...] markers the
@@ -400,6 +404,8 @@ async def stream_chat(
                             content=full_response_content,
                             citations=context.citations,
                             db=db,
+                            confidence=confidence,
+                            confidence_reason=confidence_reason,
                         )
                         save_message_id = assistant_msg.id
                     except Exception as exc:

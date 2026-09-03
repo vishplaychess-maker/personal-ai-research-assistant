@@ -119,6 +119,9 @@ class WorkflowState(TypedDict):
     # ── Plan-then-execute (F6 Capability 1, v1 preview-only) ──
     proposed_plan: List[Dict[str, Any]]   # Plan steps from generate_plan
     plan_pending: bool                    # True if a plan is shown to the user
+    # ── Self-evaluation (F6 Capability 2) ──────────────────
+    confidence: Optional[int]             # 0-100 advisory score (None = n/a)
+    confidence_reason: Optional[str]      # One-line why for the score
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
     db: Optional[Any]
@@ -746,6 +749,44 @@ def regenerate_answer(state: WorkflowState) -> WorkflowState:
     return state
 
 
+# ── Node: self_evaluate (F6 Capability 2) ─────────────────
+# Advisory only: computes a 0-100 confidence score for the just-generated
+# answer. Never blocks or changes the answer; failures yield a null score.
+
+
+def self_evaluate(state: WorkflowState) -> WorkflowState:
+    """Ask the LLM how confident it is in the generated answer."""
+    if state.get("error"):
+        state.setdefault("confidence", None)
+        state.setdefault("confidence_reason", None)
+        return state
+
+    response = state.get("response", "")
+    if not response:
+        state["confidence"] = None
+        state["confidence_reason"] = None
+        return state
+
+    from app.services.evaluation_service import evaluate_response
+
+    db: DBSession = state.get("db")
+    provider_config = get_user_llm_config(db, state.get("user_id", 1)) if db else None
+    if state.get("model_name") and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = state["model_name"]
+
+    result = evaluate_response(
+        response=response,
+        query=state.get("user_input", ""),
+        messages=state.get("messages", []),
+        provider_config=provider_config,
+        model_name=state.get("model_name"),
+    )
+    state["confidence"] = result.get("confidence")
+    state["confidence_reason"] = result.get("reason")
+    return state
+
+
 # ── Node: save_output ──────────────────────────────────────
 
 
@@ -773,6 +814,8 @@ def save_output(state: WorkflowState) -> WorkflowState:
         role=MessageRole.assistant,
         content=response,
         citations=citations_json,
+        confidence=state.get("confidence"),
+        confidence_reason=state.get("confidence_reason"),
     )
     db.add(assistant_msg)
     db.commit()
@@ -835,7 +878,7 @@ def _route_after_generate(state: WorkflowState) -> str:
         return "regenerate_code"
     if state.get("pending_command") and state.get("command_approved") is None:
         return "ask_approval"
-    return "save_output"
+    return "self_evaluate"
 
 
 def _route_after_approval(state: WorkflowState) -> str:
@@ -850,7 +893,7 @@ def _route_after_regenerate(state: WorkflowState) -> str:
     if state.get("regenerate") and state.get("mcp_retry_count", 0) > 0:
         # Still in retry loop - re-run LLM with error context
         return "retry_mcp"
-    return "save_output"
+    return "self_evaluate"
 
 
 # ── Build graph ────────────────────────────────────────────
@@ -872,6 +915,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("execute_terminal", execute_terminal)
     workflow.add_node("skip_terminal", skip_terminal)
     workflow.add_node("regenerate_answer", regenerate_answer)
+    workflow.add_node("self_evaluate", self_evaluate)
     workflow.add_node("save_output", save_output)
     workflow.add_node("extract_memory", extract_memory)
 
@@ -890,7 +934,7 @@ def build_workflow() -> StateGraph:
         {
             "ask_approval": "ask_terminal_approval",
             "regenerate_code": "regenerate_answer",
-            "save_output": "save_output",
+            "self_evaluate": "self_evaluate",
             "error_end": END,
         },
     )
@@ -913,9 +957,10 @@ def build_workflow() -> StateGraph:
         _route_after_regenerate,
         {
             "retry_mcp": "regenerate_answer",
-            "save_output": "save_output",
+            "self_evaluate": "self_evaluate",
         },
     )
+    workflow.add_edge("self_evaluate", "save_output")
     workflow.add_edge("save_output", "extract_memory")
     workflow.add_edge("extract_memory", END)
 
@@ -1004,6 +1049,8 @@ def run_research_workflow(
         "regenerate": False,
         "proposed_plan": [],
         "plan_pending": False,
+        "confidence": None,
+        "confidence_reason": None,
         "error": None,
         "db": db,
         "model_name": None,

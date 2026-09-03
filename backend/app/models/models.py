@@ -127,6 +127,8 @@ class Message(Base):
     content = Column(Text, nullable=False)
     image_url = Column(Text, nullable=True)  # Base64-encoded image data URL for multimodal messages
     citations = Column(Text, nullable=True)  # JSON-serialized list of citation dicts
+    confidence = Column(Integer, nullable=True)  # F6 Cap 2: 0-100 advisory score (None = n/a)
+    confidence_reason = Column(Text, nullable=True)  # F6 Cap 2: one-line why
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     session = relationship("ResearchSession", back_populates="messages")
