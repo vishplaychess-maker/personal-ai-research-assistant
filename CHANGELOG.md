@@ -39,6 +39,12 @@ All notable changes to the Personal AI Research Assistant.
   (on `done`) and `langgraph_workflow.generate_answer` (before saving to state).
 - Example skills (bundled): `commit-message`, `code-review`, `web-research` —
   now in `backend/skills/` (the consolidated bundled location).
+- Fix: skill marker regex now captures names containing spaces/dashes
+  (`<skill>commit - message</skill>`), and `sanitize_skill_name` normalises
+  them to the canonical key (spaces -> hyphens) before lookup.
+- Fix: new `SkillStreamFilter` strips skill markers from the live SSE token
+  stream so they never reach the UI, and the `done` handler always emits a
+  `complete` event so the frontend never hangs on "Generating...".
 
 ### Deep Research Mode (DuckDuckGo web search — free, no API key)
 - Added `web_search` tool and `run_deep_research` helper (`backend/app/tools/web_search.py`)

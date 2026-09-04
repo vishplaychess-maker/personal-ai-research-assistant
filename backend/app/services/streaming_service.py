@@ -398,6 +398,9 @@ async def stream_chat_response(
         # Stream tokens from the configured LLM provider
         provider = get_provider(config=context.provider_config)
         full_response = []
+        # Streaming filter: never lets skill markers leak to the UI mid-stream.
+        from app.skills.loader import SkillStreamFilter
+        skill_stream = SkillStreamFilter()
         async for chunk in provider.generate_stream_async(
             messages=context.history,
             system_prompt=context.system_prompt,
@@ -405,9 +408,15 @@ async def stream_chat_response(
         ):
             if chunk["type"] == "token":
                 full_response.append(chunk["token"])
-                yield format_sse("token", {"token": chunk["token"]})
+                visible = skill_stream.push(chunk["token"])
+                if visible:
+                    yield format_sse("token", {"token": visible})
 
             elif chunk["type"] == "done":
+                # Flush any held-back non-marker text so the UI never stalls.
+                held = skill_stream.flush()
+                if held:
+                    yield format_sse("token", {"token": held})
                 full_response_text = chunk.get("response", "")
                 # Execute any [PYTHON_CODE: ...] the LLM emitted (single-pass).
                 code = extract_python_code(full_response_text)

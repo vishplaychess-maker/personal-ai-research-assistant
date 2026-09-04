@@ -36,13 +36,15 @@ from app.skills.parser import Skill
 logger = logging.getLogger(__name__)
 
 # Marker the model emits to request a skill's full body (L2).
-SKILL_TAG_PATTERN = re.compile(r"<skill>\s*([a-z0-9-]+)\s*</skill>", re.IGNORECASE)
+# [^<]+ captures the name even when the model writes spaces/dashes, e.g.
+# <skill>commit - message</skill>. Sanitised before lookup.
+SKILL_TAG_PATTERN = re.compile(r"<skill>([^<]+)</skill>", re.IGNORECASE)
 
 # Back-compat alias: older [USE_SKILL: <name>] markers are still recognised.
-USE_SKILL_PATTERN = re.compile(r"\[USE_SKILL:\s*([a-z0-9-]+)\s*\]", re.IGNORECASE)
+USE_SKILL_PATTERN = re.compile(r"\[USE_SKILL:\s*([^\]]+)\]", re.IGNORECASE)
 
 # Plain-text free-model fallback marker: "USE SKILL: name" (line-orientated).
-PLAIN_SKILL_PATTERN = re.compile(r"(?im)^\s*USE\s+SKILL:\s*([a-z0-9-]+)")
+PLAIN_SKILL_PATTERN = re.compile(r"(?im)^\s*USE\s+SKILL:\s*([^\n]+)")
 
 # Canonical manager instance. Uses app settings so env-configured
 # ``EXTRA_PATHS`` are honoured on top of the bundled skills directory.
@@ -62,9 +64,10 @@ def skills_catalog() -> str:
 def load_skill_body(name: str) -> str:
     """L2 — return the full body of a single skill as a formatted block.
 
-    Returns "" when the skill is unknown so callers can no-op safely.
+    Returns "" when the skill is unknown so callers can no-op safely. The
+    name is sanitised (spaces -> hyphens) before lookup.
     """
-    skill = SKILL_MANAGER.get_skill_body(name)
+    skill = SKILL_MANAGER.get_skill_body(sanitize_skill_name(name))
     if skill is None:
         logger.info("Skill '%s' not found; L2 load skipped", name)
         return ""
@@ -76,20 +79,40 @@ def load_skill_body(name: str) -> str:
     )
 
 
+def sanitize_skill_name(name: str) -> str:
+    """Normalise a possibly messy skill name into a lookup-safe key.
+
+    The model may output e.g. ``commit - message`` (spaces/dashes) for the
+    skill ``commit-message``. We lowercase, trim, collapse internal whitespace,
+    and replace whitespace runs with a single hyphen so the SkillManager lookup
+    succeeds. Returns "" when nothing usable remains.
+    """
+    if not name:
+        return ""
+    s = name.strip().lower()
+    # Collapse whitespace (spaces/tabs/newlines) into a single hyphen.
+    s = re.sub(r"\s+", "-", s)
+    # Collapse repeated hyphens/dashes that the model adds for readability.
+    s = re.sub(r"-+", "-", s)
+    s = s.strip("-")
+    return s
+
+
 def extract_skill_calls(text: Optional[str]) -> List[str]:
     """Extract all skill markers from text.
 
     Recognises the canonical ``<skill>name</skill>`` tag plus the legacy
     ``[USE_SKILL: <name>]`` and plain ``USE SKILL: name`` forms (free-model
-    fallback). Returns a de-duplicated list of requested skill names in
-    first-seen order.
+    fallback). Names are sanitised (spaces -> hyphens) so e.g.
+    ``<skill>commit - message</skill>`` resolves to ``commit-message``.
+    Returns a de-duplicated list of requested skill names in first-seen order.
     """
     if not text:
         return []
     seen: List[str] = []
     for pattern in (SKILL_TAG_PATTERN, USE_SKILL_PATTERN, PLAIN_SKILL_PATTERN):
         for m in pattern.finditer(text):
-            name = m.group(1).strip().lower()
+            name = sanitize_skill_name(m.group(1))
             if name and name not in seen:
                 seen.append(name)
     return seen
@@ -119,6 +142,71 @@ def process_skill_markers(text: str) -> str:
     if not text:
         return text
     return _strip_skill_markers(text)
+
+
+# Marker opening sequences. Used by SkillStreamFilter to recognise when the
+# tail of a buffered stream could be the start of a marker that spans tokens.
+_MARKER_OPENS = ("<skill", "[use_skill", "use skill:")
+
+
+class SkillStreamFilter:
+    """Suppress skill markers from an incremental SSE token stream in real time.
+
+    Small/free models may emit ``<skill>name</skill>`` (or the legacy forms)
+    *inside* their streamed text. Without filtering, those markers could leak
+    to the UI. This filter buffers tokens and only releases text it is certain
+    is marker-free: any suffix that could be (or is inside) a marker is held
+    back until ``flush()`` on completion, where the remaining markers are
+    stripped. Real prose still streams live with minimal latency.
+    """
+
+    __slots__ = ("_buf",)
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def _hold_start(self, text: str) -> int:
+        """Index from which the suffix of ``text`` must be held (could be a
+        marker that spans tokens, or is inside an open marker)."""
+        low = text.lower()
+
+        # 1) An open <skill>...</skill> whose closing tag has not arrived yet:
+        #    hold everything from the opener.
+        last_open = low.rfind("<skill")
+        last_close = low.rfind("</skill>")
+        if last_open != -1 and (last_close == -1 or last_close < last_open):
+            return last_open
+
+        # 2) An open [USE_SKILL: ... without a closing ] yet: hold from '['.
+        idx_open = low.rfind("[use_skill")
+        if idx_open != -1 and low.rfind("]") < idx_open:
+            return idx_open
+
+        # 3) The tail could be a prefix of a marker opening sequence.
+        for i in range(len(text) - 1, -1, -1):
+            tail = low[i:]
+            if any(op.startswith(tail) for op in _MARKER_OPENS):
+                return i
+
+        return len(text)
+
+    def push(self, token: str) -> str:
+        """Feed one streamed token. Returns the marker-free slice that may be
+        sent to the UI now ('' if everything must be held)."""
+        self._buf += token
+        hold = self._hold_start(self._buf)
+        release = self._buf[:hold]
+        # Strip any markers that completed within the released portion.
+        released = _strip_skill_markers(release)
+        self._buf = self._buf[hold:]
+        return released
+
+    def flush(self) -> str:
+        """Return any remaining user-visible text (markers stripped). Call at
+        end of stream so nothing is left buffered and the UI can continue."""
+        out = _strip_skill_markers(self._buf)
+        self._buf = ""
+        return out
 
 
 SKILLS_TOOL_CONTEXT = """\
