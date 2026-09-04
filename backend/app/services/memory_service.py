@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
 import httpx
@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import Memory, MemoryCategory
+from app.services.embeddings_client import generate_embedding
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_memory_enabled
 
@@ -119,6 +120,160 @@ def _is_nearly_identical(a: str, b: str, threshold: float = 0.85) -> bool:
     intersection = words_a & words_b
     union = words_a | words_b
     return len(intersection) / len(union) >= threshold
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Cosine similarity between two vectors. Returns 0.0 for empty/bad input."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    try:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(y * y for y in b) ** 0.5
+        if na == 0 or nb == 0:
+            return 0.0
+        return dot / (na * nb)
+    except Exception:
+        return 0.0
+
+
+def _embed_text(text: str) -> Optional[List[float]]:
+    """Embed text via Ollama. Returns None if embedding is unavailable."""
+    try:
+        embedding = generate_embedding(text)
+        if embedding and len(embedding) > 0:
+            return list(embedding)
+        return None
+    except Exception as exc:
+        logger.debug("Embedding unavailable (%s); falling back to lexical match", exc)
+        return None
+
+
+def _find_semantic_duplicate(
+    db: DBSession,
+    user_id: int,
+    content: str,
+) -> Optional[Memory]:
+    """
+    Look for an existing memory that means the same thing as `content`.
+
+    Uses embedding cosine similarity when available; falls back to the lexical
+    near-match check when Ollama is unreachable. This is the conflict-resolution
+    heart of Phase 2: "I prefer bullet points" vs "I prefer paragraphs" should
+    UPDATE the same row instead of creating a conflicting duplicate.
+    """
+    candidates: List[Memory] = (
+        db.query(Memory)
+        .filter(Memory.user_id == user_id)
+        .order_by(Memory.last_used_at.desc())
+        .all()
+    )
+    if not candidates:
+        return None
+
+    # Lexical fast path: exact/near-identical matches don't need an embedding.
+    for mem in candidates:
+        if _normalize_text(mem.content) == _normalize_text(content):
+            return mem
+
+    threshold = getattr(settings, "memory_conflict_threshold", 0.85)
+    query_vec = _embed_text(content)
+
+    # Prefer semantic scoring when embeddings are available.
+    if query_vec is not None:
+        scores: List[tuple] = []
+        for mem in candidates:
+            mem_vec = _embed_text(mem.content)
+            if mem_vec is None:
+                continue
+            score = _cosine_similarity(query_vec, mem_vec)
+            if score >= threshold:
+                scores.append((score, mem))
+        if scores:
+            # Highest similarity wins (most confident update target).
+            scores.sort(key=lambda t: t[0], reverse=True)
+            return scores[0][1]
+
+    # Fallback to the lexical near-match check (works when Ollama is offline).
+    for mem in candidates:
+        if _is_nearly_identical(mem.content, content, threshold=threshold):
+            return mem
+
+    return None
+
+
+def decay_memories(db: DBSession, user_id: int) -> int:
+    """
+    Forget stale memories for a user.
+
+    Any memory whose `last_accessed_at` (falling back to `last_used_at`, then
+    `created_at`) is older than `memory_decay_ttl_days` is deleted, UNLESS it
+    is pinned or highly accessed (`access_count > memory_pin_access_threshold`),
+    which are kept forever as durable preferences.
+
+    Returns the number of memories deleted.
+    """
+    ttl_days = getattr(settings, "memory_decay_ttl_days", 7)
+    pin_access = getattr(settings, "memory_pin_access_threshold", 5)
+    cutoff = datetime.utcnow() - timedelta(days=ttl_days)
+
+    stale: List[Memory] = (
+        db.query(Memory)
+        .filter(Memory.user_id == user_id)
+        .all()
+    )
+
+    to_delete: List[Memory] = []
+    kept_pinned = 0
+    for mem in stale:
+        # Determine the effective last-access timestamp.
+        accessed_at = (
+            mem.last_accessed_at or mem.last_used_at or mem.created_at
+        )
+        # Skip memories that were accessed recently.
+        if accessed_at and accessed_at >= cutoff:
+            continue
+        # Keep pinned / highly-accessed memories forever.
+        if (mem.access_count or 0) > pin_access:
+            kept_pinned += 1
+            continue
+        to_delete.append(mem)
+
+    for mem in to_delete:
+        db.delete(mem)
+
+    if to_delete:
+        db.commit()
+        logger.info(
+            "decay_memories(user_id=%s): deleted %d stale memory(ies), "
+            "kept %d pinned/high-access",
+            user_id, len(to_delete), kept_pinned,
+        )
+    else:
+        logger.debug(
+            "decay_memories(user_id=%s): nothing to decay (%d pinned/high-access)",
+            user_id, kept_pinned,
+        )
+
+    return len(to_delete)
+
+
+# Throttle guard so decay does not hammer the DB on every message retrieval.
+_DECAY_LAST_RUN: Dict[int, datetime] = {}
+
+
+def _maybe_run_decay(db: DBSession, user_id: int) -> None:
+    """Run decay_memories at most once per hour per user (in-process)."""
+    now = datetime.utcnow()
+    last_run = _DECAY_LAST_RUN.get(user_id)
+    if last_run is not None and (now - last_run) < timedelta(hours=1):
+        return
+    try:
+        decay_memories(db, user_id)
+    except Exception as exc:
+        logger.warning("decay_memories failed (non-fatal): %s", exc)
+    finally:
+        _DECAY_LAST_RUN[user_id] = now
 
 
 # ── Extraction result type ─────────────────────────────────
@@ -315,41 +470,36 @@ def _save_memory_if_new(
     session_id: Optional[int] = None,
 ) -> Optional[Memory]:
     """
-    Save a memory with duplicate protection.
+    Save a memory with duplicate + conflict resolution.
 
-    - If exact match exists → update last_used_at
-    - If nearly identical match exists → update content + last_used_at
-    - Otherwise → create new memory
+    - If a semantically equivalent memory exists (Phase 2 conflict resolution:
+      "I prefer bullet points" vs "I prefer paragraphs"), UPDATE its content to
+      the latest value and reset its access timestamps — this is how a user's
+      changed preference supersedes an old one instead of coexisting.
+    - Otherwise → create a new memory.
     """
-    existing: List[Memory] = (
-        db.query(Memory)
-        .filter(Memory.user_id == user_id)
-        .order_by(Memory.created_at.desc())
-        .all()
-    )
+    duplicate = _find_semantic_duplicate(db, user_id, content)
 
-    for mem in existing:
-        if _normalize_text(mem.content) == _normalize_text(content):
-            # Exact match — update last_used_at
-            mem.last_used_at = datetime.utcnow()
-            db.commit()
-            db.refresh(mem)
-            return mem
+    if duplicate is not None:
+        # Update the existing memory to the latest value and reset its age so
+        # the refreshed preference is not immediately decayed.
+        duplicate.content = content
+        duplicate.category = category
+        now = datetime.utcnow()
+        duplicate.last_used_at = now
+        duplicate.last_accessed_at = now
+        db.commit()
+        db.refresh(duplicate)
+        return duplicate
 
-        if _is_nearly_identical(mem.content, content):
-            # Nearly identical — update content and last_used_at
-            mem.content = content
-            mem.last_used_at = datetime.utcnow()
-            db.commit()
-            db.refresh(mem)
-            return mem
-
-    # No duplicate found — create new memory
+    # No conflict — create new memory
     memory = Memory(
         user_id=user_id,
         session_id=session_id,
         content=content,
         category=category,
+        access_count=0,
+        last_accessed_at=datetime.utcnow(),
     )
     db.add(memory)
     db.commit()
@@ -382,6 +532,10 @@ def retrieve_relevant_memories(
     if not get_memory_enabled(db):
         return []
 
+    # Periodically forget stale memories (cheap guard so it runs during normal
+    # chat even if no new session is created).
+    _maybe_run_decay(db, user_id)
+
     limit = max_results or settings.memory_max_results
 
     memories: List[Memory] = (
@@ -392,10 +546,12 @@ def retrieve_relevant_memories(
         .all()
     )
 
-    # Update last_used_at for retrieved memories
+    # Update access metrics for retrieved memories
     now = datetime.utcnow()
     for mem in memories:
         mem.last_used_at = now
+        mem.last_accessed_at = now
+        mem.access_count = (mem.access_count or 0) + 1
     db.commit()
 
     return memories

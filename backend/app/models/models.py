@@ -216,6 +216,9 @@ class Memory(Base):
     category = Column(String(30), nullable=False, default=MemoryCategory.fact.value)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # Phase 2 (memory decay / access metrics)
+    last_accessed_at = Column(DateTime, nullable=True)
+    access_count = Column(Integer, nullable=False, default=0)
 
     user = relationship("User", back_populates="memories")
 

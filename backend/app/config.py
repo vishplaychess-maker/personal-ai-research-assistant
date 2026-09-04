@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     # ── Memory settings ─────────────────────────────────
     enable_memory: bool = True
     memory_max_results: int = 5
+    # Memory decay: memories not accessed within this many days are forgotten,
+    # unless they are pinned or highly accessed (access_count > threshold).
+    memory_decay_ttl_days: int = 7
+    memory_pin_access_threshold: int = 5
+    # Semantic conflict-resolution threshold for save_memory (0-1 cosine sim).
+    # Tuned from nomic-embed-text output: a changed preference on the same
+    # subject ("bullet points" -> "paragraphs") lands ~0.83; genuinely different
+    # facts score far lower. 0.80 merges conflicting preferences while keeping
+    # unrelated facts as separate memories.
+    memory_conflict_threshold: float = 0.80
 
     # ── Auth settings ───────────────────────────────────
     jwt_secret: str = "change-me-in-production"

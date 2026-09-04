@@ -72,6 +72,11 @@ def _migrate_database():
             conn.execute(sa_text("ALTER TABLE memories ADD COLUMN last_used_at TIMESTAMP"))
         # Update existing memories' last_used_at
         conn.execute(sa_text("UPDATE memories SET last_used_at = created_at WHERE last_used_at IS NULL"))
+        # Phase 2: memory access metrics & decay
+        if "last_accessed_at" not in existing_mem_cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN last_accessed_at TIMESTAMP"))
+        if "access_count" not in existing_mem_cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0"))
         # Refresh column info after ALTER TABLE ADD COLUMN
         existing_mem_cols = {c["name"] for c in inspector.get_columns("memories")}
         # Migrate old 'type' column → new 'category' column

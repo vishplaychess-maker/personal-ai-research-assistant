@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 from typing import List, Optional
 
@@ -24,8 +25,11 @@ from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_memory_enabled
+from app.services.memory_service import decay_memories
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── Patchable wrapper for model validation ─────────────────
@@ -140,6 +144,11 @@ def create_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    # Phase 2: forget stale memories whenever a fresh session begins.
+    try:
+        decay_memories(db, current_user.id)
+    except Exception as exc:
+        logger.warning("decay_memories on session create failed (non-fatal): %s", exc)
     return session
 
 

@@ -4,6 +4,28 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Memory Decay & Forgetting (Phase 2)
+- Added access-tracking columns to the `Memory` model: `last_accessed_at`
+  (DateTime, nullable) and `access_count` (Integer, default 0), with a guarded
+  migration in `_migrate_database()` (added only if missing).
+- New `decay_memories(db, user_id)` in `memory_service.py`: deletes memories not
+  accessed within `memory_decay_ttl_days` (default 7), but keeps pinned /
+  highly-accessed memories (`access_count > memory_pin_access_threshold`,
+  default 5) forever.
+- Decay runs at the start of a new session (`create_session` route) and is
+  throttled to ~once/hour per user inside `retrieve_relevant_memories`, so it
+  executes during normal chat even without a new session.
+- Conflict resolution: `save_memory` now checks for a semantically equivalent
+  existing memory using Ollama `nomic-embed-text` embeddings (cosine similarity
+  vs `memory_conflict_threshold`, default 0.80). A changed preference
+  ("bullet points" -> "paragraphs") UPDATES the existing row and resets its
+  access timestamps instead of creating a conflicting duplicate. Falls back to a
+  lexical near-match when embeddings are unavailable.
+- Access metrics: `retrieve_relevant_memories` now sets `last_accessed_at = now()`
+  and increments `access_count` for every memory injected into the prompt.
+- New config knobs: `memory_decay_ttl_days`, `memory_pin_access_threshold`,
+  `memory_conflict_threshold`.
+
 ### Semantic Caching (RAG-based CAG)
 - Upgraded the exact-match CAG cache (`backend/app/services/cache_service.py`)
   to Semantic Caching. Besides the SHA-256 exact key (fast path, zero embedding
