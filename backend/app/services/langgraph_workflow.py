@@ -59,7 +59,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import Message, MessageRole, ResearchSession
-from app.services.llm_providers import get_provider
+from app.services.llm_providers import generate_response_with_fallback
 from app.services.rag_service import (
     retrieve_chunks,
     format_rag_context,
@@ -74,7 +74,7 @@ from app.services.memory_service import (
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
 from app.services import tool_registry
 from app.tools.web_scraper import extract_urls, web_scraper
-from app.tools.web_search import run_deep_research
+from app.tools.deep_research import run_deep_research
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
 from app.tools.python_sandbox import extract_python_code, format_code_result, run_python_code
 from app.tools.mcp_tool import (
@@ -91,6 +91,7 @@ from app.services.agent_personas import (
     AGENT_PERSONAS,
     MAX_REVIEW_RETRIES,
     detect_complex_task,
+    detect_research_task,
     parse_review_verdict,
     review_round_block,
 )
@@ -114,12 +115,13 @@ def generate_response(
     model_name: Optional[str] = None,
     provider_config: Optional[dict] = None,
 ) -> str:
-    """Call the configured LLM provider. Patchable for testing."""
-    provider = get_provider(config=provider_config)
-    return provider.generate_response(
+    """Call the configured LLM provider with the free-tier fallback chain.
+    Patchable for testing."""
+    return generate_response_with_fallback(
         messages=messages,
         system_prompt=system_prompt,
         model_name=model_name,
+        provider_config=provider_config,
     )
 
 
@@ -373,8 +375,9 @@ def browse_web(state: WorkflowState) -> WorkflowState:
 # F6 Deep Research Mode: when the user hasn't supplied a URL to read, search
 # the live web with DuckDuckGo (free, no API key) and scrape the top results
 # so the LLM can synthesize a fresh, cited report. Bounded (never loops):
-# only runs when deep research is enabled AND no explicit URLs were already
-# scraped, and it performs a single, capped search+scrape pass.
+# only runs when deep research is enabled, the prompt EXPLICITLY asks for
+# research (Phase 4 keyword gate — short/ambiguous prompts skip the expensive
+# search+scrape pass), and no explicit URLs were already scraped.
 
 
 def deep_research(state: WorkflowState) -> WorkflowState:
@@ -384,9 +387,9 @@ def deep_research(state: WorkflowState) -> WorkflowState:
         state["deep_research_used"] = state.get("deep_research_used", False)
         return state
 
-    # Only run when deep research is enabled, Tavily is configured, and the
-    # user did not already hand us URLs to read (explicit URLs are handled by
-    # the browse_web node and would duplicate scraping).
+    # Only run when deep research is enabled, the user did not already hand
+    # us URLs to read (explicit URLs are handled by the browse_web node and
+    # would duplicate scraping), and the prompt explicitly asks for research.
     if not settings.enable_deep_research:
         state["deep_research_context"] = ""
         state["deep_research_used"] = False
@@ -401,6 +404,12 @@ def deep_research(state: WorkflowState) -> WorkflowState:
 
     user_input = state.get("user_input", "")
     if not user_input:
+        state["deep_research_context"] = ""
+        state["deep_research_used"] = False
+        return state
+
+    # Phase 4 keyword gate: NO deep research for short/ambiguous prompts.
+    if not detect_research_task(user_input):
         state["deep_research_context"] = ""
         state["deep_research_used"] = False
         return state
@@ -690,7 +699,10 @@ def agent_review(state: WorkflowState) -> WorkflowState:
     # Reviewer emitted and strip the markers so they never reach the user.
     if db is not None:
         try:
-            from app.tools.memory_tool import process_memory_markers
+            from app.tools.memory_tool import (
+                process_memory_markers,
+                process_use_memory_markers,
+            )
             from app.tools.directive_tool import process_directive_markers
 
             review, saved_memories = process_memory_markers(
@@ -700,6 +712,15 @@ def agent_review(state: WorkflowState) -> WorkflowState:
                 logger.info(
                     "Multi-agent Reviewer saved %d memory(ies)",
                     saved_memories,
+                )
+            # [USE_MEMORY: <query>] — resolve on-demand recall markers.
+            review, used_memories = process_use_memory_markers(
+                review, db, state.get("user_id", 1), state.get("session_id")
+            )
+            if used_memories:
+                logger.info(
+                    "Multi-agent Reviewer resolved %d USE_MEMORY marker(s)",
+                    used_memories,
                 )
             review, saved_directives = process_directive_markers(
                 review, db, state.get("user_id", 1)
@@ -966,7 +987,10 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         )
         # save_memory tool: persist any [SAVE_MEMORY: ...] markers the LLM emitted
         if db is not None:
-            from app.tools.memory_tool import process_memory_markers
+            from app.tools.memory_tool import (
+                process_memory_markers,
+                process_use_memory_markers,
+            )
             cleaned, saved_count = process_memory_markers(
                 response, db, state.get("user_id", 1), state.get("session_id")
             )
@@ -974,6 +998,16 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
                 logger.info(
                     "save_memory tool saved %d memory(ies) for user %s",
                     saved_count, state.get("user_id", 1),
+                )
+            response = cleaned
+            # use_memory tool (Phase 4): resolve [USE_MEMORY: <query>] markers
+            cleaned, used_count = process_use_memory_markers(
+                response, db, state.get("user_id", 1), state.get("session_id")
+            )
+            if used_count:
+                logger.info(
+                    "use_memory tool resolved %d marker(s) for user %s",
+                    used_count, state.get("user_id", 1),
                 )
             response = cleaned
             # save_directive tool (F6 Cap 3): persist [SAVE_DIRECTIVE: ...] markers

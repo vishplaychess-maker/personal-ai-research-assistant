@@ -25,6 +25,7 @@ import { MCPTab } from "./MCPTab";
 import { AgentDirectives } from "./AgentDirectives";
 
 const PROVIDER_OPTIONS = [
+  { value: "glm", label: "GLM 5.3 Flash (Free)" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "nvidia", label: "NVIDIA" },
   { value: "huggingface", label: "Hugging Face" },
@@ -99,12 +100,12 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
 
   const openAdd = () => {
     setEditing(null);
-    setFormProvider("openrouter");
+    setFormProvider("glm");
     setFormApiKey("");
     setFormModel("");
     setFormActive(false);
     setDialogOpen(true);
-    fetchModelsForProvider("openrouter");
+    fetchModelsForProvider("glm");
   };
 
   const openEdit = (p: ProviderConfig) => {

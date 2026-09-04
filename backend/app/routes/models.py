@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 
 VALID_PROVIDERS = {
-    "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
+    "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "together", "mistral", "cohere",
 }
 

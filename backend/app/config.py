@@ -122,10 +122,10 @@ class Settings(BaseSettings):
     thunder_skills_max_indexed: int = 20
 
     # ── Model / LLM provider settings ───────────────────
-    # Provider: "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
+    # Provider: "glm" | "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
     #           "groq" | "together" | "mistral" | "cohere"
-    llm_provider: str = "ollama"
-    default_model: str = "dolphin-mistral"
+    llm_provider: str = "glm"
+    default_model: str = "glm-5.3-flash"
     ollama_tags_timeout: int = 5
 
     # ── Secrets encryption at rest (Phase — security overhaul) ──
@@ -134,6 +134,16 @@ class Settings(BaseSettings):
     # import Fernet; print(Fernet.generate_key().decode())". If unset, an
     # ephemeral key is generated per process with a loud log warning.
     encryption_key: str = ""
+
+    # GLM 5.3 Flash — local Verdent Free Router (OpenAI-compatible, keyless).
+    # Default free model: used directly and as the automatic fallback whenever
+    # a user's configured provider fails (call error / timeout / non-200).
+    glm_enable: bool = True
+    glm_api_key: str = ""  # optional; VERDENT_API_KEY env var also honoured
+    glm_base_url: str = "http://127.0.0.1:8320/v1"
+    glm_model: str = "glm-5.3-flash"
+    glm_max_tokens: int = 2048
+    glm_temperature: float = 0.7
 
     # OpenRouter (OpenAI-compatible API)
     openrouter_api_key: str = ""

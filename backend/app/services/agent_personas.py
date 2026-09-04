@@ -196,6 +196,37 @@ def detect_complex_task(user_input: str) -> bool:
     return any(re.search(pattern, text) for pattern in _COMPLEX_TASK_PATTERNS)
 
 
+# ── Deep-research gating (Phase 4) ─────────────────────────
+# Deep research is expensive (multi-second search + scrape). It must run ONLY
+# when the prompt explicitly asks for research. Kept SEPARATE from
+# _COMPLEX_TASK_PATTERNS so research-keyword prompts never divert the
+# multi-agent router: code-build phrasing keeps its existing priority.
+
+DEEP_RESEARCH_PATTERNS: List[str] = [
+    r"\bresearch\b",
+    r"\bdeep\s+dive\b",
+    r"\bfind\s+(?:info|information)\s+(?:about|on|for)\b",
+    r"\binvestigate\b",
+    r"\blook\s+up\b",
+    r"\bsearch\s+(?:the\s+web|online|for)\b",
+    r"\blatest\s+(?:news|developments|advancements|research)\b",
+    r"\bsources?\s+(?:about|on|for)\b",
+]
+
+
+def detect_research_task(user_input: str) -> bool:
+    """Return True when the prompt explicitly asks for web research.
+
+    Short/ambiguous prompts return False so deep research (search + scrape)
+    is skipped, saving cost and latency. User-supplied URLs keep their own
+    browse_web path and are unaffected by this gate.
+    """
+    text = (user_input or "").lower().strip()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in DEEP_RESEARCH_PATTERNS)
+
+
 # ── Review verdict parsing ─────────────────────────────────
 
 _REVIEW_APPROVED_RE = re.compile(r"\[REVIEW_APPROVED\]", re.IGNORECASE)

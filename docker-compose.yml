@@ -34,7 +34,11 @@ services:
       - CHROMADB_PORT=8000
       - OLLAMA_HOST=host.docker.internal
       - OLLAMA_PORT=11434
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_PROVIDER=${LLM_PROVIDER:-glm}
+      # The GLM Free Router runs on the host; inside the container the host's
+      # 127.0.0.1 is reached via host.docker.internal (same pattern as Ollama).
+      - GLM_BASE_URL=${GLM_BASE_URL:-http://host.docker.internal:8320/v1}
+      - GLM_MODEL=${GLM_MODEL:-glm-5.3-flash}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.2-3b-instruct:free}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}

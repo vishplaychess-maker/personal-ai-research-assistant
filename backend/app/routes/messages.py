@@ -386,7 +386,10 @@ async def stream_chat(
 
                     # save_memory tool: persist [SAVE_MEMORY: ...] markers the
                     # LLM emitted during streaming (strip them from saved text).
-                    from app.tools.memory_tool import process_memory_markers
+                    from app.tools.memory_tool import (
+                        process_memory_markers,
+                        process_use_memory_markers,
+                    )
                     cleaned_content, saved_count = process_memory_markers(
                         full_response_content, db, user_id, session_id
                     )
@@ -394,6 +397,18 @@ async def stream_chat(
                         logger.info(
                             "save_memory tool saved %d memory(ies) for user %s",
                             saved_count, current_user.id,
+                        )
+                    full_response_content = cleaned_content
+
+                    # use_memory tool (Phase 4): resolve [USE_MEMORY: <query>]
+                    # recall markers (inject memories inline, strip markers).
+                    cleaned_content, used_count = process_use_memory_markers(
+                        full_response_content, db, user_id, session_id
+                    )
+                    if used_count:
+                        logger.info(
+                            "use_memory tool resolved %d marker(s) for user %s",
+                            used_count, current_user.id,
                         )
                     full_response_content = cleaned_content
 

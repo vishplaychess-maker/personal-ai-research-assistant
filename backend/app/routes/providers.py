@@ -32,11 +32,12 @@ from app.services.settings_service import (
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 KNOWN_PROVIDERS = {
-    "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
+    "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "together", "mistral", "cohere",
 }
 
 PROVIDER_LABELS = {
+    "glm": "GLM 5.3 Flash (Free)",
     "ollama": "Ollama",
     "openrouter": "OpenRouter",
     "nvidia": "NVIDIA",
@@ -50,6 +51,7 @@ PROVIDER_LABELS = {
 }
 
 PREFIXES = {
+    "glm": "",  # keyless local router
     "openrouter": "sk-or-",
     "nvidia": "nvapi-",
     "huggingface": "hf_",

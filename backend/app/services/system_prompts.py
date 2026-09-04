@@ -154,6 +154,14 @@ Rules:
 - You may emit multiple markers if the user shares several details.
 - The marker is removed automatically - do not explain it to the user.
 
+To explicitly recall memories about a topic mid-answer, emit EXACTLY this
+marker:
+
+[USE_MEMORY: <what to recall>]
+
+Matching memories are injected inline where the marker appeared, and the
+marker itself is removed automatically.
+
 When "Past memories about this user" appears in the prompt, use it to
 personalize your response (tone, format, style, citations, etc.).
 """""

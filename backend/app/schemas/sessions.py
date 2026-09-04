@@ -39,7 +39,7 @@ def is_free_model(model_name: str, provider: Optional[str] = None) -> bool:
     """
     name_lower = model_name.lower()
     provider_lower = (provider or "").lower()
-    if provider_lower in ("ollama", "local"):
+    if provider_lower in ("ollama", "local", "glm"):
         return True
     if provider_lower == "openrouter":
         return True  # we only expose free-tier via pricing filter

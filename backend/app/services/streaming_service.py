@@ -293,17 +293,22 @@ def prepare_chat_context(
     except Exception as exc:
         logger.warning("Web scraping failed (non-fatal): %s", exc)
 
-    # 7b. Deep Research Mode — autonomous Tavily search + scrape when the user
-    # did not supply a URL and deep research is enabled+configured.
+    # 7b. Deep Research Mode — autonomous web search + scrape, gated by the
+    # Phase 4 keyword detector: runs ONLY when the user did not supply a URL
+    # AND the prompt explicitly asks for research (short/ambiguous prompts
+    # skip the expensive search+scrape pass).
     if settings.enable_deep_research and not web_scraped:
-        try:
-            from app.tools.web_search import run_deep_research
+        from app.services.agent_personas import detect_research_task
 
-            research_context = run_deep_research(user_input)
-            if research_context:
-                system_parts.append(research_context)
-        except Exception as exc:
-            logger.warning("Deep research failed (non-fatal): %s", exc)
+        if detect_research_task(user_input):
+            try:
+                from app.tools.deep_research import run_deep_research
+
+                research_context = run_deep_research(user_input)
+                if research_context:
+                    system_parts.append(research_context)
+            except Exception as exc:
+                logger.warning("Deep research failed (non-fatal): %s", exc)
 
     system_prompt = "\n\n".join(system_parts)
 
@@ -390,6 +395,15 @@ async def stream_multi_agent_response(
     def _budget_exceeded() -> bool:
         return generated >= MAX_TOKENS_PER_TASK
 
+    # Phase 4: compact L1 skills index (names + descriptions only) injected
+    # into the Coder and Reviewer prompts. L2 bodies still load on demand.
+    skills_index = ""
+    try:
+        from app.skills.loader import skills_catalog
+        skills_index = skills_catalog() or ""
+    except Exception as exc:
+        logger.warning("Skills index injection failed (non-fatal): %s", exc)
+
     try:
         # ── 1. Researcher: requirements + references -> research brief ──
         yield _agent_status_sse(
@@ -410,6 +424,8 @@ async def stream_multi_agent_response(
             parts = [AGENT_PERSONAS["coder"]["system_prompt"]]
             if brief:
                 parts.append("=== Research Brief (from the Researcher) ===\n" + brief)
+            if skills_index:
+                parts.append(skills_index)
             return "\n\n".join(parts)
 
         async def _run_sandbox(coder_output: str) -> str:
@@ -420,15 +436,22 @@ async def stream_multi_agent_response(
             return format_code_result(code, result)
 
         def _persist_reviewer_markers(text: str) -> str:
-            """Persist [SAVE_DIRECTIVE]/[SAVE_MEMORY] the Reviewer emitted."""
+            """Persist [SAVE_DIRECTIVE]/[SAVE_MEMORY] the Reviewer emitted
+            and resolve any [USE_MEMORY: ...] recall markers."""
             try:
                 from app.database import SessionLocal
-                from app.tools.memory_tool import process_memory_markers
+                from app.tools.memory_tool import (
+                    process_memory_markers,
+                    process_use_memory_markers,
+                )
                 from app.tools.directive_tool import process_directive_markers
 
                 _db = SessionLocal()
                 try:
                     text, _ = process_memory_markers(
+                        text, _db, context.user_id, context.session_id
+                    )
+                    text, _ = process_use_memory_markers(
                         text, _db, context.user_id, context.session_id
                     )
                     text, _ = process_directive_markers(text, _db, context.user_id)
@@ -461,6 +484,8 @@ async def stream_multi_agent_response(
                 AGENT_PERSONAS["reviewer"]["system_prompt"],
                 review_round_block(rounds),
             ]
+            if skills_index:
+                review_parts.append(skills_index)
             if context.directives_block:
                 review_parts.append(context.directives_block)
             review_parts.append("=== Original Request ===\n" + (context.user_input or ""))
@@ -601,6 +626,9 @@ async def stream_chat_response(
     # ── Phase 3: Multi-Agent Collaboration for complex build/code tasks ──
     # Additive router with a safe fallback: anything that doesn't look like a
     # build/code task continues through the unchanged single-agent stream.
+    # NOTE (Phase 4): research-keyword prompts do NOT divert this router —
+    # detect_research_task is deliberately separate from detect_complex_task,
+    # so prompts with build/code phrasing keep multi-agent routing priority.
     from app.services.agent_personas import detect_complex_task
 
     _last_msg = context.history[-1] if context.history else {}
@@ -649,125 +677,150 @@ async def stream_chat_response(
             return
 
     try:
-        # Stream tokens from the configured LLM provider
-        provider = get_provider(config=context.provider_config)
-        full_response = []
-        # Streaming filter: never lets skill markers leak to the UI mid-stream.
-        from app.skills.loader import SkillStreamFilter
-        skill_stream = SkillStreamFilter()
-        async for chunk in provider.generate_stream_async(
-            messages=context.history,
-            system_prompt=context.system_prompt,
-            model_name=context.model_name,
-        ):
-            if chunk["type"] == "token":
-                full_response.append(chunk["token"])
-                # Agent loop guardrail: stop streaming if token budget exceeded.
-                if len(full_response) >= MAX_TOKENS_PER_TASK:
-                    yield format_sse("error", {
-                        "code": "TOKEN_BUDGET_EXCEEDED",
-                        "detail": "Generation stopped: token budget exceeded.",
+        # Stream tokens from the configured LLM provider, falling down the
+        # free-tier chain (primary -> GLM 5.3 Flash -> free cloud -> Ollama)
+        # when a provider fails BEFORE emitting any tokens. If a provider
+        # fails mid-stream (after tokens were sent), the error is surfaced
+        # as-is instead of duplicating partial output.
+        from app.services.llm_providers import build_fallback_chain
+
+        provider_chain = [
+            get_provider(config=cfg)
+            for cfg in build_fallback_chain(context.provider_config)
+        ]
+        for _p_idx, provider in enumerate(provider_chain):
+            full_response = []
+            # Streaming filter: never lets skill markers leak to the UI mid-stream.
+            from app.skills.loader import SkillStreamFilter
+            skill_stream = SkillStreamFilter()
+            stream_error = None
+            emitted_any = False
+            async for chunk in provider.generate_stream_async(
+                messages=context.history,
+                system_prompt=context.system_prompt,
+                model_name=context.model_name if _p_idx == 0 else None,
+            ):
+                if chunk["type"] == "token":
+                    emitted_any = True
+                    full_response.append(chunk["token"])
+                    # Agent loop guardrail: stop streaming if token budget exceeded.
+                    if len(full_response) >= MAX_TOKENS_PER_TASK:
+                        yield format_sse("error", {
+                            "code": "TOKEN_BUDGET_EXCEEDED",
+                            "detail": "Generation stopped: token budget exceeded.",
+                        })
+                        return
+                    visible = skill_stream.push(chunk["token"])
+                    if visible:
+                        yield format_sse("token", {"token": visible})
+
+                elif chunk["type"] == "done":
+                    # Flush any held-back non-marker text so the UI never stalls.
+                    held = skill_stream.flush()
+                    if held:
+                        yield format_sse("token", {"token": held})
+                    full_response_text = chunk.get("response", "")
+                    # Execute any [PYTHON_CODE: ...] the LLM emitted (single-pass).
+                    code = extract_python_code(full_response_text)
+                    if code:
+                        result = await run_python_code_async(code)
+                        full_response_text += "\n\n" + format_code_result(code, result)
+                    # [MCP_CALL: …] — Hermes auto-correction loop (up to 3 retries)
+                    mcp_calls = []
+                    mcp_retry = 0
+                    if settings.enable_mcp_tool:
+                        mcp_calls = extract_mcp_calls(full_response_text)
+                        if mcp_calls:
+                            from app.database import SessionLocal
+
+                            _db = SessionLocal()
+                            try:
+                                mcp_result = run_mcp_calls(
+                                    mcp_calls, _db, context.user_id
+                                )
+                                full_response_text += "\n\n" + mcp_result
+                                # Hermes self-correction: surface fixing iteration
+                                if "[error]" in mcp_result.lower() and mcp_retry < 3:
+                                    fix_note = f"\n\n[Fixing error... attempt {mcp_retry+1}/3 - analyzing traceback and retrying]"
+                                    full_response_text += fix_note
+                                    yield format_sse("token", {"token": fix_note})
+                                    mcp_retry += 1
+                            finally:
+                                _db.close()
+                    # Skills (L2, free-model fallback): if the model emitted a skill
+                    # marker in its text (<skill>name</skill> | USE SKILL: name |
+                    # [USE_SKILL: name]), load the body and strip the markers from
+                    # the user-visible response. Bounded — single load, no loop.
+                    try:
+                        from app.skills.loader import (
+                            extract_skill_calls,
+                            load_skill_body,
+                            process_skill_markers,
+                        )
+                        skill_names = extract_skill_calls(full_response_text)
+                        if skill_names:
+                            blocks = []
+                            for sname in skill_names:
+                                body_block = load_skill_body(sname)
+                                if body_block:
+                                    blocks.append(body_block)
+                            full_response_text = process_skill_markers(full_response_text)
+                            if blocks:
+                                full_response_text += "\n\n" + "\n\n".join(blocks)
+                    except Exception as exc:
+                        logger.warning("Skill marker processing failed (non-fatal): %s", exc)
+                    # CAG: cache this answer for identical future repeats in this
+                    # session. Skip when code/MCP ran (replay must not re-execute).
+                    if cache_question and not code and not mcp_calls:
+                        cache_service.set(
+                            context.session_id, cache_question, full_response_text
+                        )
+                    # F6 Cap 2: advisory self-evaluation (never raises, null on error)
+                    confidence = None
+                    confidence_reason = None
+                    try:
+                        from app.services.evaluation_service import evaluate_response
+                        _eval = evaluate_response(
+                            response=full_response_text,
+                            query=context.user_input or "",
+                            messages=[m for m in context.history if isinstance(m.get("content"), str)],
+                            provider_config=context.provider_config,
+                            model_name=context.model_name,
+                        )
+                        confidence = _eval.get("confidence")
+                        confidence_reason = _eval.get("reason")
+                    except Exception:
+                        logger.warning("F6 self-evaluation skipped (non-fatal)", exc_info=True)
+                    # Yield complete event with metadata
+                    yield format_sse("complete", {
+                        "message_id": None,  # Will be filled after DB save
+                        "citations": context.citations,
+                        "sources_used": context.sources_used,
+                        "memories_used": context.memories_used,
+                        "content": full_response_text,
+                        "confidence": confidence,
+                        "confidence_reason": confidence_reason,
                     })
                     return
-                visible = skill_stream.push(chunk["token"])
-                if visible:
-                    yield format_sse("token", {"token": visible})
 
-            elif chunk["type"] == "done":
-                # Flush any held-back non-marker text so the UI never stalls.
-                held = skill_stream.flush()
-                if held:
-                    yield format_sse("token", {"token": held})
-                full_response_text = chunk.get("response", "")
-                # Execute any [PYTHON_CODE: ...] the LLM emitted (single-pass).
-                code = extract_python_code(full_response_text)
-                if code:
-                    result = await run_python_code_async(code)
-                    full_response_text += "\n\n" + format_code_result(code, result)
-                # [MCP_CALL: …] — Hermes auto-correction loop (up to 3 retries)
-                mcp_calls = []
-                mcp_retry = 0
-                if settings.enable_mcp_tool:
-                    mcp_calls = extract_mcp_calls(full_response_text)
-                    if mcp_calls:
-                        from app.database import SessionLocal
+                elif chunk["type"] == "error":
+                    # Remember the provider's error; fall back to the next
+                    # provider in the chain (or surface it on the last one).
+                    stream_error = chunk["error"]
+                    break
 
-                        _db = SessionLocal()
-                        try:
-                            mcp_result = run_mcp_calls(
-                                mcp_calls, _db, context.user_id
-                            )
-                            full_response_text += "\n\n" + mcp_result
-                            # Hermes self-correction: surface fixing iteration
-                            if "[error]" in mcp_result.lower() and mcp_retry < 3:
-                                fix_note = f"\n\n[Fixing error... attempt {mcp_retry+1}/3 - analyzing traceback and retrying]"
-                                full_response_text += fix_note
-                                yield format_sse("token", {"token": fix_note})
-                                mcp_retry += 1
-                        finally:
-                            _db.close()
-                # Skills (L2, free-model fallback): if the model emitted a skill
-                # marker in its text (<skill>name</skill> | USE SKILL: name |
-                # [USE_SKILL: name]), load the body and strip the markers from
-                # the user-visible response. Bounded — single load, no loop.
-                try:
-                    from app.skills.loader import (
-                        extract_skill_calls,
-                        load_skill_body,
-                        process_skill_markers,
-                    )
-                    skill_names = extract_skill_calls(full_response_text)
-                    if skill_names:
-                        blocks = []
-                        for sname in skill_names:
-                            body_block = load_skill_body(sname)
-                            if body_block:
-                                blocks.append(body_block)
-                        full_response_text = process_skill_markers(full_response_text)
-                        if blocks:
-                            full_response_text += "\n\n" + "\n\n".join(blocks)
-                except Exception as exc:
-                    logger.warning("Skill marker processing failed (non-fatal): %s", exc)
-                # CAG: cache this answer for identical future repeats in this
-                # session. Skip when code/MCP ran (replay must not re-execute).
-                if cache_question and not code and not mcp_calls:
-                    cache_service.set(
-                        context.session_id, cache_question, full_response_text
-                    )
-                # F6 Cap 2: advisory self-evaluation (never raises, null on error)
-                confidence = None
-                confidence_reason = None
-                try:
-                    from app.services.evaluation_service import evaluate_response
-                    _eval = evaluate_response(
-                        response=full_response_text,
-                        query=context.user_input or "",
-                        messages=[m for m in context.history if isinstance(m.get("content"), str)],
-                        provider_config=context.provider_config,
-                        model_name=context.model_name,
-                    )
-                    confidence = _eval.get("confidence")
-                    confidence_reason = _eval.get("reason")
-                except Exception:
-                    logger.warning("F6 self-evaluation skipped (non-fatal)", exc_info=True)
-                # Yield complete event with metadata
-                yield format_sse("complete", {
-                    "message_id": None,  # Will be filled after DB save
-                    "citations": context.citations,
-                    "sources_used": context.sources_used,
-                    "memories_used": context.memories_used,
-                    "content": full_response_text,
-                    "confidence": confidence,
-                    "confidence_reason": confidence_reason,
-                })
-                return
-
-            elif chunk["type"] == "error":
+            if stream_error and not emitted_any and _p_idx < len(provider_chain) - 1:
+                logger.warning(
+                    "Streaming provider %s failed (%s) — trying next fallback",
+                    provider.name, stream_error,
+                )
+                continue
+            if stream_error:
                 # Pass through the provider's error with a generic code
                 # The detail contains the actual error from the provider (e.g., "OpenRouter returned HTTP 404: Model not found")
                 yield format_sse("error", {
                     "code": "PROVIDER_ERROR",
-                    "detail": chunk["error"],
+                    "detail": stream_error,
                 })
                 return
 

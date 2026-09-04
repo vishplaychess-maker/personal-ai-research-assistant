@@ -43,7 +43,8 @@ function badgeFor(id: string): string | null {
 function isFreeModel(model: ModelInfo, provider: string): boolean {
   if (typeof model.is_free === "boolean") return model.is_free;
   // Fallback inference for backwards compatibility
-  if (provider.toLowerCase() === "ollama" || provider.toLowerCase() === "local") return true;
+  const p = provider.toLowerCase();
+  if (p === "ollama" || p === "local" || p === "glm") return true;
   if (model.name.toLowerCase().includes(":free")) return true;
   return false;
 }

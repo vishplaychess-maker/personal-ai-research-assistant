@@ -152,8 +152,9 @@ def process_skill_markers(text: str) -> str:
 
 # Marker opening sequences. Used by SkillStreamFilter to recognise when the
 # tail of a buffered stream could be the start of a marker that spans tokens.
-# Includes the persistence tool markers ([SAVE_MEMORY], [SAVE_DIRECTIVE]) and
-# the code/MCP markers so they are buffered out of the incremental UI stream.
+# Includes the persistence tool markers ([SAVE_MEMORY], [SAVE_DIRECTIVE],
+# [USE_MEMORY]) and the code/MCP markers so they are buffered out of the
+# incremental UI stream.
 # Only markers from the ASSISTANT's own output are ever processed — the stream
 # filter operates solely on the model's streamed text, never on user input or
 # scraped web content.
@@ -161,6 +162,9 @@ _MARKER_OPENS = (
     "<skill",
     "[use_skill",
     "use skill:",
+    "[use_memory",
+    "[plan",
+    "[lesson",
     "[save_memory",
     "[save_directive",
     "[python_code",
@@ -177,6 +181,39 @@ _STRIP_PATTERNS = (
     USE_SKILL_PATTERN,
     PLAIN_SKILL_PATTERN,
 )
+
+# Phase 4 SSE hardening: these markers are ONLY stripped in the streaming
+# filter path (SkillStreamFilter.push/flush), never in the full-response
+# process_skill_markers path — so persistence handlers in messages.py /
+# the workflows still see the raw text containing them and can persist
+# before stripping. [USE_MEMORY] is additionally resolved (not just stripped)
+# by the complete-handler; stripping it here only guards the live stream.
+_SSE_STRIP_PATTERNS = (
+    re.compile(r"\[SAVE_MEMORY:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+    re.compile(r"\[USE_MEMORY:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+    re.compile(r"\[SAVE_DIRECTIVE:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+    re.compile(r"\[PLAN:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+    re.compile(r"\[LESSON:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+)
+
+# Bracket-style marker openers (for open-marker hold detection).
+_BRACKET_MARKER_OPENS = tuple(o for o in _MARKER_OPENS if o.startswith("["))
+
+
+def _strip_all_stream_markers(text: str) -> str:
+    """Strip skill markers AND persistence/recall markers from stream text.
+
+    Used only by SkillStreamFilter so that NO marker — skill, memory,
+    directive, plan, or lesson — can ever leak to the incremental SSE UI
+    stream. The full-response text is processed separately (preserving the
+    raw markers) so persistence handlers still run.
+    """
+    cleaned = text
+    for pat in _STRIP_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+    for pat in _SSE_STRIP_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+    return cleaned.strip()
 
 
 class SkillStreamFilter:
@@ -207,15 +244,20 @@ class SkillStreamFilter:
         if last_open != -1 and (last_close == -1 or last_close < last_open):
             return last_open
 
-        # 2) An open [USE_SKILL: ... without a closing ] yet: hold from '['.
-        idx_open = low.rfind("[use_skill")
-        if idx_open != -1 and low.rfind("]") < idx_open:
-            return idx_open
+        # 2) Any open bracket marker ([USE_SKILL:, [USE_MEMORY:, [PLAN:,
+        #    [LESSON:, [SAVE_MEMORY:, [SAVE_DIRECTIVE:, ...) without a
+        #    closing ] yet: hold from '['.
+        for opener in _BRACKET_MARKER_OPENS:
+            idx_open = low.rfind(opener)
+            if idx_open != -1 and low.rfind("]") < idx_open:
+                return idx_open
 
-        # 3) The tail could be a prefix of a marker opening sequence.
-        for i in range(len(text) - 1, -1, -1):
+        # 3) The tail could be a prefix of a marker opening sequence. Hold
+        # from the EARLIEST such index — returning a later one would release
+        # an already-open '[' while holding its continuation characters.
+        for i in range(len(text)):
             tail = low[i:]
-            if any(op.startswith(tail) for op in _MARKER_OPENS):
+            if tail and any(op.startswith(tail) for op in _MARKER_OPENS):
                 return i
 
         return len(text)
@@ -227,14 +269,14 @@ class SkillStreamFilter:
         hold = self._hold_start(self._buf)
         release = self._buf[:hold]
         # Strip any markers that completed within the released portion.
-        released = _strip_skill_markers(release)
+        released = _strip_all_stream_markers(release)
         self._buf = self._buf[hold:]
         return released
 
     def flush(self) -> str:
         """Return any remaining user-visible text (markers stripped). Call at
         end of stream so nothing is left buffered and the UI can continue."""
-        out = _strip_skill_markers(self._buf)
+        out = _strip_all_stream_markers(self._buf)
         self._buf = ""
         return out
 

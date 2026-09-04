@@ -20,6 +20,7 @@ interface ProviderSwitcherProps {
 // Branded marks per provider (colored monogram + ring). Kept local so this
 // component stays dependency-free; matches the premium dark aesthetic.
 const BRANDS: Record<string, { mark: string; ring: string }> = {
+  glm: { mark: "G", ring: "from-emerald-500/30 to-cyan-500/10 text-emerald-300 border-emerald-500/30" },
   openrouter: { mark: "OR", ring: "from-primary/30 to-primary/10 text-primary border-primary/30" },
   google: { mark: "G", ring: "from-blue-500/30 to-emerald-500/10 text-blue-300 border-blue-500/30" },
   nvidia: { mark: "NV", ring: "from-green-500/30 to-green-500/10 text-green-300 border-green-500/30" },
@@ -34,6 +35,7 @@ const BRANDS: Record<string, { mark: string; ring: string }> = {
 };
 
 const LABELS: Record<string, string> = {
+  glm: "GLM 5.3 Flash (Free)",
   openrouter: "OpenRouter",
   google: "Google AI",
   nvidia: "NVIDIA",
