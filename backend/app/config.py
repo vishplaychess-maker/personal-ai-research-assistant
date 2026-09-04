@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     default_model: str = "dolphin-mistral"
     ollama_tags_timeout: int = 5
 
+    # ── Secrets encryption at rest (Phase — security overhaul) ──
+    # URL-safe base64 Fernet key (32 bytes) used to encrypt API keys before
+    # they are stored. Generate with: python -c "from cryptography.fernet
+    # import Fernet; print(Fernet.generate_key().decode())". If unset, an
+    # ephemeral key is generated per process with a loud log warning.
+    encryption_key: str = ""
+
     # OpenRouter (OpenAI-compatible API)
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"

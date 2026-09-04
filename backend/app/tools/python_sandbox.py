@@ -30,7 +30,12 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 4_000
-CODE_TIMEOUT_SECONDS = 15
+CODE_TIMEOUT_SECONDS = 10
+
+# Hard resource limits for untrusted code execution (Linux only).
+# These are enforced via preexec_fn on the subprocess.
+_SANDBOX_MEMORY_BYTES = 256 * 1024 * 1024  # 256 MB
+_SANDBOX_CPU_SECONDS = 8                    # 8s of CPU time (soft wall is 10s)
 
 # Marker pattern the LLM is instructed (via system prompt) to wrap code in,
 # mirroring terminal_executor's [PROPOSED_COMMAND: ...] convention.
@@ -59,7 +64,14 @@ def format_code_result(code: str, output: str) -> str:
 
 
 async def _run_python_async(code: str) -> str:
-    """Run *code* in a temporary .py file with a 15s timeout and return output."""
+    """Run *code* in a temporary .py file with strict sandbox limits.
+
+    Limits enforced:
+    - Wall-clock timeout: 10 seconds
+    - CPU time limit: 8 seconds
+    - Memory limit: 256 MB (via RLIMIT_AS on Linux)
+    - Process group isolation (os.setsid) so kill-tree works on timeout
+    """
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -68,11 +80,35 @@ async def _run_python_async(code: str) -> str:
             f.write(code)
             tmp_path = f.name
 
+        # Build a preexec_fn that applies resource limits on Linux.
+        # Gracefully degrades on non-Linux (macOS/Windows) or if resource
+        # module is unavailable.
+        preexec = None
+        try:
+            import resource as _resource
+
+            def _sandbox_limits():
+                os.setsid()  # new process group for clean tree-kill
+                _resource.setrlimit(
+                    _resource.RLIMIT_AS,
+                    (_SANDBOX_MEMORY_BYTES, _SANDBOX_MEMORY_BYTES),
+                )
+                _resource.setrlimit(
+                    _resource.RLIMIT_CPU,
+                    (_SANDBOX_CPU_SECONDS, _SANDBOX_CPU_SECONDS),
+                )
+
+            preexec = _sandbox_limits
+        except (ImportError, OSError, ValueError):
+            # Non-Linux or resource limits unsupported; degrade gracefully.
+            pass
+
         process = await asyncio.create_subprocess_exec(
             "python",
             tmp_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            preexec_fn=preexec,
         )
 
         try:
@@ -81,9 +117,17 @@ async def _run_python_async(code: str) -> str:
                 timeout=CODE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            return "[Python Sandbox] Code timed out after %ds" % CODE_TIMEOUT_SECONDS
+            # Kill the entire process group, not just the child.
+            try:
+                import signal as _signal
+                os.killpg(os.getpgid(process.pid), _signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                process.kill()
+            try:
+                await asyncio.wait_for(process.communicate(), timeout=2.0)
+            except (asyncio.TimeoutError, OSError):
+                pass
+            return "[Python Sandbox] Code killed: exceeded %ds timeout or 256MB memory limit" % CODE_TIMEOUT_SECONDS
 
         stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
         stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""

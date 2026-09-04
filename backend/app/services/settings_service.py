@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import AppSetting, UserSetting, UserProvider
+from app.services.encryption_service import encrypt_key, decrypt_key
 
 
 MEMORY_ENABLED_KEY = "memory_enabled"
@@ -73,18 +74,19 @@ def save_user_settings(
     model: str,
 ) -> UserSetting:
     """Upsert the user's LLM provider settings and return the saved row."""
+    stored_key = encrypt_key(api_key) if api_key else ""
     row = db.query(UserSetting).filter(UserSetting.user_id == user_id).first()
     if row is None:
         row = UserSetting(
             user_id=user_id,
             llm_provider=llm_provider,
-            api_key=api_key,
+            api_key=stored_key,
             model=model,
         )
         db.add(row)
     else:
         row.llm_provider = llm_provider
-        row.api_key = api_key
+        row.api_key = stored_key
         row.model = model
     db.commit()
     db.refresh(row)
@@ -142,7 +144,7 @@ def create_user_provider(
     row = UserProvider(
         user_id=user_id,
         provider_name=provider_name.strip().lower(),
-        api_key=(api_key or "").strip(),
+        api_key=encrypt_key(api_key) if api_key else "",
         default_model=(default_model or "").strip(),
         is_active=bool(is_active),
     )
@@ -168,7 +170,7 @@ def update_user_provider(
     if provider_name is not None:
         row.provider_name = provider_name.strip().lower()
     if api_key is not None:
-        row.api_key = api_key.strip()
+        row.api_key = encrypt_key(api_key) if api_key else ""
     if default_model is not None:
         row.default_model = default_model.strip()
     if is_active is not None:
@@ -201,7 +203,7 @@ def get_active_provider_config(db: DBSession, user_id: int) -> Optional[dict]:
         return None
     return {
         "provider": row.provider_name,
-        "api_key": row.api_key or None,
+        "api_key": (decrypt_key(row.api_key) if row.api_key else None),
         "model": row.default_model or None,
     }
 
@@ -221,6 +223,6 @@ def get_user_llm_config(db: DBSession, user_id: int) -> Optional[dict]:
         return None
     return {
         "provider": row.llm_provider,
-        "api_key": row.api_key or None,
+        "api_key": (decrypt_key(row.api_key) if row.api_key else None),
         "model": row.model or None,
     }

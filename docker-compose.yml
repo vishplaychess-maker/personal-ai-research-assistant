@@ -68,6 +68,7 @@ services:
       - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
       - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
       - MCP_CALL_TIMEOUT_S=${MCP_CALL_TIMEOUT_S:-30}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 10s

@@ -4,6 +4,32 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Critical Security & Reliability Overhaul
+- **API key encryption at rest (FIX 1):** New `encryption_service.py` using
+  Fernet (AES) to encrypt API keys before writing to SQLite. Keys are decrypted
+  on read and returned in plaintext to the application; raw DB rows now store
+  opaque `gAAAAA...` tokens. `ENCRYPTION_KEY` env var wires through
+  docker-compose.yml; falls back to an ephemeral key with a warning when unset.
+- **Prompt injection defense (FIX 2):** `SkillStreamFilter` now buffers all
+  protocol markers (`[save_memory`, `[save_directive`, `[python_code`,
+  `[mcp_call`, `[proposed_command`) mid-stream so user-controlled input cannot
+  trigger tool execution from within streaming text. User-input `[USE_SKILL:]`
+  processing removed from `streaming_service.py` (markers are only processed
+  from assistant output). Skill-only `_STRIP_PATTERNS` preserved so SAVE_MEMORY
+  and SAVE_DIRECTIVE markers survive to complete their handler for persistence.
+- **Sandbox isolation (FIX 3):** Python sandbox timeout reduced from 15s to
+  10s. Added `RLIMIT_AS` (256 MB) and `RLIMIT_CPU` (8s) resource limits,
+  `os.setsid()` process group, and `os.killpg()` tree-kill on timeout.
+- **Agent loop guardrails (FIX 4):** LangGraph `recursion_limit` set to 15
+  via invoke-time config (prevents infinite node cycles). New
+  `tokens_generated` counter in `WorkflowState`; `generate_answer` checks a
+  10 000-char budget before each LLM call and returns a "stuck in a loop"
+  message when exceeded. Streaming path also enforces the same cap and emits a
+  `TOKEN_BUDGET_EXCEEDED` SSE error. MCP retry limit kept at 3.
+- New config knobs: `encryption_key` (env var, passthrough).
+- `cryptography` (Fernet) already installed via `python-jose[cryptography]`
+  transitive dependency — no new pip requirement needed.
+
 ### Memory Decay & Forgetting (Phase 2)
 - Added access-tracking columns to the `Memory` model: `last_accessed_at`
   (DateTime, nullable) and `access_count` (Integer, default 0), with a guarded

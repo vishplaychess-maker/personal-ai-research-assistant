@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────
 
 MAX_HISTORY_MESSAGES = 20
+# Agent loop guardrail: rough char-count cap to prevent runaway generation.
+MAX_TOKENS_PER_TASK = 10000
 DEFAULT_SYSTEM_PROMPT = build_base_prompt(
     terminal_enabled=settings.enable_terminal_tool
 )
@@ -412,6 +414,13 @@ async def stream_chat_response(
         ):
             if chunk["type"] == "token":
                 full_response.append(chunk["token"])
+                # Agent loop guardrail: stop streaming if token budget exceeded.
+                if len(full_response) >= MAX_TOKENS_PER_TASK:
+                    yield format_sse("error", {
+                        "code": "TOKEN_BUDGET_EXCEEDED",
+                        "detail": "Generation stopped: token budget exceeded.",
+                    })
+                    return
                 visible = skill_stream.push(chunk["token"])
                 if visible:
                     yield format_sse("token", {"token": visible})

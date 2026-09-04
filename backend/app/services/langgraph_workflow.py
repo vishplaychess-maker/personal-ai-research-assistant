@@ -73,6 +73,9 @@ from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 logger = logging.getLogger(__name__)
 
 MAX_MCP_RETRIES = 3
+# Agent loop guardrails — prevents runaway API costs.
+MAX_AGENT_STEPS = 15       # LangGraph recursion_limit cap
+MAX_TOKENS_PER_TASK = 10000  # rough char-count cap (~2500 tokens)
 
 
 # ── Patchable generate_response wrapper ───────────────────
@@ -129,6 +132,8 @@ class WorkflowState(TypedDict):
     # ── Self-evaluation (F6 Capability 2) ──────────────────
     confidence: Optional[int]             # 0-100 advisory score (None = n/a)
     confidence_reason: Optional[str]      # One-line why for the score
+    # ── Agent loop guardrails ────────────────────────────
+    tokens_generated: int                  # Cumulative char count of LLM output
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
     db: Optional[Any]
@@ -494,6 +499,15 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
     if state.get("error"):
         return state
 
+    # Agent loop guardrail: stop if the task has already generated too much text.
+    if state.get("tokens_generated", 0) >= MAX_TOKENS_PER_TASK:
+        state["error"] = (
+            "Agent loop stopped: token budget exceeded (%d chars). "
+            "The task may be looping or excessively long." % state.get("tokens_generated", 0)
+        )
+        state["response"] = "I'm stuck in a loop — please try a shorter prompt."
+        return state
+
     history = list(state.get("messages", []))
     user_input = state.get("user_input", "")
     image_url = state.get("image_url", None)
@@ -609,6 +623,7 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         except Exception as exc:
             logger.warning("Skill marker processing failed (non-fatal): %s", exc)
         state["response"] = response
+        state["tokens_generated"] = state.get("tokens_generated", 0) + len(response)
     except (ConnectionError, TimeoutError, RuntimeError) as exc:
         state["error"] = str(exc)
         state["response"] = ""
@@ -1255,6 +1270,7 @@ def run_research_workflow(
         "plan_pending": False,
         "confidence": None,
         "confidence_reason": None,
+        "tokens_generated": 0,
         "error": None,
         "db": db,
         "model_name": None,
@@ -1266,10 +1282,16 @@ def run_research_workflow(
         if resume_from is not None:
             final_state = _workflow_app.invoke(
                 initial_state,
-                config={"resume_from": Command(resume=resume_from)},
+                config={
+                    "resume_from": Command(resume=resume_from),
+                    "recursion_limit": MAX_AGENT_STEPS,
+                },
             )
         else:
-            final_state = _workflow_app.invoke(initial_state)
+            final_state = _workflow_app.invoke(
+                initial_state,
+                config={"recursion_limit": MAX_AGENT_STEPS},
+            )
 
     except Exception as exc:
         # LangGraph may raise GraphInterrupt for human-in-the-loop pauses.

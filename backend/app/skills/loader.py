@@ -119,10 +119,16 @@ def extract_skill_calls(text: Optional[str]) -> List[str]:
 
 
 def _strip_skill_markers(text: str) -> str:
-    """Remove all recognised skill markers from text (user never sees them)."""
-    cleaned = SKILL_TAG_PATTERN.sub("", text)
-    cleaned = USE_SKILL_PATTERN.sub("", cleaned)
-    cleaned = PLAIN_SKILL_PATTERN.sub("", cleaned)
+    """Remove all recognised skill activation markers from text.
+
+    Covers the canonical ``<skill>`` tag, legacy ``[USE_SKILL:]`` and plain
+    ``USE SKILL:`` forms. Persistence markers ([SAVE_MEMORY], [SAVE_DIRECTIVE])
+    are NOT stripped here — they must survive into the complete handler so they
+    can be persisted before being removed from the saved response.
+    """
+    cleaned = text
+    for pat in _STRIP_PATTERNS:
+        cleaned = pat.sub("", cleaned)
     return cleaned.strip()
 
 
@@ -146,7 +152,31 @@ def process_skill_markers(text: str) -> str:
 
 # Marker opening sequences. Used by SkillStreamFilter to recognise when the
 # tail of a buffered stream could be the start of a marker that spans tokens.
-_MARKER_OPENS = ("<skill", "[use_skill", "use skill:")
+# Includes the persistence tool markers ([SAVE_MEMORY], [SAVE_DIRECTIVE]) and
+# the code/MCP markers so they are buffered out of the incremental UI stream.
+# Only markers from the ASSISTANT's own output are ever processed — the stream
+# filter operates solely on the model's streamed text, never on user input or
+# scraped web content.
+_MARKER_OPENS = (
+    "<skill",
+    "[use_skill",
+    "use skill:",
+    "[save_memory",
+    "[save_directive",
+    "[python_code",
+    "[mcp_call",
+    "[proposed_command",
+)
+
+# Strip targets: only skill activation markers. Persistence markers
+# ([SAVE_MEMORY], [SAVE_DIRECTIVE]) are stripped later in the "complete"
+# handler after persistence runs, so they must NOT be stripped here —
+# doing so would silently drop them before they can be persisted.
+_STRIP_PATTERNS = (
+    SKILL_TAG_PATTERN,
+    USE_SKILL_PATTERN,
+    PLAIN_SKILL_PATTERN,
+)
 
 
 class SkillStreamFilter:
