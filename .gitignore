@@ -14,6 +14,10 @@ env/
 # Node
 node_modules/
 npm-debug.log*
+*.tsbuildinfo
+
+# Build logs
+build_log.txt
 
 # IDE
 .vscode/
