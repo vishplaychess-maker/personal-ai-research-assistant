@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { getCsrfToken, getAuthHeadersAsync } from "./auth";
+import { apiUrl } from "./apiBase";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export function SystemPromptEditor({
     setError(null);
     try {
       const auth = await getAuthHeadersAsync();
-      const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/system-prompt`), {
         headers: auth.Authorization ? { Authorization: auth.Authorization } : {},
         credentials: "include",
       });
@@ -88,7 +89,7 @@ export function SystemPromptEditor({
       const csrf = getCsrfToken();
       if (csrf) headers["X-CSRF-Token"] = csrf;
 
-      const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/system-prompt`), {
         method: "PATCH",
         headers,
         credentials: "include",
@@ -123,7 +124,7 @@ export function SystemPromptEditor({
       const csrf = getCsrfToken();
       if (csrf) headers["X-CSRF-Token"] = csrf;
 
-      const res = await fetch(`/api/sessions/${sessionId}/system-prompt`, {
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/system-prompt`), {
         method: "PATCH",
         headers,
         credentials: "include",

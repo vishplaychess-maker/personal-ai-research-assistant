@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { API } from "./api";
+import { apiUrl } from "./apiBase";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
@@ -39,7 +40,7 @@ export function MCPTab() {
   const load = useCallback(async()=>{
     setLoading(true);
     try {
-      const res = await fetch("/api/mcp/servers", {credentials:"include", headers: {Authorization: `Bearer ${localStorage.getItem("access_token")||""}`}});
+      const res = await fetch(apiUrl("/api/mcp/servers"), {credentials:"include", headers: {Authorization: `Bearer ${localStorage.getItem("access_token")||""}`}});
       // use API helper for auth/csrf
       const data = await API.listMcpServers();
       setServers(data as any);

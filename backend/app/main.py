@@ -1,6 +1,8 @@
+import json
 import logging
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -13,6 +15,50 @@ from app.database import init_db, engine, SessionLocal
 from app.models.models import User
 
 logger = logging.getLogger(__name__)
+
+
+# ── Structured logging (Phase 5 — cloud deploy) ────────────
+# When LOG_FORMAT=json, emit one JSON object per log line (stdlib only, no
+# external dependency) and override uvicorn's handlers as well. Otherwise
+# current default logging is kept untouched.
+class _JsonLogFormatter(logging.Formatter):
+    """Minimal JSON log formatter: timestamp, level, logger, message."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
+
+def _configure_logging():
+    """Apply JSON logging when LOG_FORMAT=json; no-op otherwise.
+
+    Runs at import time — uvicorn configures its loggers *before* importing
+    the app, so overriding the uvicorn.* handlers here is safe and final.
+    """
+    if settings.log_format.strip().lower() != "json":
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_JsonLogFormatter())
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers = [handler]
+        uvicorn_logger.propagate = False
+
+
+_configure_logging()
+
 from app.routes.sessions import router as sessions_router
 from app.routes.messages import router as messages_router
 from app.routes.documents import router as documents_router
@@ -29,7 +75,22 @@ from app.routes.share import router as share_router
 
 
 def _migrate_database():
-    """Add new columns to existing tables without losing data."""
+    """Add new columns to existing tables without losing data.
+
+    Dialect guard (Phase 5 — cloud deploy): the raw DDL below is historical
+    SQLite migration SQL (AUTOINCREMENT, DROP COLUMN fallbacks). It only runs
+    when the engine dialect is sqlite. On PostgreSQL a fresh install is fully
+    covered by init_db() -> Base.metadata.create_all(); the historical SQLite
+    migrations are deliberately NOT translated.
+    """
+    if engine.dialect.name != "sqlite":
+        logger.info(
+            "Skipping SQLite migrations: engine dialect is '%s' — schema comes "
+            "from Base.metadata.create_all() (fresh PostgreSQL install).",
+            engine.dialect.name,
+        )
+        return
+
     inspector = inspect(engine)
     with engine.connect() as conn:
         # Add columns to documents table if missing
@@ -262,13 +323,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS (Phase 7C) ──────────────────────────────────────
-# Allow only the configured frontend origin, with credentials. Wildcard
+# ── CORS (Phase 7C / Phase 5 cloud) ──────────────────────
+# Allow only the configured frontend origin(s), with credentials. Wildcard
 # origins are never used together with allow_credentials=True. The
 # X-CSRF-Token header must be allowed for double-submit CSRF.
+# CORS_ORIGINS (Phase 5): comma-separated list for production, e.g.
+# "https://app.example.com,https://app2.example.com". Falls back to
+# FRONTEND_ORIGIN when unset.
+_cors_origins = [
+    o.strip() for o in settings.cors_origins.split(",") if o.strip()
+] or [settings.frontend_origin]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     # Explicit header allow-list: Authorization (bearer), Content-Type, and
@@ -295,10 +363,24 @@ app.include_router(share_router)
 
 @app.get("/api/health")
 async def health_check():
-    """Check whether Backend, ChromaDB, and Ollama are reachable."""
+    """Check whether Backend, Database, ChromaDB, and Ollama are reachable."""
     backend_status = "ok"
     chromadb_status = "unavailable"
     ollama_status = "unavailable"
+    # Phase 5 (cloud): report database dialect + connectivity. A managed
+    # Postgres outage shows up as "unavailable" without crashing the probe.
+    database_status = "unknown"
+    database_dialect = engine.dialect.name
+
+    try:
+        from sqlalchemy import text as _sa_text
+
+        with engine.connect() as conn:
+            conn.execute(_sa_text("SELECT 1"))
+        database_status = "connected"
+    except Exception as exc:
+        database_status = "unavailable"
+        logger.warning("Database health probe failed: %s", exc)
 
     # Check ChromaDB ──────────────────────────────────────────────
     try:
@@ -320,6 +402,8 @@ async def health_check():
 
     return {
         "backend": backend_status,
+        "database": database_status,
+        "database_dialect": database_dialect,
         "chromadb": chromadb_status,
         "ollama": ollama_status,
     }

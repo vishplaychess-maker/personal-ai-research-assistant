@@ -9,6 +9,7 @@
  */
 
 import type { UserInfo, LoginRequest, RegisterRequest, LoginResponse, RefreshResponse, AuthSession } from "./types";
+import { apiUrl } from "./apiBase";
 
 // ── Storage keys ──────────────────────────────────────────
 
@@ -183,7 +184,7 @@ export async function refreshAccessToken(): Promise<boolean> {
 
   _refreshPromise = (async () => {
     try {
-      const res = await fetch("/api/auth/refresh", {
+      const res = await fetch(apiUrl("/api/auth/refresh"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
         credentials: "include",
@@ -224,10 +225,8 @@ export async function refreshAccessToken(): Promise<boolean> {
 
 // ── Auth API calls ────────────────────────────────────────
 
-const API_BASE = "";
-
 async function authRequest<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, {
+  const res = await fetch(apiUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -248,7 +247,7 @@ export async function loginUser(
   // response contains only the access token.
   _accessToken = data.access_token;
   // Fetch user info with the new access token
-  const res = await fetch("/api/auth/me", {
+  const res = await fetch(apiUrl("/api/auth/me"), {
     headers: { Authorization: `Bearer ${data.access_token}` },
     credentials: "include",
   });
@@ -270,7 +269,7 @@ export async function logout(): Promise<void> {
   const accessToken = _accessToken;
   try {
     if (accessToken) {
-      await fetch("/api/auth/logout", {
+      await fetch(apiUrl("/api/auth/logout"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -298,7 +297,7 @@ export async function restoreSession(): Promise<UserInfo | null> {
   }
   // Fetch user info
   try {
-    const res = await fetch("/api/auth/me", {
+    const res = await fetch(apiUrl("/api/auth/me"), {
       headers: { Authorization: `Bearer ${_accessToken}` },
       credentials: "include",
     });
@@ -333,7 +332,7 @@ export async function listAuthSessions(): Promise<AuthSession[]> {
   }
   const headers: Record<string, string> = getAuthHeaders();
 
-  const res = await fetch("/api/auth/sessions", {
+  const res = await fetch(apiUrl("/api/auth/sessions"), {
     headers,
     credentials: "include",
   });

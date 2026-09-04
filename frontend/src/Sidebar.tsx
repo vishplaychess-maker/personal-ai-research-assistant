@@ -20,6 +20,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { getAuthHeadersAsync } from "./auth";
+import { apiUrl } from "./apiBase";
 import { useTheme } from "./components/ThemeProvider";
 import { Button } from "./components/ui/button";
 import { ScrollArea } from "./components/ui/scroll-area";
@@ -108,7 +109,7 @@ export function Sidebar({
     setSearchError(null);
     try {
       const auth = await getAuthHeadersAsync();
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`, {
+      const res = await fetch(apiUrl(`/api/search?q=${encodeURIComponent(query.trim())}`), {
         headers: auth.Authorization ? { Authorization: auth.Authorization } : {},
         signal: controller.signal,
       });

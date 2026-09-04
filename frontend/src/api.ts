@@ -26,6 +26,7 @@ import type {
   ShareCreateResult,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
+import { apiUrl } from "./apiBase";
 
 // Callback invoked when a 401 is received (used to trigger logout)
 let _onUnauthorized: (() => void) | null = null;
@@ -76,7 +77,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
       headers["X-CSRF-Token"] = csrf;
     }
   }
-  let res = await fetch(url, { headers, credentials: "include", ...options });
+  let res = await fetch(apiUrl(url), { headers, credentials: "include", ...options });
   // Phase 7B: auto-refresh on 401 (try once)
   if (res.status === 401 && token) {
     const refreshed = await refreshAccessToken();
@@ -93,7 +94,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
             headers["X-CSRF-Token"] = csrf;
           }
         }
-        res = await fetch(url, { headers, credentials: "include", ...options });
+        res = await fetch(apiUrl(url), { headers, credentials: "include", ...options });
       }
     }
   }

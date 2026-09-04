@@ -1,6 +1,9 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
+# PostgreSQL driver — production deployments only. The dev SQLite setup does
+# not need it locally; the production image pulls it during build.
+psycopg2-binary==2.9.10
 pydantic==2.9.0
 pydantic-settings==2.5.2  # bumped from 2.5.0: mcp 1.12.4 requires pydantic-settings>=2.5.2
 httpx==0.27.2

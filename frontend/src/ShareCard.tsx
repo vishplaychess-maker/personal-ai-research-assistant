@@ -17,6 +17,7 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import type { PublicSharedAgent } from "./types";
+import { apiUrl } from "./apiBase";
 
 interface ShareCardProps {
   shareId: string;
@@ -34,7 +35,7 @@ function ShareCard({ shareId }: ShareCardProps) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/share/agents/${encodeURIComponent(shareId)}`);
+        const res = await fetch(apiUrl(`/api/share/agents/${encodeURIComponent(shareId)}`));
         if (!res.ok) {
           const body = await res.json().catch(() => ({ detail: "Not found" }));
           throw new Error(body.detail || "Not found");

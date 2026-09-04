@@ -39,6 +39,10 @@ services:
       # 127.0.0.1 is reached via host.docker.internal (same pattern as Ollama).
       - GLM_BASE_URL=${GLM_BASE_URL:-http://host.docker.internal:8320/v1}
       - GLM_MODEL=${GLM_MODEL:-glm-5.3-flash}
+      # Phase 5: key passthrough (empty defaults keep local dev unchanged).
+      # VERDENT_API_KEY is honoured by the GLM provider as a fallback key.
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - VERDENT_API_KEY=${VERDENT_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.2-3b-instruct:free}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}

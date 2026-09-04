@@ -1,0 +1,100 @@
+# ── Phase 5 — Production deployment (Render / any Docker host) ─────────
+# Backend service ONLY. On cloud platforms the remaining pieces are managed:
+#   - PostgreSQL: bring your own managed database (Render Postgres, Neon,
+#     RDS, ...) via DATABASE_URL.
+#   - Frontend:   deploy on Vercel (see frontend/vercel.json) or self-host
+#     with frontend/Dockerfile.prod.
+#   - ChromaDB:   optional in cloud — /api/health reports it as "unavailable"
+#     which is acceptable; document Q&A features degrade gracefully.
+#
+# Local development is unchanged: use docker-compose.yml (SQLite + dev
+# frontend + ChromaDB on 127.0.0.1:8080/5173).
+#
+# Validate: docker compose -f docker-compose.prod.yml config --quiet
+
+services:
+  backend:
+    build: ./backend
+    container_name: research-assistant-backend-prod
+    # TODO: Render maps the public port automatically; this host port is for
+    # self-managed Docker hosts. PORT inside the container is 8000 here.
+    ports:
+      - "8000:8000"
+    environment:
+      # TODO: set your Render PostgreSQL DATABASE_URL (required). If left
+      # unset the backend falls back to a local SQLite file — configure the
+      # managed Postgres URL before going live.
+      # (Render gives a "postgres://" URL; the backend normalizes it to
+      # "postgresql://" automatically).
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/app.db}
+      # TODO: comma-separated list of allowed browser origins (your Vercel
+      # domain). Never use "*" — auth cookies require exact origins.
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN:-}
+      # TODO: the GLM Free Router is host-local; in the cloud point this at
+      # your GLM-compatible endpoint or leave unset and rely on the provider
+      # fallback chain (GLM -> free provider -> Ollama).
+      - GLM_BASE_URL=${GLM_BASE_URL:-}
+      - GLM_MODEL=${GLM_MODEL:-glm-5.3-flash}
+      # API key passthrough — set these in your platform's secret store,
+      # never commit real values.
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - VERDENT_API_KEY=${VERDENT_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-glm}
+      # Structured logs for cloud log drains ("json" or "text").
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      # Auth / security (required in production).
+      # TODO: set a strong random JWT_SECRET. If left unset it defaults to
+      # the insecure placeholder, and because PRODUCTION_MODE=true below the
+      # backend REFUSES TO START — a deliberate loud failure.
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - PRODUCTION_MODE=${PRODUCTION_MODE:-true}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ENABLE_MULTI_AGENT=${ENABLE_MULTI_AGENT:-true}
+      - ENABLE_DEEP_RESEARCH=${ENABLE_DEEP_RESEARCH:-true}
+      - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
+      - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
+      - OLLAMA_HOST=${OLLAMA_HOST:-localhost}
+      - OLLAMA_PORT=${OLLAMA_PORT:-11434}
+      - CHROMADB_HOST=${CHROMADB_HOST:-localhost}
+      - CHROMADB_PORT=${CHROMADB_PORT:-8000}
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - prod-network
+
+  # ── Optional local PostgreSQL (commented out) ─────────────────────────
+  # You bring a MANAGED PostgreSQL in production (Render Postgres, Neon,
+  # RDS...). Uncomment only for self-hosted testing:
+  #
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: research-assistant-postgres
+  #   environment:
+  #     - POSTGRES_DB=research_assistant
+  #     - POSTGRES_USER=research
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me-too}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - prod-network
+  #   restart: always
+  #
+  # Then set:
+  #   DATABASE_URL=postgresql://research:PASSWORD@postgres:5432/research_assistant
+  # ...and add `depends_on: [postgres]` + `links` to the backend service.
+
+networks:
+  prod-network:
+    driver: bridge
+
+# Only used by the optional commented postgres service above.
+# volumes:
+#   postgres_data:

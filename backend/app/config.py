@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"
     # Allowed CORS origin for the frontend (never "*" with credentials).
     frontend_origin: str = "http://localhost:5173"
+    # Phase 5 (cloud): comma-separated list of extra CORS origins for
+    # production, e.g. "https://app.example.com,https://www.example.com".
+    # Falls back to frontend_origin when empty.
+    cors_origins: str = ""
+    # Log output format: "text" (default, current behavior) or "json"
+    # (structured one-JSON-per-line logging for cloud log drains).
+    log_format: str = "text"
 
     # ── Terminal tool (Phase 9 — Agent Tools) ─────────────
     # Enable the terminal executor tool for the AI agent.

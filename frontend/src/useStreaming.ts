@@ -8,6 +8,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { getCsrfToken, getAuthHeadersAsync } from "./auth";
+import { apiUrl } from "./apiBase";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ export function useStreaming() {
         if (csrf) headers["X-CSRF-Token"] = csrf;
 
         const response = await fetch(
-          `/api/sessions/${sessionId}/messages/stream`,
+          apiUrl(`/api/sessions/${sessionId}/messages/stream`),
           {
             method: "POST",
             headers,

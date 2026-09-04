@@ -110,6 +110,68 @@ docker compose down -v
 
 ---
 
+## Production Deployment (Phase 5)
+
+Cloud topology: **backend on Render (Docker)**, **frontend on Vercel**,
+**PostgreSQL managed by your provider**. Local development keeps using
+`docker-compose.yml` (SQLite, dev frontend) and is unchanged.
+
+### 1. Backend on Render
+
+1. Push this branch; Render → New → Web Service → deploy from the repo with
+   Docker. Render detects the root of `backend/` if you set the Docker
+   context/`Dockerfile` path to `backend` in `render.yaml` or the dashboard.
+2. Set environment variables (template in `.env.production.example`; full
+   reference in `ENV_EXAMPLE.md`):
+
+   | Variable | Value |
+   | --- | --- |
+   | `DATABASE_URL` | TODO: your managed Postgres URL (`postgres://...` is auto-normalized to `postgresql://...`) |
+   | `CORS_ORIGINS` | TODO: `https://your-app.vercel.app` (comma-separated for more) |
+   | `FRONTEND_ORIGIN` | Same origin as above (fallback when `CORS_ORIGINS` is empty) |
+   | `JWT_SECRET` | Strong random hex (startup fails without it in prod mode) |
+   | `PRODUCTION_MODE` | `true` |
+   | `COOKIE_SECURE` | `true` |
+   | `ENCRYPTION_KEY` | Fernet key (see `.env.production.example`) |
+   | `LOG_FORMAT` | `json` |
+   | `GLM_BASE_URL` | TODO: the GLM Free Router is host-local — point this at your cloud GLM-compatible endpoint, or leave unset and rely on the fallback chain (GLM → free provider → Ollama) with at least one cloud provider key configured |
+   | `GLM_API_KEY` / `VERDENT_API_KEY` | Optional GLM keys |
+
+   For self-managed Docker hosts, a backend-only production compose is
+   provided: `docker compose -f docker-compose.prod.yml up -d --build`
+   (port 8000, health check on `/api/health`; an optional commented
+   postgres service is included).
+3. Health: `/api/health` now reports `database` (`connected`/`unavailable`)
+   and `database_dialect` alongside `backend`, `chromadb`, `ollama`.
+
+### 2. Frontend on Vercel
+
+- Import the repo, set the root directory to `frontend/`. `frontend/vercel.json`
+  contains SPA rewrites **including `/share/agents/:id`** (public ShareCard
+  deep links) and an `/api/:path*` rewrite to the backend.
+- TODO: edit `frontend/vercel.json` and replace
+  `https://YOUR-RENDER-APP.onrender.com/api/:path*` with your Render URL.
+- **Recommended:** keep the `/api` rewrite (same-site) — auth cookies and the
+  double-submit CSRF flow keep working with no extra CORS setup. Do **not**
+  set `VITE_API_BASE_URL` in this mode.
+- **Alternative (cross-origin):** remove the `/api/:path*` rewrite, set
+  `VITE_API_BASE_URL=https://YOUR-RENDER-APP.onrender.com` in Vercel env
+  vars, and set the backend's `CORS_ORIGINS` to your Vercel domain. Cross-site
+  cookies then need `COOKIE_SECURE=true` and `COOKIE_SAMESITE=none`.
+- The frontend defaults to relative `/api` calls
+  (`VITE_API_BASE_URL` unset = current behavior, byte-identical).
+
+### 3. PostgreSQL notes
+
+- First deploy on an empty database runs `Base.metadata.create_all()` — no
+  manual migration step.
+- Historical raw-SQL migrations are SQLite-only and are **skipped
+  automatically** on PostgreSQL (dialect guard in `_migrate_database()`).
+- Search uses `ILIKE` on PostgreSQL (case-insensitive) and `LIKE` on SQLite —
+  behavior is unchanged locally.
+
+---
+
 ## Project Structure
 
 ```

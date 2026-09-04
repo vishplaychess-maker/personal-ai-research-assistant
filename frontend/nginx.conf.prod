@@ -1,0 +1,33 @@
+# nginx config for the production frontend image (frontend/Dockerfile.prod).
+# SPA fallback + /api reverse proxy to the backend.
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Single-page app: every unknown route serves index.html,
+    # including /share/agents/:id (ShareCard deep links).
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Optional same-site /api proxy. Uncomment and set your backend origin
+    # BEFORE building if you want nginx to forward API calls (keeps auth
+    # cookies and double-submit CSRF working without extra CORS setup):
+    #
+    # location /api/ {
+    #     # TODO: replace with your deployed backend origin (e.g. Render).
+    #     proxy_pass http://your-render-app.onrender.com;
+    #     proxy_http_version 1.1;
+    #     proxy_set_header Host $host;
+    #     proxy_set_header X-Real-IP $remote_addr;
+    #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    #     proxy_set_header X-Forwarded-Proto $scheme;
+    #     # Streaming chat (SSE) needs buffering disabled.
+    #     proxy_buffering off;
+    #     proxy_read_timeout 300s;
+    # }
+}
