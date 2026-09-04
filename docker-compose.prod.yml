@@ -17,10 +17,15 @@ services:
     build: ./backend
     container_name: research-assistant-backend-prod
     # TODO: Render maps the public port automatically; this host port is for
-    # self-managed Docker hosts. PORT inside the container is 8000 here.
+    # self-managed Docker hosts. The environment block below sets PORT=8000,
+    # matching both sides of the 8000:8000 mapping and the healthcheck.
     ports:
       - "8000:8000"
     environment:
+      # Must match the host port in `ports` above: backend/Dockerfile defaults
+      # to PORT=8080, so without this the container would listen on 8080 while
+      # the mapping and healthcheck expect 8000.
+      - PORT=8000
       # TODO: set your Render PostgreSQL DATABASE_URL (required). If left
       # unset the backend falls back to a local SQLite file — configure the
       # managed Postgres URL before going live.

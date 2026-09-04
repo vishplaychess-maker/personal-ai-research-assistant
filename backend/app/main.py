@@ -276,6 +276,19 @@ def _validate_jwt_secret():
         logger.info("JWT secret configured (custom value, not default)")
 
 
+def _warn_ephemeral_sqlite_in_production():
+    """Warn loudly (but do not refuse to start) when production mode runs on
+    the default ephemeral SQLite database instead of a managed PostgreSQL."""
+    if settings.production_mode and settings.database_url.startswith("sqlite"):
+        logger.warning(
+            "PRODUCTION_MODE is enabled but DATABASE_URL is a SQLite database "
+            "(%s) — data will be EPHEMERAL unless the file is on a persistent "
+            "volume. Configure DATABASE_URL with a managed PostgreSQL URL "
+            "(e.g. Render Postgres / Neon / RDS) before going live.",
+            settings.database_url,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create tables and default user on startup."""
@@ -284,6 +297,7 @@ async def lifespan(app: FastAPI):
     Path("/data/uploads").mkdir(parents=True, exist_ok=True)
 
     _validate_jwt_secret()
+    _warn_ephemeral_sqlite_in_production()
     init_db()
     _migrate_database()
     _create_default_user()
