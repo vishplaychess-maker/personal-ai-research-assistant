@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # When true, the agent can propose shell commands for user approval.
     enable_terminal_tool: bool = False
 
+    # ── Multi-agent collaboration (Phase 3) ──────────────
+    # When true, complex build/code tasks are routed through the
+    # Researcher -> Coder -> Reviewer team (max 2 review retries).
+    # Simple questions always use the normal single-agent path.
+    enable_multi_agent: bool = True
+
     # ── MCP tools (Phase 1) ──────────────────────────────
     enable_mcp_tool: bool = False
     mcp_call_timeout_s: int = 30

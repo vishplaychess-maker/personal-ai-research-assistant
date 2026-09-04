@@ -28,6 +28,7 @@ export interface StreamCallbacks {
   onStart?: () => void;
   onToken?: (token: string) => void;
   onPlan?: (steps: Array<Record<string, unknown>>) => void;
+  onAgentStatus?: (data: { agent: string; message: string }) => void;
   onComplete?: (result: StreamResult) => void;
   onError?: (error: StreamError) => void;
   onCancelled?: () => void;
@@ -37,7 +38,7 @@ export interface StreamCallbacks {
 // ── SSE Parser ────────────────────────────────────────────
 
 interface ParsedEvent {
-  type: "start" | "token" | "plan" | "complete" | "error" | "cancelled" | "tool_approval_required";
+  type: "start" | "token" | "plan" | "agent_status" | "complete" | "error" | "cancelled" | "tool_approval_required";
   data: Record<string, unknown>;
 }
 
@@ -280,6 +281,13 @@ actualCallbacks.onError?.({
                 actualCallbacks.onPlan?.(
                   (event.data.steps as Array<Record<string, unknown>>) || []
                 );
+                break;
+              }
+              case "agent_status": {
+                actualCallbacks.onAgentStatus?.({
+                  agent: (event.data.agent as string) || "unknown",
+                  message: (event.data.message as string) || "",
+                });
                 break;
               }
             }

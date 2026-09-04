@@ -9,6 +9,17 @@ Nodes:
   deep_research           — Deep Research Mode: autonomous Tavily search + scrape when the
                             user supplied no URL (bounded, never loops).
   generate_answer         — Call LLM; detect proposed commands; interrupt for approval if needed.
+  route_task              — Phase 3: detect complex build/code tasks and route them to the
+                            multi-agent team (Researcher -> Coder -> Reviewer); anything
+                            else falls through to the normal single-agent path.
+  agent_research          — Researcher persona: turns the request + gathered context into
+                            an unambiguous research brief for the Coder.
+  agent_code              — Coder persona: writes the implementation, runs it in the
+                            sandbox, and may propose terminal commands (HITL approval).
+  agent_review            — Reviewer persona: quality gate with Cap 3 directives; approves
+                            (final answer = reviewer output) or sends feedback back to the
+                            Coder. Max MAX_REVIEW_RETRIES rejected cycles, then forced
+                            approval so the team can never deadlock.
   ask_terminal_approval   — interrupt() — pause graph, return approval request to user.
   execute_terminal        — Run the approved command and store output.
   skip_terminal           — No-op when user denies the command.
@@ -18,8 +29,16 @@ Nodes:
 
 Graph (normal path):
   load_context -> generate_plan -> retrieve_memories -> retrieve_context
-    -> browse_web -> deep_research -> generate_answer
+    -> browse_web -> deep_research -> route_task -> generate_answer
     -> save_output -> extract_memory -> END
+
+Graph (multi-agent path, Phase 3 — complex build/code tasks only):
+  load_context -> ... -> route_task -> agent_research (Researcher)
+    -> agent_code (Coder, sandbox auto-run)
+      -> agent_review (Reviewer, max 2 rejected cycles then forced approval)
+        -> approved -> self_evaluate -> save_output -> extract_memory -> END
+        OR revise -> agent_code (with feedback)
+        OR research -> agent_research (bounded re-research)
 
 Graph (terminal approval path):
   load_context -> retrieve_memories -> retrieve_context -> browse_web
@@ -68,13 +87,21 @@ from app.tools.terminal_executor import (
     format_result_message,
 )
 from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
+from app.services.agent_personas import (
+    AGENT_PERSONAS,
+    MAX_REVIEW_RETRIES,
+    detect_complex_task,
+    parse_review_verdict,
+    review_round_block,
+)
 
 
 logger = logging.getLogger(__name__)
 
 MAX_MCP_RETRIES = 3
 # Agent loop guardrails — prevents runaway API costs.
-MAX_AGENT_STEPS = 15       # LangGraph recursion_limit cap
+MAX_AGENT_STEPS = 24       # LangGraph recursion_limit cap (multi-agent worst
+                           # case: 3 coder + 3 review + 1 re-research round trip)
 MAX_TOKENS_PER_TASK = 10000  # rough char-count cap (~2500 tokens)
 
 
@@ -134,6 +161,16 @@ class WorkflowState(TypedDict):
     confidence_reason: Optional[str]      # One-line why for the score
     # ── Agent loop guardrails ────────────────────────────
     tokens_generated: int                  # Cumulative char count of LLM output
+    # ── Multi-agent collaboration (Phase 3) ──────────────
+    multi_agent: bool                # True when routed to the Researcher/Coder/Reviewer team
+    agent_brief: str                 # Researcher's research brief for the Coder
+    coder_output: str                # Coder's latest output (code + explanation)
+    agent_code_result: str           # Sandbox result for the Coder's latest code
+    review_feedback: str             # Reviewer feedback driving the next revision
+    review_retries: int              # Completed REJECTED review cycles (max MAX_REVIEW_RETRIES)
+    review_approved: bool            # Final Reviewer verdict
+    review_needs_research: bool      # Reviewer asked the Researcher for more info
+    researcher_rounds: int           # Times the Researcher ran (bounded re-research)
     # ── Meta ──────────────────────────────────────────────
     error: Optional[str]
     db: Optional[Any]
@@ -382,6 +419,346 @@ def deep_research(state: WorkflowState) -> WorkflowState:
             state.get("user_id", 1), user_input,
         )
     return state
+
+
+# ── Node: route_task (Phase 3 multi-agent router) ──────────
+# Additive router: complex build/code tasks go to the Researcher -> Coder ->
+# Reviewer team; everything else falls through to the existing single-agent
+# path untouched.
+
+
+def route_task(state: WorkflowState) -> WorkflowState:
+    """Decide between the single-agent path and the multi-agent team."""
+    if state.get("error"):
+        state["multi_agent"] = False
+        return state
+
+    is_complex = (
+        settings.enable_multi_agent
+        and not state.get("image_url")
+        and detect_complex_task(state.get("user_input", ""))
+    )
+    state["multi_agent"] = bool(is_complex)
+    if is_complex:
+        logger.info(
+            "Multi-agent router: delegating session %s to the "
+            "Researcher/Coder/Reviewer team",
+            state.get("session_id"),
+        )
+    return state
+
+
+def _route_task(state: WorkflowState) -> str:
+    return "multi_agent" if state.get("multi_agent") else "single_agent"
+
+
+def _agent_provider_config(state: WorkflowState):
+    """Per-user provider config with the session model override applied."""
+    db: DBSession = state.get("db")
+    provider_config = get_user_llm_config(db, state.get("user_id", 1)) if db else None
+    if state.get("model_name") and provider_config is not None:
+        provider_config = dict(provider_config)
+        provider_config["model"] = state["model_name"]
+    return provider_config
+
+
+def _agent_history(state: WorkflowState) -> List[Dict[str, Any]]:
+    """Conversation history with the current user message appended."""
+    history = list(state.get("messages", []))
+    user_input = state.get("user_input", "")
+    if not history or history[-1].get("content") != user_input:
+        history.append({"role": "user", "content": user_input})
+    return history
+
+
+def _token_budget_exceeded(state: WorkflowState) -> bool:
+    return state.get("tokens_generated", 0) >= MAX_TOKENS_PER_TASK
+
+
+# ── Node: agent_research (Researcher persona) ──────────────
+
+
+def agent_research(state: WorkflowState) -> WorkflowState:
+    """Researcher: turn the request + gathered context into a research brief."""
+    if state.get("error"):
+        return state
+
+    state["researcher_rounds"] = state.get("researcher_rounds", 0) + 1
+
+    # Resume short-circuit: a pending command approval means the Coder
+    # already produced its output in a previous (interrupted) invocation.
+    if state.get("pending_command"):
+        return state
+
+    if _token_budget_exceeded(state):
+        state["error"] = (
+            "Multi-agent run stopped: token budget exceeded (%d chars)."
+            % state.get("tokens_generated", 0)
+        )
+        state["response"] = "I'm stuck in a loop — please try a shorter prompt."
+        return state
+
+    provider_config = _agent_provider_config(state)
+    system_parts = [AGENT_PERSONAS["researcher"]["system_prompt"]]
+    for key in ("retrieved_context", "web_context", "deep_research_context"):
+        if state.get(key):
+            system_parts.append(state[key])
+
+    try:
+        brief = generate_response(
+            messages=_agent_history(state),
+            system_prompt="\n\n".join(system_parts),
+            model_name=state.get("model_name"),
+            provider_config=provider_config,
+        )
+    except (ConnectionError, TimeoutError, RuntimeError) as exc:
+        state["error"] = str(exc)
+        state["response"] = ""
+        return state
+
+    state["agent_brief"] = brief
+    state["tokens_generated"] = state.get("tokens_generated", 0) + len(brief)
+    return state
+
+
+# ── Node: agent_code (Coder persona) ───────────────────────
+
+
+def agent_code(state: WorkflowState) -> WorkflowState:
+    """Coder: write (or revise) the implementation and run it in the sandbox."""
+    if state.get("error"):
+        return state
+
+    # Resume short-circuit: reload the Coder's saved output from the DB
+    # placeholder so the terminal approval can complete without a new LLM call.
+    if state.get("pending_command") and state.get("assistant_message_id"):
+        db: DBSession = state["db"]
+        saved = db.query(Message).filter(
+            Message.id == state["assistant_message_id"]
+        ).first()
+        if saved:
+            state["coder_output"] = saved.content
+            return state
+
+    if _token_budget_exceeded(state):
+        state["error"] = (
+            "Multi-agent run stopped: token budget exceeded (%d chars)."
+            % state.get("tokens_generated", 0)
+        )
+        state["response"] = "I'm stuck in a loop — please try a shorter prompt."
+        return state
+
+    provider_config = _agent_provider_config(state)
+    system_parts = [AGENT_PERSONAS["coder"]["system_prompt"]]
+
+    # Terminal access (HITL): the Coder may propose commands for approval.
+    if settings.enable_terminal_tool:
+        from app.services.system_prompts import TERMINAL_TOOL_CONTEXT
+        system_parts.append(TERMINAL_TOOL_CONTEXT)
+
+    if state.get("agent_brief"):
+        system_parts.append(
+            "=== Research Brief (from the Researcher) ===\n" + state["agent_brief"]
+        )
+    if state.get("review_feedback"):
+        system_parts.append(
+            "=== Reviewer Feedback (address EVERY point) ===\n"
+            + state["review_feedback"]
+        )
+
+    try:
+        response = generate_response(
+            messages=_agent_history(state),
+            system_prompt="\n\n".join(system_parts),
+            model_name=state.get("model_name"),
+            provider_config=provider_config,
+        )
+    except (ConnectionError, TimeoutError, RuntimeError) as exc:
+        state["error"] = str(exc)
+        state["response"] = ""
+        return state
+
+    state["coder_output"] = response
+    state["tokens_generated"] = state.get("tokens_generated", 0) + len(response)
+
+    # Sandbox: auto-execute emitted Python code (same policy as the
+    # single-agent path) so the Reviewer sees real run results.
+    code = extract_python_code(response)
+    if code:
+        logger.info("Multi-agent Coder emitted Python code (%d chars)", len(code))
+        result = run_python_code(code)
+        state["agent_code_result"] = format_code_result(code, result)
+    else:
+        state["agent_code_result"] = ""
+
+    # Terminal (HITL): a proposed command pauses the graph for user approval.
+    if settings.enable_terminal_tool and not state.get("pending_command"):
+        command = extract_proposed_command(response)
+        if command:
+            logger.info("Multi-agent Coder proposed command: %s", command)
+            state["pending_command"] = command
+            state["command_approved"] = None
+            state["command_result"] = ""
+            # Save a placeholder message so the approval metadata can be
+            # attached and the resume path can reload the Coder's output.
+            db: DBSession = state["db"]
+            assistant_msg = Message(
+                session_id=state["session_id"],
+                role=MessageRole.assistant,
+                content=response,
+            )
+            db.add(assistant_msg)
+            db.commit()
+            db.refresh(assistant_msg)
+            state["assistant_message_id"] = assistant_msg.id
+
+    return state
+
+
+# ── Node: agent_review (Reviewer persona) ──────────────────
+
+
+def agent_review(state: WorkflowState) -> WorkflowState:
+    """Reviewer: quality gate with Cap 3 directives; approves or sends back.
+
+    Loop safety: after MAX_REVIEW_RETRIES rejected cycles the Reviewer is
+    required to approve the best version, and the workflow force-approves
+    even if the verdict marker is missing (fail-open so the user always
+    gets an answer).
+    """
+    if state.get("error"):
+        return state
+
+    if _token_budget_exceeded(state):
+        state["error"] = (
+            "Multi-agent run stopped: token budget exceeded (%d chars)."
+            % state.get("tokens_generated", 0)
+        )
+        state["response"] = "I'm stuck in a loop — please try a shorter prompt."
+        return state
+
+    rounds = state.get("review_retries", 0)
+    provider_config = _agent_provider_config(state)
+
+    system_parts = [
+        AGENT_PERSONAS["reviewer"]["system_prompt"],
+        review_round_block(rounds),
+    ]
+
+    # F6 Cap 3: the Reviewer applies learned "Lessons Learned" directives.
+    db: DBSession = state.get("db")
+    if db is not None:
+        try:
+            from app.services.system_prompts import directives_context
+
+            directive_block = directives_context(db, state.get("user_id", 1))
+            if directive_block:
+                system_parts.append(directive_block)
+        except Exception as exc:
+            logger.warning("Reviewer directive injection failed (non-fatal): %s", exc)
+
+    system_parts.append("=== Original Request ===\n" + state.get("user_input", ""))
+    if state.get("agent_brief"):
+        system_parts.append(
+            "=== Research Brief (from the Researcher) ===\n" + state["agent_brief"]
+        )
+    system_parts.append("=== Coder Output (under review) ===\n" + state.get("coder_output", ""))
+    if state.get("agent_code_result"):
+        system_parts.append(
+            "=== Sandbox Result ===\n" + state["agent_code_result"]
+        )
+    if state.get("command_result"):
+        system_parts.append(
+            "=== Terminal Result (user-approved command) ===\n" + state["command_result"]
+        )
+
+    try:
+        review = generate_response(
+            messages=_agent_history(state),
+            system_prompt="\n\n".join(system_parts),
+            model_name=state.get("model_name"),
+            provider_config=provider_config,
+        )
+    except (ConnectionError, TimeoutError, RuntimeError) as exc:
+        state["error"] = str(exc)
+        state["response"] = ""
+        return state
+
+    state["tokens_generated"] = state.get("tokens_generated", 0) + len(review)
+
+    # Cap 3: persist any [SAVE_DIRECTIVE: ...] the Reviewer emitted and
+    # strip the markers so they never reach the user.
+    if db is not None:
+        try:
+            from app.tools.directive_tool import process_directive_markers
+
+            review, saved_directives = process_directive_markers(
+                review, db, state.get("user_id", 1)
+            )
+            if saved_directives:
+                logger.info(
+                    "Multi-agent Reviewer saved %d directive(s)",
+                    saved_directives,
+                )
+        except Exception as exc:
+            logger.warning("Reviewer directive save failed (non-fatal): %s", exc)
+
+    verdict = parse_review_verdict(review)
+    force_approve = rounds >= MAX_REVIEW_RETRIES
+
+    if verdict["approved"] or force_approve:
+        if force_approve and not verdict["approved"]:
+            logger.info(
+                "Multi-agent review hit the %d-retry limit — forcing approval",
+                MAX_REVIEW_RETRIES,
+            )
+        state["review_approved"] = True
+        state["review_needs_research"] = False
+        final_text = verdict["cleaned"] or state.get("coder_output", "")
+        state["response"] = final_text
+        # The approved Reviewer output replaces any Coder placeholder.
+        msg_id = state.get("assistant_message_id")
+        if msg_id and db is not None:
+            msg = db.query(Message).filter(Message.id == msg_id).first()
+            if msg:
+                msg.content = final_text
+                db.commit()
+        return state
+
+    state["review_approved"] = False
+    state["review_needs_research"] = verdict["needs_research"]
+    state["review_feedback"] = verdict["feedback"] or verdict["cleaned"]
+    state["review_retries"] = rounds + 1
+    state["response"] = ""
+    logger.info(
+        "Multi-agent review rejected (cycle %d/%d)%s",
+        rounds + 1, MAX_REVIEW_RETRIES,
+        " — routing to Researcher" if verdict["needs_research"] else "",
+    )
+    return state
+
+
+def _route_after_review(state: WorkflowState) -> str:
+    """Route after agent_review: approved, re-research, or revise."""
+    if state.get("error"):
+        return "error_end"
+    if state.get("review_approved"):
+        return "approved"
+    if state.get("review_needs_research") and state.get("researcher_rounds", 0) < 2:
+        return "research"
+    return "revise"
+
+
+def _route_after_code(state: WorkflowState) -> str:
+    """Route after agent_code: terminal approval (HITL) or straight to review."""
+    if state.get("pending_command") and state.get("command_approved") is None:
+        return "ask_approval"
+    return "review"
+
+
+def _route_after_terminal(state: WorkflowState) -> str:
+    """After execute/skip terminal: multi-agent continues at the Reviewer."""
+    return "multi" if state.get("multi_agent") else "single"
 
 
 # ── Helper: build system prompt ────────────────────────────
@@ -1126,6 +1503,10 @@ def build_workflow() -> StateGraph:
     workflow.add_node("retrieve_context", retrieve_context)
     workflow.add_node("browse_web", browse_web)
     workflow.add_node("deep_research", deep_research)
+    workflow.add_node("route_task", route_task)
+    workflow.add_node("agent_research", agent_research)
+    workflow.add_node("agent_code", agent_code)
+    workflow.add_node("agent_review", agent_review)
     workflow.add_node("generate_answer", generate_answer)
     workflow.add_node("ask_terminal_approval", ask_terminal_approval)
     workflow.add_node("execute_terminal", execute_terminal)
@@ -1142,7 +1523,40 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("retrieve_memories", "retrieve_context")
     workflow.add_edge("retrieve_context", "browse_web")
     workflow.add_edge("browse_web", "deep_research")
-    workflow.add_edge("deep_research", "generate_answer")
+    workflow.add_edge("deep_research", "route_task")
+
+    # Phase 3: additive router — complex tasks go to the multi-agent team,
+    # everything else continues through the unchanged single-agent path.
+    workflow.add_conditional_edges(
+        "route_task",
+        _route_task,
+        {
+            "single_agent": "generate_answer",
+            "multi_agent": "agent_research",
+        },
+    )
+
+    # Multi-agent team: Researcher -> Coder -> (approval?) -> Reviewer.
+    # The Reviewer approves (-> shared tail) or sends the work back.
+    workflow.add_edge("agent_research", "agent_code")
+    workflow.add_conditional_edges(
+        "agent_code",
+        _route_after_code,
+        {
+            "ask_approval": "ask_terminal_approval",
+            "review": "agent_review",
+        },
+    )
+    workflow.add_conditional_edges(
+        "agent_review",
+        _route_after_review,
+        {
+            "approved": "self_evaluate",
+            "revise": "agent_code",
+            "research": "agent_research",
+            "error_end": END,
+        },
+    )
 
     # After generate: either terminal approval, error, or save
     workflow.add_conditional_edges(
@@ -1166,9 +1580,18 @@ def build_workflow() -> StateGraph:
         },
     )
 
-    # After execute/skip -> regenerate -> save -> extract_memory -> END
-    workflow.add_edge("execute_terminal", "regenerate_answer")
-    workflow.add_edge("skip_terminal", "regenerate_answer")
+    # After execute/skip -> multi-agent returns to review; single-agent
+    # regenerates with the command output injected into context.
+    workflow.add_conditional_edges(
+        "execute_terminal",
+        _route_after_terminal,
+        {"multi": "agent_review", "single": "regenerate_answer"},
+    )
+    workflow.add_conditional_edges(
+        "skip_terminal",
+        _route_after_terminal,
+        {"multi": "agent_review", "single": "regenerate_answer"},
+    )
     workflow.add_conditional_edges(
         "regenerate_answer",
         _route_after_regenerate,
@@ -1271,6 +1694,15 @@ def run_research_workflow(
         "confidence": None,
         "confidence_reason": None,
         "tokens_generated": 0,
+        "multi_agent": False,
+        "agent_brief": "",
+        "coder_output": "",
+        "agent_code_result": "",
+        "review_feedback": "",
+        "review_retries": 0,
+        "review_approved": False,
+        "review_needs_research": False,
+        "researcher_rounds": 0,
         "error": None,
         "db": db,
         "model_name": None,

@@ -16,6 +16,7 @@ This service reuses the same services as the LangGraph workflow
 to keep the non-streaming path unchanged.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -81,6 +82,7 @@ class ChatContext:
         model_name: Optional[str] = None,
         provider_config: Optional[dict] = None,
         user_input: Optional[str] = None,
+        directives_block: str = "",
     ):
         self.session_id = session_id
         self.user_message = user_message
@@ -93,6 +95,7 @@ class ChatContext:
         self.model_name = model_name
         self.provider_config = provider_config
         self.user_input = user_input
+        self.directives_block = directives_block
 
 
 def prepare_chat_context(
@@ -192,12 +195,14 @@ def prepare_chat_context(
         logger.warning("Memory retrieval failed (non-fatal): %s", exc)
 
     # F6 Cap 3: inject standing "lessons learned" directives (if any)
+    directives_block = ""
     try:
         from app.services.system_prompts import directives_context
 
         directive_block = directives_context(db, user_id)
         if directive_block:
             system_parts.append(directive_block)
+            directives_block = directive_block
     except Exception as exc:
         logger.warning("Directive prompt injection failed (non-fatal): %s", exc)
 
@@ -322,7 +327,231 @@ def prepare_chat_context(
         model_name=session_model,
         provider_config=provider_config,
         user_input=user_input,
+        directives_block=directives_block,
     )
+
+
+# ── Multi-agent collaboration (Phase 3) ───────────────────
+
+
+def _agent_status_sse(agent: str, message: str) -> str:
+    """Format an agent_status SSE event so the UI can show who is working."""
+    return format_sse("agent_status", {
+        "type": "agent_status",
+        "agent": agent,
+        "message": message,
+    })
+
+
+async def stream_multi_agent_response(
+    context: ChatContext,
+) -> AsyncGenerator[str, None]:
+    """
+    Run the Researcher -> Coder -> Reviewer team for a complex task and
+    stream its progress as ``agent_status`` SSE events.
+
+    The final user-facing answer is the Reviewer-approved output (never raw
+    Coder output). The review loop is hard-bounded: after MAX_REVIEW_RETRIES
+    rejected cycles the Reviewer must approve the best version (the workflow
+    force-approves), so the team can never deadlock.
+
+    Event sequence:
+      1. ``event: agent_status`` — one per agent hand-off
+      2. ``event: token`` — the approved answer, chunked
+      3. ``event: complete`` — final event (message is saved by the route)
+         OR ``event: error`` — terminal error
+    """
+    # Imported here to avoid a module-level cycle and to reuse the same
+    # patchable LLM wrapper the LangGraph workflow uses.
+    from app.services.langgraph_workflow import generate_response
+    from app.services.agent_personas import (
+        AGENT_PERSONAS,
+        MAX_REVIEW_RETRIES,
+        parse_review_verdict,
+        review_round_block,
+    )
+
+    async def _llm(messages: List[Dict[str, Any]], system_prompt: str) -> str:
+        """Run a (blocking) persona LLM call off the event loop."""
+        return await asyncio.to_thread(
+            generate_response,
+            messages=messages,
+            system_prompt=system_prompt,
+            model_name=context.model_name,
+            provider_config=context.provider_config,
+        )
+
+    def _err(code: str, detail: str) -> str:
+        return format_sse("error", {"code": code, "detail": detail})
+
+    history = [m for m in context.history if isinstance(m.get("content"), str)]
+    generated = 0
+
+    def _budget_exceeded() -> bool:
+        return generated >= MAX_TOKENS_PER_TASK
+
+    try:
+        # ── 1. Researcher: requirements + references -> research brief ──
+        yield _agent_status_sse(
+            "researcher", "Researcher agent is gathering requirements and references..."
+        )
+        researcher_prompt = "\n\n".join([
+            AGENT_PERSONAS["researcher"]["system_prompt"],
+            "=== Session Context (web results, documents, memories) ===",
+            context.system_prompt,
+        ])
+        brief = await _llm(history, researcher_prompt)
+        generated += len(brief)
+        if _budget_exceeded():
+            yield _err("TOKEN_BUDGET_EXCEEDED", "Generation stopped: token budget exceeded.")
+            return
+
+        def _coder_prompt() -> str:
+            parts = [AGENT_PERSONAS["coder"]["system_prompt"]]
+            if brief:
+                parts.append("=== Research Brief (from the Researcher) ===\n" + brief)
+            return "\n\n".join(parts)
+
+        async def _run_sandbox(coder_output: str) -> str:
+            code = extract_python_code(coder_output)
+            if not code:
+                return ""
+            result = await run_python_code_async(code)
+            return format_code_result(code, result)
+
+        def _persist_reviewer_markers(text: str) -> str:
+            """Persist [SAVE_DIRECTIVE]/[SAVE_MEMORY] the Reviewer emitted."""
+            try:
+                from app.database import SessionLocal
+                from app.tools.memory_tool import process_memory_markers
+                from app.tools.directive_tool import process_directive_markers
+
+                _db = SessionLocal()
+                try:
+                    text, _ = process_memory_markers(
+                        text, _db, context.user_id, context.session_id
+                    )
+                    text, _ = process_directive_markers(text, _db, context.user_id)
+                finally:
+                    _db.close()
+            except Exception as exc:
+                logger.warning(
+                    "Reviewer marker persistence failed (non-fatal): %s", exc
+                )
+            return text
+
+        # ── 2. Coder: implement the brief ─────────────────────────────
+        yield _agent_status_sse("coder", "Coder agent is writing code...")
+        code_out = await _llm(history, _coder_prompt())
+        generated += len(code_out)
+        if _budget_exceeded():
+            yield _err("TOKEN_BUDGET_EXCEEDED", "Generation stopped: token budget exceeded.")
+            return
+        code_result = await _run_sandbox(code_out)
+
+        # ── 3. Review loop (hard-bounded: max MAX_REVIEW_RETRIES rejections) ──
+        rounds = 0            # completed REJECTED review cycles
+        research_used = 0     # extra Researcher round-trips requested by the Reviewer
+        final_text = ""
+        while True:
+            yield _agent_status_sse(
+                "reviewer", "Reviewer agent is checking the code for bugs and security issues..."
+            )
+            review_parts = [
+                AGENT_PERSONAS["reviewer"]["system_prompt"],
+                review_round_block(rounds),
+            ]
+            if context.directives_block:
+                review_parts.append(context.directives_block)
+            review_parts.append("=== Original Request ===\n" + (context.user_input or ""))
+            if brief:
+                review_parts.append("=== Research Brief (from the Researcher) ===\n" + brief)
+            review_parts.append("=== Coder Output (under review) ===\n" + code_out)
+            if code_result:
+                review_parts.append("=== Sandbox Result ===\n" + code_result)
+
+            review = await _llm(history, "\n\n".join(review_parts))
+            generated += len(review)
+            review = _persist_reviewer_markers(review)
+            verdict = parse_review_verdict(review)
+
+            # Approve — or force-approve at the retry limit so the team
+            # can never get stuck in an infinite revise loop.
+            if verdict["approved"] or rounds >= MAX_REVIEW_RETRIES:
+                if rounds >= MAX_REVIEW_RETRIES and not verdict["approved"]:
+                    logger.info(
+                        "Multi-agent review hit the %d-retry limit — forcing approval",
+                        MAX_REVIEW_RETRIES,
+                    )
+                final_text = verdict["cleaned"] or code_out
+                break
+
+            # Reviewer can route back to the Researcher (bounded to once).
+            if verdict["needs_research"] and research_used < 1:
+                research_used += 1
+                yield _agent_status_sse(
+                    "researcher",
+                    "Reviewer needs more information — Researcher agent is gathering it...",
+                )
+                research_msgs = history + [{
+                    "role": "user",
+                    "content": (
+                        "The Reviewer needs more information before coding can "
+                        "continue: " + (verdict["feedback"] or "see the request")
+                    ),
+                }]
+                extra_brief = await _llm(research_msgs, researcher_prompt)
+                generated += len(extra_brief)
+                brief = ((brief + "\n\n" + extra_brief).strip()) if brief else extra_brief
+                yield _agent_status_sse("coder", "Coder agent is updating the implementation...")
+                code_out = await _llm(history, _coder_prompt())
+                generated += len(code_out)
+                if _budget_exceeded():
+                    yield _err("TOKEN_BUDGET_EXCEEDED", "Generation stopped: token budget exceeded.")
+                    return
+                code_result = await _run_sandbox(code_out)
+                continue
+
+            # Rejected — send the Coder back with actionable feedback.
+            rounds += 1
+            yield _agent_status_sse(
+                "coder",
+                f"Reviewer sent feedback — Coder agent is revising (attempt {rounds}/{MAX_REVIEW_RETRIES})...",
+            )
+            logger.info(
+                "Multi-agent review rejected (cycle %d/%d) in session %s",
+                rounds, MAX_REVIEW_RETRIES, context.session_id,
+            )
+            revise_prompt = "\n\n".join([
+                _coder_prompt(),
+                "=== Reviewer Feedback (address EVERY point) ===\n"
+                + (verdict["feedback"] or verdict["cleaned"]),
+            ])
+            code_out = await _llm(history, revise_prompt)
+            generated += len(code_out)
+            if _budget_exceeded():
+                yield _err("TOKEN_BUDGET_EXCEEDED", "Generation stopped: token budget exceeded.")
+                return
+            code_result = await _run_sandbox(code_out)
+
+        # ── 4. Stream the Reviewer-approved answer to the user ─────────
+        final_text = (final_text or "").strip()
+        for i in range(0, len(final_text), 120):
+            yield format_sse("token", {"token": final_text[i:i + 120]})
+        yield format_sse("complete", {
+            "message_id": None,  # Filled in by the route after DB save
+            "citations": context.citations,
+            "sources_used": context.sources_used,
+            "memories_used": context.memories_used,
+            "content": final_text,
+        })
+
+    except Exception as exc:
+        logger.error("Multi-agent streaming error: %s", exc, exc_info=True)
+        yield _err(
+            "AGENT_ERROR",
+            "The multi-agent team could not complete this task. Please try again.",
+        )
 
 
 # ── Streaming generator ───────────────────────────────────
@@ -368,6 +597,25 @@ async def stream_chat_response(
     except Exception as exc:
         logger.warning("Plan preview failed (non-fatal): %s", exc)
         yield format_sse("plan", {"steps": []})
+
+    # ── Phase 3: Multi-Agent Collaboration for complex build/code tasks ──
+    # Additive router with a safe fallback: anything that doesn't look like a
+    # build/code task continues through the unchanged single-agent stream.
+    from app.services.agent_personas import detect_complex_task
+
+    _last_msg = context.history[-1] if context.history else {}
+    if (
+        settings.enable_multi_agent
+        and detect_complex_task(context.user_input or "")
+        and isinstance(_last_msg.get("content"), str)
+    ):
+        logger.info(
+            "Complex task detected — routing session %s to the multi-agent team",
+            context.session_id,
+        )
+        async for sse_event in stream_multi_agent_response(context):
+            yield sse_event
+        return
 
     # ── CAG: serve an identical, context-free repeat from cache ────────
     # Only when the last turn is a plain-text user question and no RAG
