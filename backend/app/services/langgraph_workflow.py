@@ -686,12 +686,21 @@ def agent_review(state: WorkflowState) -> WorkflowState:
 
     state["tokens_generated"] = state.get("tokens_generated", 0) + len(review)
 
-    # Cap 3: persist any [SAVE_DIRECTIVE: ...] the Reviewer emitted and
-    # strip the markers so they never reach the user.
+    # Cap 3: persist any [SAVE_DIRECTIVE: ...] / [SAVE_MEMORY: ...] the
+    # Reviewer emitted and strip the markers so they never reach the user.
     if db is not None:
         try:
+            from app.tools.memory_tool import process_memory_markers
             from app.tools.directive_tool import process_directive_markers
 
+            review, saved_memories = process_memory_markers(
+                review, db, state.get("user_id", 1), state.get("session_id")
+            )
+            if saved_memories:
+                logger.info(
+                    "Multi-agent Reviewer saved %d memory(ies)",
+                    saved_memories,
+                )
             review, saved_directives = process_directive_markers(
                 review, db, state.get("user_id", 1)
             )
