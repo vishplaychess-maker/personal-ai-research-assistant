@@ -4,6 +4,26 @@ All notable changes to the Personal AI Research Assistant.
 
 ## [Unreleased]
 
+### Semantic Caching (RAG-based CAG)
+- Upgraded the exact-match CAG cache (`backend/app/services/cache_service.py`)
+  to Semantic Caching. Besides the SHA-256 exact key (fast path, zero embedding
+  cost), it now keeps an in-memory list of embedding vectors with each answer.
+- `find_semantic_match(session_id, query_embedding, threshold)` computes cosine
+  similarity against cached answers for the same session; a match returns the
+  cached answer with a `[Semantic Cache Hit]` prefix.
+- `get(session_id, question)`: exact-match fast path first, then embeds the
+  query (Ollama `nomic-embed-text`) and runs semantic matching.
+- `set(session_id, question, answer)`: stores the exact entry and appends a
+  semantic entry; TTL and `MAX_ENTRIES`/`SEMANTIC_MAX_ENTRIES` limits kept.
+- Threshold tuned to `0.80` from real output (strong paraphrases ~0.76-0.94 vs
+  unrelated ~0.3-0.7).
+- Graceful degradation: if Ollama is offline/unreachable or the embedding model
+  is missing, embedding calls are caught and the cache silently falls back to
+  exact-match only — it never crashes the chat.
+- Both `streaming_service.py` and `langgraph_workflow.py` call sites use the
+  upgraded `get`/`set`, and no longer double-label semantic hits.
+- Requires the `nomic-embed-text` Ollama model (`ollama pull nomic-embed-text`).
+
 ### Agent Skills (Claude-style SKILL.md, progressive disclosure)
 - New `backend/app/skills/` package implementing Claude-style Agent Skills.
   Skills are folders containing a `SKILL.md` with YAML frontmatter (`name`,

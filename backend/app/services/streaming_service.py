@@ -383,14 +383,18 @@ async def stream_chat_response(
         cache_question = _last["content"]
         cached = cache_service.get(context.session_id, cache_question)
         if cached is not None:
-            yield format_sse("token", {"token": "[Cached] "})
+            # A semantic hit is already labelled by cache_service; only exact
+            # hits need the "[Cached]" marker. Avoids a redundant double label.
+            label = "" if cached.startswith("[Semantic Cache Hit]") else "[Cached] "
+            if label:
+                yield format_sse("token", {"token": label})
             yield format_sse("token", {"token": cached})
             yield format_sse("complete", {
                 "message_id": None,
                 "citations": context.citations,
                 "sources_used": context.sources_used,
                 "memories_used": context.memories_used,
-                "content": "[Cached] " + cached,
+                "content": label + cached,
             })
             return
 

@@ -552,7 +552,9 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         cache_question = user_input
         _cached = cache_service.get(state.get("session_id"), user_input)
         if _cached is not None:
-            state["response"] = "[Cached] " + _cached
+            # Semantic hits are already labelled by cache_service.
+            label = "" if _cached.startswith("[Semantic Cache Hit]") else "[Cached] "
+            state["response"] = label + _cached
             return state
 
     try:
