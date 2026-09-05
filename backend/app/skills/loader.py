@@ -170,6 +170,7 @@ _MARKER_OPENS = (
     "[python_code",
     "[mcp_call",
     "[proposed_command",
+    "[browser_action",
 )
 
 # Strip targets: only skill activation markers. Persistence markers
@@ -194,6 +195,9 @@ _SSE_STRIP_PATTERNS = (
     re.compile(r"\[SAVE_DIRECTIVE:\s*.*?\]", re.DOTALL | re.IGNORECASE),
     re.compile(r"\[PLAN:\s*.*?\]", re.DOTALL | re.IGNORECASE),
     re.compile(r"\[LESSON:\s*.*?\]", re.DOTALL | re.IGNORECASE),
+    # Browser actions execute only in the multi-agent path; never surface the
+    # raw marker in the live streaming-chat view.
+    re.compile(r"\[BROWSER_ACTION:\s*.*?\]", re.DOTALL | re.IGNORECASE),
 )
 
 # Bracket-style marker openers (for open-marker hold detection).

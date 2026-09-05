@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
+    # ── Browser automation (multi-agent Browser Operator) ─
+    # OFF by default: lets the LangGraph team drive a real Chromium (click,
+    # type, navigate) via [BROWSER_ACTION: ...]. Risky actions (login,
+    # payment, delete, download) pause for user approval. SSRF allowlist is a
+    # comma-separated host list that bypasses the private/loopback/metadata
+    # block (e.g. "intranet.corp,10.0.0.5").
+    enable_browser_automation: bool = False
+    browser_ssrf_allowlist: str = ""
+    browser_session_idle_seconds: int = 600
+
     # ── Deep Research (web search via DuckDuckGo — free, no API key) ──
     # When enabled, the agent can autonomously search the web, scrape the
     # top results, and synthesize a report with citations.
