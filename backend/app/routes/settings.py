@@ -20,6 +20,8 @@ from app.services.settings_service import (
 )
 from app.services.cookie_service import require_csrf
 from app.services.auth_service import get_current_user
+from app.services.encryption_service import decrypt_key
+from app.services.encryption import mask_api_key
 from app.models.models import User
 from app.config import settings
 
@@ -110,12 +112,15 @@ def read_user_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return the current user's LLM provider settings (defaulting to globals)."""
+    """Return the current user's LLM provider settings (defaulting to globals).
+
+    The stored key is returned masked only — never plaintext or ciphertext.
+    """
     row = get_user_settings(db, current_user.id)
     if row is not None:
         return SettingsResponse(
             llm_provider=row.llm_provider or settings.llm_provider,
-            api_key=row.api_key or "",
+            api_key=mask_api_key(decrypt_key(row.api_key) if row.api_key else ""),
             model=row.model or "",
         )
     return SettingsResponse(
@@ -132,21 +137,39 @@ def update_user_settings(
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ):
-    """Update the current user's LLM provider, API key, and model."""
+    """Update the current user's LLM provider, API key, and model.
+
+    A masked key echoed back by the client (contains ``****``) leaves the
+    stored key unchanged.
+    """
     provider = (payload.llm_provider or "").strip().lower()
     if provider not in ("ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab"):
         raise HTTPException(status_code=400, detail="Invalid llm_provider")
     api_key = (payload.api_key or "").strip()
-    _validate_api_key_format(provider, api_key)
-    row = save_user_settings(
-        db,
-        user_id=current_user.id,
-        llm_provider=provider,
-        api_key=api_key,
-        model=(payload.model or "").strip(),
-    )
+    if "****" in api_key:
+        api_key = None  # client echoed the masked value — keep stored key
+    else:
+        _validate_api_key_format(provider, api_key)
+    try:
+        row = save_user_settings(
+            db,
+            user_id=current_user.id,
+            llm_provider=provider,
+            api_key=api_key,
+            model=(payload.model or "").strip(),
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "API key encryption is unavailable: ENCRYPTION_KEY is not "
+                "configured on the server. Generate one with "
+                "`python scripts/generate_encryption_key.py` and set it in "
+                "the backend environment."
+            ),
+        )
     return SettingsResponse(
         llm_provider=row.llm_provider,
-        api_key=row.api_key or "",
+        api_key=mask_api_key(decrypt_key(row.api_key) if row.api_key else ""),
         model=row.model or "",
     )

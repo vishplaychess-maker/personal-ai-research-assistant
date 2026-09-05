@@ -48,7 +48,7 @@ Legend: **Prod** = required or strongly recommended for cloud deployment.
 | `REFRESH_COOKIE_NAME` | `research_assistant_refresh_token` | No | — |
 | `CSRF_COOKIE_NAME` | `research_assistant_csrf_token` | No | — |
 | `MAX_ACTIVE_SESSIONS` | `10` | No | — |
-| `ENCRYPTION_KEY` | `""` | **Yes** | Fernet key; ephemeral (with warning) if unset |
+| `ENCRYPTION_KEY` | `""` | **Yes** | Fernet key (`python scripts/generate_encryption_key.py`); without it, saving provider keys returns 500 and runtime calls fall back to env provider keys |
 | `RATE_LIMIT_MAX_ATTEMPTS` | `10` | No | — |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | — |
 | `RATE_LIMIT_LOCKOUT_THRESHOLD` | `5` | No | — |

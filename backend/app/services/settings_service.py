@@ -11,11 +11,16 @@ is always available even before any row is written to the database.
 
 from typing import Optional
 
+import logging
+import os
+
 from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import AppSetting, UserSetting, UserProvider
 from app.services.encryption_service import encrypt_key, decrypt_key
+
+logger = logging.getLogger(__name__)
 
 
 MEMORY_ENABLED_KEY = "memory_enabled"
@@ -70,10 +75,15 @@ def save_user_settings(
     db: DBSession,
     user_id: int,
     llm_provider: str,
-    api_key: str,
-    model: str,
+    api_key: Optional[str] = None,
+    model: str = "",
 ) -> UserSetting:
-    """Upsert the user's LLM provider settings and return the saved row."""
+    """Upsert the user's LLM provider settings and return the saved row.
+
+    ``api_key=None`` leaves the stored key untouched (the client echoed a
+    masked value back); ``""`` clears it; a non-empty value is re-encrypted.
+    Raises RuntimeError when ENCRYPTION_KEY is unset and a new key is given.
+    """
     stored_key = encrypt_key(api_key) if api_key else ""
     row = db.query(UserSetting).filter(UserSetting.user_id == user_id).first()
     if row is None:
@@ -86,7 +96,8 @@ def save_user_settings(
         db.add(row)
     else:
         row.llm_provider = llm_provider
-        row.api_key = stored_key
+        if api_key is not None:
+            row.api_key = stored_key
         row.model = model
     db.commit()
     db.refresh(row)
@@ -138,13 +149,19 @@ def create_user_provider(
     default_model: str = "",
     is_active: bool = False,
 ) -> UserProvider:
-    """Create a provider config for the user. Only one can be active."""
+    """Create a provider config for the user. Only one can be active.
+
+    The API key is stored Fernet-encrypted in ``encrypted_api_key``; the
+    legacy ``api_key`` column is always blank. Raises RuntimeError when
+    ENCRYPTION_KEY is unset and a key is given (routes return HTTP 500).
+    """
     if is_active:
         _deactivate_other_providers(db, user_id)
     row = UserProvider(
         user_id=user_id,
         provider_name=provider_name.strip().lower(),
-        api_key=encrypt_key(api_key) if api_key else "",
+        encrypted_api_key=encrypt_key(api_key) if api_key else "",
+        api_key="",
         default_model=(default_model or "").strip(),
         is_active=bool(is_active),
     )
@@ -170,7 +187,8 @@ def update_user_provider(
     if provider_name is not None:
         row.provider_name = provider_name.strip().lower()
     if api_key is not None:
-        row.api_key = encrypt_key(api_key) if api_key else ""
+        row.encrypted_api_key = encrypt_key(api_key) if api_key else ""
+        row.api_key = ""
     if default_model is not None:
         row.default_model = default_model.strip()
     if is_active is not None:
@@ -192,6 +210,56 @@ def delete_user_provider(db: DBSession, user_id: int, provider_id: int) -> bool:
     return True
 
 
+def decrypt_stored_provider_key(row) -> str:
+    """Decrypt a provider row's stored API key; '' when unavailable.
+
+    Prefers ``encrypted_api_key`` and falls back to the legacy ``api_key``
+    column for pre-encryption rows. Never raises; decryption failures are
+    logged (never with any key material) by the encryption service.
+    """
+    stored = (getattr(row, "encrypted_api_key", None) or getattr(row, "api_key", "") or "")
+    return decrypt_key(stored) if stored else ""
+
+
+def _env_provider_key(provider_name: str) -> str:
+    """Server-side environment key for a provider (e.g. OPENROUTER_API_KEY).
+
+    Reads os.environ first (live view of the process environment), then the
+    pydantic settings attribute (which covers .env-file based setups).
+    """
+    if not provider_name:
+        return ""
+    env_key = os.environ.get(f"{provider_name.upper()}_API_KEY", "")
+    if env_key:
+        return env_key
+    return getattr(settings, f"{provider_name}_api_key", "") or ""
+
+
+def provider_config_for_row(row) -> dict:
+    """Build a provider config dict for the LLM factory from a UserProvider row.
+
+    Decrypts the stored key; when it is empty or undecryptable, falls back to
+    the provider's environment-configured key (e.g. OPENROUTER_API_KEY) with
+    a warning. No key material is ever logged.
+    """
+    provider = row.provider_name
+    plain = decrypt_stored_provider_key(row)
+    if not plain:
+        env_key = _env_provider_key(provider)
+        if env_key:
+            logger.warning(
+                "Stored API key for provider '%s' is empty or undecryptable — "
+                "falling back to the server environment key.",
+                provider,
+            )
+            plain = env_key
+    return {
+        "provider": provider,
+        "api_key": plain or None,
+        "model": row.default_model or None,
+    }
+
+
 def get_active_provider_config(db: DBSession, user_id: int) -> Optional[dict]:
     """Return the config dict of the user's active provider, or None."""
     row = (
@@ -201,11 +269,7 @@ def get_active_provider_config(db: DBSession, user_id: int) -> Optional[dict]:
     )
     if row is None or not row.provider_name:
         return None
-    return {
-        "provider": row.provider_name,
-        "api_key": (decrypt_key(row.api_key) if row.api_key else None),
-        "model": row.default_model or None,
-    }
+    return provider_config_for_row(row)
 
 
 def get_user_llm_config(db: DBSession, user_id: int) -> Optional[dict]:
@@ -221,8 +285,18 @@ def get_user_llm_config(db: DBSession, user_id: int) -> Optional[dict]:
     row = get_user_settings(db, user_id)
     if row is None or not row.llm_provider:
         return None
+    plain = decrypt_key(row.api_key) if row.api_key else ""
+    if not plain:
+        env_key = _env_provider_key(row.llm_provider)
+        if env_key:
+            logger.warning(
+                "Stored API key for provider '%s' is empty or undecryptable — "
+                "falling back to the server environment key.",
+                row.llm_provider,
+            )
+            plain = env_key
     return {
         "provider": row.llm_provider,
-        "api_key": (decrypt_key(row.api_key) if row.api_key else None),
+        "api_key": plain or None,
         "model": row.model or None,
     }

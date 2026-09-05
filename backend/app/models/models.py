@@ -234,6 +234,11 @@ class UserProvider(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     provider_name = Column(String(50), nullable=False)
+    # Fernet-encrypted API key (canonical storage). Never returned in API
+    # responses — routes expose a masked value (e.g. sk-****1234) instead.
+    encrypted_api_key = Column(Text, nullable=True, default="")
+    # Deprecated legacy column: kept only so pre-encryption rows still read.
+    # New writes always go to encrypted_api_key and blank this one.
     api_key = Column(String(500), nullable=False, default="")
     default_model = Column(String(255), nullable=False, default="")
     is_active = Column(Boolean, nullable=False, default=False)

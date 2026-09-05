@@ -22,6 +22,10 @@ pypdf==5.4.0
 python-multipart==0.0.20
 reportlab==4.3.1
 python-jose[cryptography]==3.3.0
+# Explicit dependency: Fernet (AES) encryption at rest for provider API keys
+# (app/services/encryption.py). Previously only pulled in transitively via
+# python-jose.
+cryptography>=42.0.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 pytest==9.1.1

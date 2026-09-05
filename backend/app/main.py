@@ -74,6 +74,67 @@ from app.routes.mcp import router as mcp_router
 from app.routes.share import router as share_router
 
 
+def _migrate_provider_encryption():
+    """Ensure ``user_providers.encrypted_api_key`` exists and holds all keys.
+
+    Dialect-agnostic (runs for SQLite and PostgreSQL alike — only plain
+    ADD COLUMN / UPDATE statements). Moves any key stored in the legacy
+    ``api_key`` column into ``encrypted_api_key``:
+
+      - Already-encrypted Fernet tokens are copied as-is.
+      - Legacy plaintext values are encrypted first (requires
+        ENCRYPTION_KEY; if it is unset the row is left untouched and the
+        migration retries on the next startup instead of crashing).
+      - The legacy column is blanked after a successful move so no
+        plaintext (or duplicate ciphertext) remains at rest.
+    """
+    from app.services.encryption import FERNET_PREFIX
+    from app.services.encryption_service import encrypt_key
+
+    inspector = inspect(engine)
+    if "user_providers" not in inspector.get_table_names():
+        return
+    existing_cols = {c["name"] for c in inspector.get_columns("user_providers")}
+    with engine.connect() as conn:
+        if "encrypted_api_key" not in existing_cols:
+            conn.execute(sa_text("ALTER TABLE user_providers ADD COLUMN encrypted_api_key TEXT"))
+            conn.commit()
+        rows = conn.execute(
+            sa_text("SELECT id, api_key, encrypted_api_key FROM user_providers")
+        ).fetchall()
+        for row_id, legacy, encrypted in rows:
+            if (encrypted or "") or not (legacy or "").strip():
+                continue
+            value = legacy.strip()
+            if not value.startswith(FERNET_PREFIX):
+                try:
+                    value = encrypt_key(value)
+                except RuntimeError:
+                    logger.warning(
+                        "ENCRYPTION_KEY is not set — cannot encrypt the plaintext "
+                        "API key stored for provider id=%s. The legacy value is "
+                        "kept and encryption will be retried on the next start.",
+                        row_id,
+                    )
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Could not encrypt the stored API key for provider "
+                        "id=%s (%s); the legacy value is kept unchanged.",
+                        row_id,
+                        exc,
+                    )
+                    continue
+            conn.execute(
+                sa_text(
+                    "UPDATE user_providers SET encrypted_api_key = :v, api_key = '' "
+                    "WHERE id = :i"
+                ),
+                {"v": value, "i": row_id},
+            )
+        conn.commit()
+
+
 def _migrate_database():
     """Add new columns to existing tables without losing data.
 
@@ -83,6 +144,9 @@ def _migrate_database():
     covered by init_db() -> Base.metadata.create_all(); the historical SQLite
     migrations are deliberately NOT translated.
     """
+    # API-key encryption at rest: dialect-agnostic column + data move.
+    _migrate_provider_encryption()
+
     if engine.dialect.name != "sqlite":
         logger.info(
             "Skipping SQLite migrations: engine dialect is '%s' — schema comes "

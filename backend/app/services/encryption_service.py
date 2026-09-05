@@ -1,108 +1,89 @@
 """
-Encryption service — symmetric AES (Fernet) encryption for secrets at rest.
+Encryption service — backward-compatible wrapper around ``encryption``.
+
+Historically this module was the API-key encryption interface with an
+ephemeral-key fallback when ``ENCRYPTION_KEY`` was unset. It now delegates
+to ``app.services.encryption`` (canonical Fernet/MultiFernet API) and keeps
+only the legacy-compatibility behaviours:
+
+  - ``encrypt_key`` propagates ``RuntimeError`` when ENCRYPTION_KEY is unset
+    (routes translate this into HTTP 500; the app never crashes at startup).
+  - ``decrypt_key`` never raises: legacy plaintext rows written before
+    encryption existed are returned unchanged, and values that cannot be
+    decrypted with the current key return '' (callers fall back to the
+    environment-configured provider key).
 
 API keys stored in the database must never be plaintext. Fernet (AES-128-CBC
 + HMAC-SHA256, base64-encoded) encrypts/decrypts them with a 32-byte URL-safe
 base64 key.
-
-Key sourcing:
-  - Read ``ENCRYPTION_KEY`` from the environment / config.
-  - If missing, generate a random key for the process lifetime and warn loudly
-    (secrets encrypted with an ephemeral key are unusable after restart).
-
-Design:
-  - ``encrypt_key(plaintext) -> str``: encrypt; returns an empty string on None.
-  - ``decrypt_key(ciphertext) -> str``: decrypt; returns the input unchanged if
-    it does not look like Fernet ciphertext (backward compat with legacy
-    plaintext rows written before this fix).
 """
 
-import base64
 import logging
-import os
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
+
+from app.services.encryption import (
+    encrypt_api_key,
+    decrypt_api_key,
+    looks_encrypted,
+)
 
 logger = logging.getLogger(__name__)
-
-# Sentinel meaning "no stable key configured". Less chatty than a bare None.
-_EPHEMERAL_KEY: str = ""
-
-
-def _get_key() -> bytes:
-    """Return the URL-safe base64-encoded Fernet key to use.
-
-    Uses ``ENCRYPTION_KEY`` from the environment / settings when present.
-    Otherwise falls back to a random per-process key and warns loudly.
-    """
-    global _EPHEMERAL_KEY
-    try:
-        from app.config import settings as _settings
-
-        key_material = getattr(_settings, "encryption_key", "") or ""
-    except Exception:  # noqa: BLE001 — never block encryption with config errors
-        key_material = os.environ.get("ENCRYPTION_KEY", "") or ""
-
-    key_material = (key_material or "").strip()
-
-    if key_material:
-        try:
-            return key_material.encode("utf-8")
-        except Exception:  # noqa: BLE001
-            pass
-
-    if not _EPHEMERAL_KEY:
-        _EPHEMERAL_KEY = Fernet.generate_key().decode("utf-8")
-        logger.warning(
-            "ENCRYPTION_KEY is not configured. Generating an EPHEMERAL key. "
-            "Secrets encrypted with it will be unrecoverable after restart. "
-            "Set ENCRYPTION_KEY in .env to persist encryption access."
-        )
-    return _EPHEMERAL_KEY.encode("utf-8")
 
 
 def encrypt_key(plaintext: str) -> str:
     """Encrypt a plaintext secret and return a Fernet token string.
 
     Returns '' for None/empty input (no-op) so callers can write '' safely.
+    Raises RuntimeError when ENCRYPTION_KEY is not configured — callers are
+    expected to turn that into an HTTP 500 for encryption-requiring routes.
     """
     if not plaintext:
         return ""
-    try:
-        return Fernet(_get_key()).encrypt(str(plaintext).encode("utf-8")).decode("utf-8")
-    except Exception as exc:  # noqa: BLE001 — never crash on encrypt
-        logger.error("encrypt_key failed: %s", exc)
-        return ""
+    return encrypt_api_key(plaintext)
 
 
 def decrypt_key(ciphertext: str) -> str:
     """Decrypt a Fernet token back to the original plaintext.
 
-    If the value does not decrypt (e.g. it is a legacy plaintext row from
-    before encryption was enabled), it is returned unchanged.
+    Backward-compatibility rules:
+      - Legacy plaintext rows (written before encryption existed) are
+        returned unchanged — they never needed a key to be readable.
+      - A Fernet token that cannot be decrypted with the current key
+        (key rotated/lost, or written under an ephemeral key) returns ''
+        so runtime callers can fall back to the environment key.
+      - A missing ENCRYPTION_KEY decrypts nothing but never raises here.
     """
     if not ciphertext:
         return ""
+    value = str(ciphertext)
+    if not looks_encrypted(value):
+        # Legacy plaintext row — return as-is for backward compat.
+        return value
     try:
-        return Fernet(_get_key()).decrypt(str(ciphertext).encode("utf-8")).decode("utf-8")
+        return decrypt_api_key(value)
+    except RuntimeError:
+        logger.warning(
+            "ENCRYPTION_KEY is not configured — cannot decrypt a stored "
+            "API key; falling back to the environment provider key if any."
+        )
+        return ""
     except InvalidToken:
-        # Likely a legacy plaintext row — return as-is for backward compat.
-        logger.debug("decrypt_key: value not a Fernet token; returning as-is")
-        return ciphertext
-    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Stored API key could not be decrypted with the current "
+            "ENCRYPTION_KEY (the key changed or the value was written "
+            "under an ephemeral key); falling back to the environment "
+            "provider key if any."
+        )
+        return ""
+    except Exception as exc:  # noqa: BLE001 — never crash a read on decrypt
         logger.error("decrypt_key failed: %s", exc)
-        return ciphertext
+        return ""
 
 
 def is_encrypted(value: str) -> bool:
-    """Return True if the value looks like a Fernet token we can decrypt.
+    """Return True if the value looks like a Fernet token.
 
     Used to avoid double-encrypting a value that is already a token.
     """
-    if not value:
-        return False
-    try:
-        Fernet(_get_key()).decrypt(str(value).encode("utf-8"))
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    return looks_encrypted(value)
