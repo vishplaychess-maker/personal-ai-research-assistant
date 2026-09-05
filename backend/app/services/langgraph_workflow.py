@@ -155,6 +155,8 @@ class WorkflowState(TypedDict):
     mcp_result: Optional[str]            # Output of executed MCP tool calls
     mcp_retry_count: int                 # Hermes self-correction loop counter
     regenerate: bool                     # Whether generate_answer should re-run with results
+    # ── Browser Operator state ────────────────────────────
+    browser_pending_approval: Optional[str]  # Risky browser action awaiting user approval
     # ── Plan-then-execute (F6 Capability 1, v1 preview-only) ──
     proposed_plan: List[Dict[str, Any]]   # Plan steps from generate_plan
     plan_pending: bool                    # True if a plan is shown to the user
@@ -1153,18 +1155,20 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
                         break
                     r = _ba.run_action_sync(sid, act, approved=bool(kind))
                     lines.append(f"- {act} → {r.get('output', '')}")
-                block = (
-                    "Browser Operator results:\n" + "\n".join(lines)
-                    if lines else ""
-                )
+
+                # Single pass: results first, then the approval note (if any).
+                # Built as a list so `block` is assigned exactly once.
+                parts = []
+                if lines:
+                    parts.append("Browser Operator results:\n" + "\n".join(lines))
                 if pending:
                     kind, act = pending
-                    note = (
+                    parts.append(
                         f"{_ba.BROWSER_APPROVAL_MARKER} {kind}] {act}\n"
                         'Reply "yes" to approve this action, or "no" to skip it.'
                     )
-                    block = f"{block}\n\n{note}" if block else note
                     state["browser_pending_approval"] = f"{kind}: {act}"
+                block = "\n\n".join(parts)
                 response = _ba.strip_browser_actions(response)
                 if block:
                     response = f"{response}\n\n{block}"
