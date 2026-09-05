@@ -1123,6 +1123,55 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
                 db.refresh(placeholder)
                 state["assistant_message_id"] = placeholder.id
 
+    # ── Browser actions ([BROWSER_ACTION: …]) — Browser Operator ──
+    # Runs the LLM's browser actions in a single pass and appends what
+    # happened to the answer (DOM snapshots stay fenced as untrusted). Risky
+    # actions (login/payment/delete/download) are NOT executed here: the
+    # answer carries a [BROWSER_APPROVAL_REQUIRED] line + state
+    # ["browser_pending_approval"], and run only on a follow-up turn whose
+    # user message is an explicit approval.
+    # ponytail: single-pass, turn-based approval — no regenerate loop and no
+    #   graph interrupt (keeps the multi-agent topology untouched). Add a
+    #   regen/interrupt hop if same-turn "read DOM then act" is needed.
+    if (
+        settings.enable_browser_automation
+        and not state.get("regenerate")
+        and not state.get("pending_command")
+    ):
+        try:
+            from app.services import browser_agent as _ba
+
+            b_actions = _ba.extract_browser_actions(response)
+            if b_actions:
+                sid = state.get("session_id")
+                approved_turn = _ba.is_approval(state.get("user_input", ""))
+                lines, pending = [], None
+                for act in b_actions:
+                    kind = _ba.classify_risky_action(act)
+                    if kind and not approved_turn:
+                        pending = (kind, act)
+                        break
+                    r = _ba.run_action_sync(sid, act, approved=bool(kind))
+                    lines.append(f"- {act} → {r.get('output', '')}")
+                block = (
+                    "Browser Operator results:\n" + "\n".join(lines)
+                    if lines else ""
+                )
+                if pending:
+                    kind, act = pending
+                    note = (
+                        f"{_ba.BROWSER_APPROVAL_MARKER} {kind}] {act}\n"
+                        'Reply "yes" to approve this action, or "no" to skip it.'
+                    )
+                    block = f"{block}\n\n{note}" if block else note
+                    state["browser_pending_approval"] = f"{kind}: {act}"
+                response = _ba.strip_browser_actions(response)
+                if block:
+                    response = f"{response}\n\n{block}"
+        except Exception as exc:  # noqa: BLE001 — browser must never break chat
+            logger.warning("Browser action processing failed (non-fatal): %s", exc)
+        state["response"] = response
+
     # ── Detect proposed command ──────────────────────────
     if settings.enable_terminal_tool and not state.get("regenerate"):
         command = extract_proposed_command(response)
