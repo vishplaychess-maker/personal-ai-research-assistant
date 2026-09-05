@@ -86,6 +86,16 @@ class Settings(BaseSettings):
     # Simple questions always use the normal single-agent path.
     enable_multi_agent: bool = True
 
+    # ── Semantic cache (ChromaDB-backed CAG layer 2) ─────
+    # Second cache layer behind the exact-match CAG (cache_service): embeds
+    # the query (Ollama nomic-embed-text) and serves a previously cached
+    # FINAL response when cosine similarity >= threshold, scoped to the
+    # active provider+model. Embedding/store failures degrade silently to
+    # exact-match-only and never break a chat request.
+    semantic_cache_enabled: bool = True
+    semantic_cache_threshold: float = 0.85
+    semantic_cache_max_entries: int = 1000
+
     # ── MCP tools (Phase 1) ──────────────────────────────
     enable_mcp_tool: bool = False
     mcp_call_timeout_s: int = 30

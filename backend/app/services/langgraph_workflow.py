@@ -959,23 +959,24 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
     system_prompt = _build_system_prompt(state)
 
     # ── CAG: return an identical prior answer without an LLM call ──────
-    # Session-scoped; skipped when regenerating, when a command is pending,
-    # for image prompts, and when RAG context was injected (can go stale).
+    # Session-scoped EXACT match only (zero embedding cost). The semantic
+    # layer runs in run_research_workflow BEFORE the graph starts, so a
+    # paraphrase hit skips the whole pipeline (including this node).
+    # Skipped when regenerating, when a command is pending, for image
+    # prompts, and when RAG context was injected (can go stale).
+    # NOTE: storing happens once, post-graph, in run_research_workflow so
+    # BOTH the single-agent and multi-agent routes cache their final output.
     from app.services import cache_service
 
-    cache_question = None
     if (
         not state.get("regenerate")
         and not state.get("pending_command")
         and not image_url
         and not state.get("sources_used")
     ):
-        cache_question = user_input
-        _cached = cache_service.get(state.get("session_id"), user_input)
+        _cached = cache_service.get_exact(state.get("session_id"), user_input)
         if _cached is not None:
-            # Semantic hits are already labelled by cache_service.
-            label = "" if _cached.startswith("[Semantic Cache Hit]") else "[Cached] "
-            state["response"] = label + _cached
+            state["response"] = "[Cached] " + _cached
             return state
 
     try:
@@ -1118,16 +1119,8 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
             db.refresh(assistant_msg)
             state["assistant_message_id"] = assistant_msg.id
 
-    # CAG: cache the answer for identical future repeats in this session.
-    # Skip when a command/code path fired — those must not be replayed blindly.
-    if (
-        cache_question
-        and not state.get("pending_command")
-        and not state.get("code_result")
-        and not state.get("mcp_result")
-        and not state.get("error")
-    ):
-        cache_service.set(state.get("session_id"), cache_question, state["response"])
+    # CAG store moved to run_research_workflow (post-graph, covers both
+    # the single-agent and multi-agent final responses).
 
     # Clear regenerate flag after use (keep it when MCP dispatched so the
     # test/route sees it and regenerate_answer re-runs with the result).
@@ -1709,6 +1702,67 @@ def run_research_workflow(
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    # ── CAG layer 2: semantic cache lookup BEFORE workflow execution ──
+    # Covers BOTH routes out of route_task (single-agent and the multi-agent
+    # team): a hit here skips the entire graph. Layer 1 is the session-scoped
+    # exact match (zero embedding cost); layer 2 is the ChromaDB-backed
+    # semantic match scoped to provider+model. Skipped when resuming an
+    # approval flow, for image prompts, and when the session has ready
+    # documents (RAG answers can go stale — mirrors the sources_used guard).
+    if (
+        resume_from is None
+        and not image_url
+        and not pending_command_from_db
+        and user_input
+        and user_input.strip()
+    ):
+        try:
+            from app.models.models import Document, DocumentStatus
+            from app.services import semantic_cache
+
+            ready_docs = (
+                db.query(Document)
+                .filter(
+                    Document.session_id == session_id,
+                    Document.status == DocumentStatus.ready.value,
+                )
+                .count()
+            )
+            if ready_docs == 0:
+                session_row = (
+                    db.query(ResearchSession)
+                    .filter(ResearchSession.id == session_id)
+                    .first()
+                )
+                session_model = session_row.model if session_row else None
+                cached, cache_kind = semantic_cache.chat_lookup(
+                    session_id, user_input,
+                    get_user_llm_config(db, user_id), session_model,
+                )
+                if cached is not None:
+                    label = (
+                        "[Semantic Cache Hit] "
+                        if cache_kind == "semantic"
+                        else "[Cached] "
+                    )
+                    logger.info(
+                        "CAG pre-workflow cache hit (kind=%s) for session %s",
+                        cache_kind, session_id,
+                    )
+                    return {
+                        "response": label + cached,
+                        "assistant_message_id": None,
+                        "citations": [],
+                        "sources_used": False,
+                        "memories_used": False,
+                        "extraction_result": None,
+                        "pending_approval": None,
+                        "pending_command": None,
+                        "error": None,
+                    }
+        except Exception as exc:
+            logger.warning("Pre-workflow cache lookup failed (non-fatal): %s", exc)
+
     initial_state: WorkflowState = {
         "session_id": session_id,
         "user_input": user_input,
@@ -1810,6 +1864,34 @@ def run_research_workflow(
             "pending_command": pending,
             "error": None,
         }
+
+    # ── CAG: store the FINAL response (post-Reviewer / post-LLM) ──
+    # Single store point for both graph routes. Never cache error results,
+    # pending commands, code/MCP executions, RAG answers, or image prompts —
+    # replaying those blindly would re-run side effects or serve stale text.
+    try:
+        _resp = final_state.get("response", "")
+        if (
+            resume_from is None
+            and not image_url
+            and _resp
+            and _resp.strip()
+            and not final_state.get("error")
+            and not final_state.get("pending_command")
+            and not final_state.get("code_result")
+            and not final_state.get("mcp_result")
+            and not final_state.get("agent_code_result")
+            and not final_state.get("sources_used")
+        ):
+            from app.services import semantic_cache
+
+            semantic_cache.chat_store(
+                session_id, user_input, _resp,
+                get_user_llm_config(db, user_id),
+                final_state.get("model_name"),
+            )
+    except Exception as exc:
+        logger.warning("Post-workflow cache store failed (non-fatal): %s", exc)
 
     return {
         "response": final_state.get("response", ""),

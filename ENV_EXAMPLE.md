@@ -84,6 +84,9 @@ Ollama fallback chain has a target.
 | Variable | Default | Prod | Notes |
 | --- | --- | --- | --- |
 | `ENABLE_MULTI_AGENT` | `true` | No | Researcher → Coder → Reviewer routing |
+| `SEMANTIC_CACHE_ENABLED` | `true` | No | ChromaDB-backed semantic cache (CAG layer 2) |
+| `SEMANTIC_CACHE_THRESHOLD` | `0.85` | No | Min cosine similarity for a semantic hit |
+| `SEMANTIC_CACHE_MAX_ENTRIES` | `1000` | No | Oldest entries evicted beyond the cap |
 | `ENABLE_DEEP_RESEARCH` | `true` | No | DuckDuckGo search (free, no key) |
 | `DEEP_RESEARCH_MAX_RESULTS` | `5` | No | — |
 | `DEEP_RESEARCH_MAX_SCRAPE` | `3` | No | Hard cap on scrape loop |

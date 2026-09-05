@@ -171,6 +171,44 @@ def set(session_id: int, question: str, answer: str) -> None:
             })
 
 
+def get_exact(session_id: int, question: str) -> Optional[str]:
+    """Exact-match-only lookup (no embedding cost).
+
+    Used by the chat flow's first cache layer (semantic_cache.chat_lookup)
+    so the semantic layer is consulted exactly once per request. Expired
+    entries are treated as a miss (and pruned).
+    """
+    if not question or not question.strip():
+        return None
+    k = _key(session_id, question)
+    with _lock:
+        entry = _store.get(k)
+        if entry is None:
+            return None
+        stored_at, answer = entry
+        if time.time() - stored_at > TTL_SECONDS:
+            _store.pop(k, None)
+            return None
+        return answer
+
+
+def set_exact(session_id: int, question: str, answer: str) -> None:
+    """Exact-match-only store (no embedding cost).
+
+    The semantic layer lives in semantic_cache (ChromaDB-backed); this keeps
+    the in-process instant-hit path warm without double-embedding queries.
+    """
+    if not question or not question.strip() or not answer or not answer.strip():
+        return
+    k = _key(session_id, question)
+    now = time.time()
+    with _lock:
+        if len(_store) >= MAX_ENTRIES and k not in _store:
+            oldest = min(_store, key=lambda kk: _store[kk][0])
+            _store.pop(oldest, None)
+        _store[k] = (now, answer)
+
+
 def clear() -> None:
     """Drop everything (used by tests)."""
     with _lock:

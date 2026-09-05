@@ -392,6 +392,37 @@ async def stream_multi_agent_response(
     history = [m for m in context.history if isinstance(m.get("content"), str)]
     generated = 0
 
+    # ── CAG layer 2: semantic cache lookup BEFORE the agent pipeline ──
+    # A hit here streams the cached FINAL answer and skips the entire
+    # Researcher -> Coder -> Reviewer team. Same guards as the single-agent
+    # stream: plain-text user turn, no RAG context (answers can go stale).
+    from app.services import semantic_cache
+
+    cache_question = None
+    _last_msg = context.history[-1] if context.history else None
+    if (
+        _last_msg
+        and _last_msg.get("role") == "user"
+        and isinstance(_last_msg.get("content"), str)
+        and not context.sources_used
+    ):
+        cache_question = _last_msg["content"]
+        cached, cache_kind = semantic_cache.chat_lookup(
+            context.session_id, cache_question,
+            context.provider_config, context.model_name,
+        )
+        if cached is not None:
+            label = "[Semantic Cache Hit] " if cache_kind == "semantic" else "[Cached] "
+            yield format_sse("token", {"token": label + cached})
+            yield format_sse("complete", {
+                "message_id": None,
+                "citations": context.citations,
+                "sources_used": context.sources_used,
+                "memories_used": context.memories_used,
+                "content": label + cached,
+            })
+            return
+
     def _budget_exceeded() -> bool:
         return generated >= MAX_TOKENS_PER_TASK
 
@@ -561,6 +592,13 @@ async def stream_multi_agent_response(
 
         # ── 4. Stream the Reviewer-approved answer to the user ─────────
         final_text = (final_text or "").strip()
+        # CAG: cache this FINAL (Reviewer-approved) answer. Skip when the
+        # sandbox executed code — replaying must never re-run code paths.
+        if cache_question and not code_result:
+            semantic_cache.chat_store(
+                context.session_id, cache_question, final_text,
+                context.provider_config, context.model_name,
+            )
         for i in range(0, len(final_text), 120):
             yield format_sse("token", {"token": final_text[i:i + 120]})
         yield format_sse("complete", {
@@ -645,10 +683,12 @@ async def stream_chat_response(
             yield sse_event
         return
 
-    # ── CAG: serve an identical, context-free repeat from cache ────────
-    # Only when the last turn is a plain-text user question and no RAG
-    # context was injected (RAG answers can go stale as documents change).
-    from app.services import cache_service
+    # ── CAG: serve an identical or semantically similar, context-free ──
+    # repeat from cache. Only when the last turn is a plain-text user
+    # question and no RAG context was injected (RAG answers can go stale as
+    # documents change). Layer 1 = exact match (zero embedding cost),
+    # layer 2 = ChromaDB-backed semantic match scoped to provider+model.
+    from app.services import semantic_cache
 
     cache_question = None
     _last = context.history[-1] if context.history else None
@@ -659,14 +699,13 @@ async def stream_chat_response(
         and not context.sources_used
     ):
         cache_question = _last["content"]
-        cached = cache_service.get(context.session_id, cache_question)
+        cached, cache_kind = semantic_cache.chat_lookup(
+            context.session_id, cache_question,
+            context.provider_config, context.model_name,
+        )
         if cached is not None:
-            # A semantic hit is already labelled by cache_service; only exact
-            # hits need the "[Cached]" marker. Avoids a redundant double label.
-            label = "" if cached.startswith("[Semantic Cache Hit]") else "[Cached] "
-            if label:
-                yield format_sse("token", {"token": label})
-            yield format_sse("token", {"token": cached})
+            label = "[Semantic Cache Hit] " if cache_kind == "semantic" else "[Cached] "
+            yield format_sse("token", {"token": label + cached})
             yield format_sse("complete", {
                 "message_id": None,
                 "citations": context.citations,
@@ -769,11 +808,12 @@ async def stream_chat_response(
                                 full_response_text += "\n\n" + "\n\n".join(blocks)
                     except Exception as exc:
                         logger.warning("Skill marker processing failed (non-fatal): %s", exc)
-                    # CAG: cache this answer for identical future repeats in this
-                    # session. Skip when code/MCP ran (replay must not re-execute).
+                    # CAG: cache this FINAL answer for identical/similar future
+                    # repeats. Skip when code/MCP ran (replay must not re-execute).
                     if cache_question and not code and not mcp_calls:
-                        cache_service.set(
-                            context.session_id, cache_question, full_response_text
+                        semantic_cache.chat_store(
+                            context.session_id, cache_question, full_response_text,
+                            context.provider_config, context.model_name,
                         )
                     # F6 Cap 2: advisory self-evaluation (never raises, null on error)
                     confidence = None
