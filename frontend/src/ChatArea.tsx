@@ -27,6 +27,8 @@ import {
   Paperclip,
   Upload,
   File as FileIcon,
+  Download,
+  Loader2,
 } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PlanCard } from "./PlanCard";
@@ -34,9 +36,16 @@ import { ConfidenceBadge } from "./ConfidenceBadge";
 import { ModelSelector } from "./ModelSelector";
 import { ProviderSwitcher } from "./ProviderSwitcher";
 import { Button } from "./components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "./components/ui/dropdown-menu";
 import { cn } from "./lib/utils";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "./hooks/useSpeechSynthesis";
+import { exportDocument, type ExportFormat } from "./export";
 import type { Session, Message, Citation, RetryTarget } from "./types";
 
 // ── Helpers ───────────────────────────────────────────────
@@ -150,6 +159,9 @@ interface ChatAreaProps {
   // F6 Capability 1 — plan preview (v1, read-only + cancel)
   planSteps?: Array<Record<string, unknown>>;
   onPlanCancel?: () => void;
+
+  // Report Export — transient error surfaced via the existing chat error banner
+  onExportError?: (message: string) => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -195,6 +207,7 @@ export function ChatArea({
   onRejectTool,
   planSteps = [],
   onPlanCancel,
+  onExportError,
 }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingEndRef = useRef<HTMLDivElement>(null);
@@ -204,6 +217,7 @@ export function ChatArea({
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const [providerRefreshKey, setProviderRefreshKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   const indicators = useMemo(() => ({
     hasSources: sourcesUsedIds.size > 0,
@@ -235,6 +249,30 @@ export function ChatArea({
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 50);
+  };
+
+  // ── Report Export (chat transcript incl. research reports) ──
+  const handleExportChat = async (format: ExportFormat) => {
+    if (!activeSession || exporting) return;
+    setExporting(true);
+    try {
+      await exportDocument({
+        type: "chat",
+        format,
+        title: activeSession.title,
+        data: {
+          messages: messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            created_at: m.created_at,
+          })),
+        },
+      });
+    } catch (err) {
+      onExportError?.(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
   };
 
   // ── Voice input ─────────────────────
@@ -382,6 +420,35 @@ export function ChatArea({
           >
             <Settings2 className="h-4 w-4" />
           </Button>
+
+          {/* Report Export (chat + research reports) */}
+          {hasMessages && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  disabled={exporting}
+                  title="Export conversation (PDF / DOCX)"
+                  className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
+                >
+                  {exporting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => handleExportChat("pdf")}>
+                  <FileText className="h-4 w-4 mr-2" /> Export as PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExportChat("docx")}>
+                  <FileText className="h-4 w-4 mr-2" /> Export as DOCX
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
           {/* Documents Toggle */}
           <Button
