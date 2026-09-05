@@ -18,6 +18,7 @@ import {
   Settings as SettingsIcon,
   MessageSquare,
   Loader2,
+  Network,
 } from "lucide-react";
 import { getAuthHeadersAsync } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -50,6 +51,7 @@ interface SidebarProps {
   onShareSession?: (id: number) => void;
   onLogout?: () => void;
   onOpenSettings?: () => void;
+  onOpenGraph?: () => void;
 }
 
 export function Sidebar({
@@ -66,6 +68,7 @@ export function Sidebar({
   onShareSession,
   onLogout,
   onOpenSettings,
+  onOpenGraph,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -405,6 +408,17 @@ export function Sidebar({
           >
             {theme === "dark" ? <Sun className="h-4 w-4 icon-secondary" /> : <Moon className="h-4 w-4 icon-secondary" />}
           </Button>
+          {onOpenGraph && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onOpenGraph}
+              title="Knowledge Graph"
+              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
+            >
+              <Network className="h-4 w-4 icon-secondary" />
+            </Button>
+          )}
           {onOpenSettings && (
             <Button
               size="icon"

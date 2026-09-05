@@ -262,6 +262,15 @@ def prepare_chat_context(
     except Exception as exc:
         logger.warning("Skill (L2) injection failed (non-fatal): %s", exc)
 
+    # Knowledge graph: [KG_QUERY: <term>] in the user message pulls the
+    # relevant subgraph into context. Non-fatal on any failure.
+    try:
+        from app.services.knowledge_graph import inject_kg_context
+
+        system_parts.extend(inject_kg_context(db, user_input))
+    except Exception as exc:
+        logger.warning("KG (chat) injection failed (non-fatal): %s", exc)
+
     # 7. Agentic web scraping — detect URLs, invoke web_scraper tool
     web_scraped = False
     try:
@@ -324,6 +333,9 @@ def prepare_chat_context(
                 research_context = run_deep_research(user_input)
                 if research_context:
                     system_parts.append(research_context)
+                    from app.services.knowledge_graph import ingest_text_async
+
+                    ingest_text_async(research_context, "deep_research")
             except Exception as exc:
                 logger.warning("Deep research failed (non-fatal): %s", exc)
 

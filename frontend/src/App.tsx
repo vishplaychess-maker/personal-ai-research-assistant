@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useStreaming } from "./useStreaming";
 import { useAuth } from "./AuthContext";
 import { AuthScreen } from "./AuthScreen";
@@ -9,6 +9,10 @@ import { ChatArea } from "./ChatArea";
 import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
 import { MemoryPanel } from "./MemoryPanel";
+// Lazy: the force-graph libs (~200 kB) load only when the panel is opened.
+const KnowledgeGraphPanel = lazy(() =>
+  import("./KnowledgeGraphPanel").then((m) => ({ default: m.KnowledgeGraphPanel }))
+);
 import { API } from "./api";
 import type { Session, Message, Citation, Document, Memory, HealthStatus, SessionExport } from "./types";
 import "./App.css";
@@ -51,6 +55,7 @@ function App() {
   // Model & system prompt state
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
 
   // Shareable Agent Card feedback (transient "copied" notice)
   const [shareNotice, setShareNotice] = useState<string | null>(null);
@@ -517,6 +522,7 @@ function App() {
         onImportSession={handleImportSession}
         onShareSession={handleShareSession}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenGraph={() => setShowGraph(true)}
         onLogout={logout}
       />
 
@@ -633,6 +639,13 @@ function App() {
           sessions={sessions}
           activeSessionId={activeSessionId}
         />
+      )}
+
+      {/* Knowledge Graph overlay */}
+      {showGraph && (
+        <Suspense fallback={null}>
+          <KnowledgeGraphPanel onClose={() => setShowGraph(false)} />
+        </Suspense>
       )}
     </div>
   );

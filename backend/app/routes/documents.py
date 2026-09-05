@@ -259,6 +259,15 @@ async def upload_document(
         except Exception:
             pass  # Non-critical update, chunks are already indexed
 
+        # Knowledge graph: extract entities from the document (fire-and-forget,
+        # own thread + session — never blocks or fails the upload).
+        try:
+            from app.services.knowledge_graph import ingest_text_async
+
+            ingest_text_async(" ".join(texts), f"doc:{doc.id}")
+        except Exception:  # noqa: BLE001 — KG ingest must never fail the upload
+            pass
+
         # Update document status
         doc.status = DocumentStatus.ready.value
         doc.chunk_count = len(chunks)

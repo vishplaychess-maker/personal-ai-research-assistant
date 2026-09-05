@@ -414,3 +414,53 @@ class UserSkill(Base):
 
     def __repr__(self):
         return f"<UserSkill(id={self.id}, user_id={self.user_id}, name='{self.name}', enabled={self.enabled})>"
+
+
+class GraphEntity(Base):
+    """A node in the Knowledge Graph — a concise entity extracted from text.
+
+    Global (not user-scoped) for now: the graph is a shared knowledge base
+    built from every conversation, document and research run.
+    """
+
+    __tablename__ = "graph_entities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False, unique=True, index=True)
+    type = Column(String(60), nullable=False, default="concept")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<GraphEntity(id={self.id}, name='{self.name}', type='{self.type}')>"
+
+
+class GraphRelation(Base):
+    """A directed edge between two GraphEntity rows.
+
+    ``weight`` is incremented each time the same (source, target, relation)
+    triple is seen again, so repeated mentions strengthen the edge.
+    """
+
+    __tablename__ = "graph_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id", "target_id", "relation", name="uq_graph_relations_triple"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(
+        Integer, ForeignKey("graph_entities.id"), nullable=False, index=True
+    )
+    target_id = Column(
+        Integer, ForeignKey("graph_entities.id"), nullable=False, index=True
+    )
+    relation = Column(String(160), nullable=False)
+    weight = Column(Float, nullable=False, default=1.0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<GraphRelation({self.source_id} -[{self.relation}]-> "
+            f"{self.target_id}, w={self.weight})>"
+        )

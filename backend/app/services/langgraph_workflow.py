@@ -423,6 +423,13 @@ def deep_research(state: WorkflowState) -> WorkflowState:
     state["deep_research_context"] = context
     state["deep_research_used"] = bool(context)
     if context:
+        try:
+            from app.services.knowledge_graph import ingest_text_async
+
+            ingest_text_async(context, "deep_research")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("KG ingest (deep_research) skipped: %s", exc)
+    if context:
         logger.info(
             "Deep research gathered context for user %s (query=%.60s)",
             state.get("user_id", 1), user_input,
@@ -886,6 +893,17 @@ def _build_system_prompt(state: WorkflowState) -> str:
                 system_parts.append(body_block)
     except Exception as exc:
         logger.warning("Skill (L2) injection failed (non-fatal): %s", exc)
+
+    # Knowledge graph: [KG_QUERY: <term>] in the user message pulls the
+    # relevant subgraph into context. Non-fatal on any failure.
+    try:
+        from app.services.knowledge_graph import inject_kg_context
+
+        system_parts.extend(
+            inject_kg_context(state["db"], state.get("user_input", ""))
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KG (chat) injection failed (non-fatal): %s", exc)
 
     # Command output context (after execution)
     command_result = state.get("command_result", "")

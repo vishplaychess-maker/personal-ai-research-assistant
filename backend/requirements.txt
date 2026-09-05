@@ -34,3 +34,5 @@ youtube-transcript-api
 apscheduler==3.10.4
 # ── Deep Research (web search, free — no API key required) ──
 duckduckgo-search
+# ── Knowledge Graph — in-memory graph traversal (pure Python, no compiled deps) ──
+networkx==3.4.2

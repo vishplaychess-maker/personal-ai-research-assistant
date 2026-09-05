@@ -73,6 +73,7 @@ from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
 from app.routes.mcp import router as mcp_router
 from app.routes.share import router as share_router
+from app.routes.knowledge_graph import router as knowledge_graph_router
 
 
 def _migrate_provider_encryption():
@@ -484,6 +485,7 @@ app.include_router(auth_router)
 app.include_router(scheduler_router)
 app.include_router(mcp_router)
 app.include_router(share_router)
+app.include_router(knowledge_graph_router)
 
 
 @app.get("/api/health")

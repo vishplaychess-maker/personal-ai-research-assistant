@@ -394,4 +394,14 @@ export const API = {
       method: "POST",
     });
   },
+
+  // ── Knowledge Graph ───────────────────────────────────────
+  getKnowledgeGraph() {
+    return request<KnowledgeGraphData>("/api/knowledge-graph");
+  },
 };
+
+export interface KnowledgeGraphData {
+  nodes: Array<{ id: number; name: string; type: string }>;
+  links: Array<{ source: number; target: number; relation: string; weight: number }>;
+}

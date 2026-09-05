@@ -10,6 +10,8 @@ from app.models.models import (
     MemoryCategory,
     DocumentStatus,
     UserSkill,
+    GraphEntity,
+    GraphRelation,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "MemoryCategory",
     "DocumentStatus",
     "UserSkill",
+    "GraphEntity",
+    "GraphRelation",
 ]
