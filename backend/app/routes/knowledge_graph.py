@@ -22,8 +22,8 @@ def get_graph(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Return the entire knowledge graph as ``{"nodes": [...], "links": [...]}``."""
-    return knowledge_graph.get_all_graph(db)
+    """Return the current user's knowledge graph as ``{"nodes", "links"}``."""
+    return knowledge_graph.get_all_graph(db, current_user.id)
 
 
 @router.get("/search")
@@ -33,5 +33,5 @@ def search_graph(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Return the subgraph around entities matching ``q``."""
-    return knowledge_graph.search_graph(db, q, radius=radius)
+    """Return the subgraph of the current user's graph around entities matching ``q``."""
+    return knowledge_graph.search_graph(db, current_user.id, q, radius=radius)

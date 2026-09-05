@@ -267,7 +267,7 @@ def prepare_chat_context(
     try:
         from app.services.knowledge_graph import inject_kg_context
 
-        system_parts.extend(inject_kg_context(db, user_input))
+        system_parts.extend(inject_kg_context(db, user_id, user_input))
     except Exception as exc:
         logger.warning("KG (chat) injection failed (non-fatal): %s", exc)
 
@@ -335,7 +335,7 @@ def prepare_chat_context(
                     system_parts.append(research_context)
                     from app.services.knowledge_graph import ingest_text_async
 
-                    ingest_text_async(research_context, "deep_research")
+                    ingest_text_async(user_id, research_context, "deep_research")
             except Exception as exc:
                 logger.warning("Deep research failed (non-fatal): %s", exc)
 

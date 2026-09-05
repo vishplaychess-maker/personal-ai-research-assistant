@@ -419,23 +419,31 @@ class UserSkill(Base):
 class GraphEntity(Base):
     """A node in the Knowledge Graph — a concise entity extracted from text.
 
-    Global (not user-scoped) for now: the graph is a shared knowledge base
-    built from every conversation, document and research run.
+    User-scoped: every entity belongs to the user whose document / chat /
+    research run it was extracted from. Names are unique per user, not
+    globally (two users can each have their own "Python").
     """
 
     __tablename__ = "graph_entities"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_graph_entities_user_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(200), nullable=False, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False, index=True)
     type = Column(String(60), nullable=False, default="concept")
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     def __repr__(self):
-        return f"<GraphEntity(id={self.id}, name='{self.name}', type='{self.type}')>"
+        return (
+            f"<GraphEntity(id={self.id}, user_id={self.user_id}, "
+            f"name='{self.name}', type='{self.type}')>"
+        )
 
 
 class GraphRelation(Base):
-    """A directed edge between two GraphEntity rows.
+    """A directed edge between two GraphEntity rows (same user).
 
     ``weight`` is incremented each time the same (source, target, relation)
     triple is seen again, so repeated mentions strengthen the edge.
@@ -449,6 +457,7 @@ class GraphRelation(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     source_id = Column(
         Integer, ForeignKey("graph_entities.id"), nullable=False, index=True
     )

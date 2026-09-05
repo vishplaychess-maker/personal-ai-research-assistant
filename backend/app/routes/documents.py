@@ -264,7 +264,7 @@ async def upload_document(
         try:
             from app.services.knowledge_graph import ingest_text_async
 
-            ingest_text_async(" ".join(texts), f"doc:{doc.id}")
+            ingest_text_async(current_user.id, " ".join(texts), f"doc:{doc.id}")
         except Exception:  # noqa: BLE001 — KG ingest must never fail the upload
             pass
 

@@ -426,7 +426,7 @@ def deep_research(state: WorkflowState) -> WorkflowState:
         try:
             from app.services.knowledge_graph import ingest_text_async
 
-            ingest_text_async(context, "deep_research")
+            ingest_text_async(state.get("user_id", 1), context, "deep_research")
         except Exception as exc:  # noqa: BLE001
             logger.warning("KG ingest (deep_research) skipped: %s", exc)
     if context:
@@ -900,7 +900,9 @@ def _build_system_prompt(state: WorkflowState) -> str:
         from app.services.knowledge_graph import inject_kg_context
 
         system_parts.extend(
-            inject_kg_context(state["db"], state.get("user_input", ""))
+            inject_kg_context(
+                state["db"], state.get("user_id", 1), state.get("user_input", "")
+            )
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("KG (chat) injection failed (non-fatal): %s", exc)

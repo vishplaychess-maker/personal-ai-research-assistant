@@ -137,6 +137,31 @@ def _migrate_provider_encryption():
         conn.commit()
 
 
+def _migrate_knowledge_graph():
+    """Drop the legacy *unscoped* knowledge-graph tables so init_db() rebuilds
+    them user-scoped.
+
+    graph_entities / graph_relations shipped briefly without a ``user_id``
+    column (and with a globally-unique entity name). They hold only derived,
+    re-extractable data and SQLite can't ALTER away the old UNIQUE constraint,
+    so the clean fix is drop + recreate. Runs BEFORE init_db(); a no-op on a
+    fresh database or one already carrying the ``user_id`` column.
+    """
+    inspector = inspect(engine)
+    if "graph_entities" not in inspector.get_table_names():
+        return
+    cols = {c["name"] for c in inspector.get_columns("graph_entities")}
+    if "user_id" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(sa_text("DROP TABLE IF EXISTS graph_relations"))
+        conn.execute(sa_text("DROP TABLE IF EXISTS graph_entities"))
+    logger.info(
+        "Dropped legacy unscoped knowledge-graph tables; "
+        "init_db() will recreate them user-scoped"
+    )
+
+
 def _migrate_user_skills():
     """Create the ``user_skills`` table if it does not exist yet.
 
@@ -409,6 +434,7 @@ async def lifespan(app: FastAPI):
 
     _validate_jwt_secret()
     _warn_ephemeral_sqlite_in_production()
+    _migrate_knowledge_graph()
     init_db()
     _migrate_database()
     _create_default_user()

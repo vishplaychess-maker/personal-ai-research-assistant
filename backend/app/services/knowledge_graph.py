@@ -4,22 +4,24 @@ Storage model
 -------------
 Two plain SQLite tables (``graph_entities``, ``graph_relations``) are the
 source of truth. NetworkX is used only as an in-memory view, rebuilt from
-those rows on demand, for traversal queries (ego / subgraph). The graph is
-global (not user-scoped) — a shared knowledge base grown from every
-conversation, document and research run.
+those rows on demand, for traversal queries (ego / subgraph).
+
+**Per-user.** Every row carries a ``user_id``; every read and write is
+scoped to one user. A user's graph is grown only from their own documents,
+chats and research runs — nothing crosses tenants.
 
 Everything here is best-effort: a failure to extract or persist must never
 break chat, document upload or research. Callers wrap nothing; the module
 swallows its own errors and logs them.
 
-Public API
-----------
-* ``add_entity(db, name, type)``            -> entity id (get-or-create)
-* ``add_relation(db, src, tgt, relation)``  -> creates / strengthens an edge
-* ``search_graph(db, query, radius)``       -> {"nodes": [...], "links": [...]}
-* ``get_all_graph(db)``                     -> {"nodes": [...], "links": [...]}
-* ``ingest_extraction(db, data)``           -> write an extractor result
-* ``ingest_text_async(text, source)``       -> fire-and-forget extract + write
+Public API (every call takes the acting ``user_id``)
+---------------------------------------------------
+* ``add_entity(db, user_id, name, type)``            -> entity id
+* ``add_relation(db, user_id, src, tgt, relation)``  -> creates / strengthens
+* ``search_graph(db, user_id, query, radius)``       -> {"nodes", "links"}
+* ``get_all_graph(db, user_id)``                     -> {"nodes", "links"}
+* ``ingest_extraction(db, user_id, data)``           -> write an extractor result
+* ``ingest_text_async(user_id, text, source)``       -> fire-and-forget ingest
 """
 
 from __future__ import annotations
@@ -77,22 +79,31 @@ def _norm_name(name: str) -> str:
 # ── Writes ────────────────────────────────────────────────
 
 
-def add_entity(db: Session, name: str, type: str = "concept") -> Optional[int]:
-    """Get-or-create an entity by (case-insensitive) name. Returns its id,
-    or ``None`` when the name is empty."""
+def add_entity(
+    db: Session, user_id: int, name: str, type: str = "concept"
+) -> Optional[int]:
+    """Get-or-create an entity by (case-insensitive) name within ``user_id``'s
+    graph. Returns its id, or ``None`` when the name is empty."""
     clean = _norm_name(name)
     if not clean:
         return None
 
     row = (
         db.query(GraphEntity)
-        .filter(func.lower(GraphEntity.name) == clean.lower())
+        .filter(
+            GraphEntity.user_id == user_id,
+            func.lower(GraphEntity.name) == clean.lower(),
+        )
         .first()
     )
     if row:
         return row.id
 
-    row = GraphEntity(name=clean, type=(type or "concept").strip()[:60] or "concept")
+    row = GraphEntity(
+        user_id=user_id,
+        name=clean,
+        type=(type or "concept").strip()[:60] or "concept",
+    )
     db.add(row)
     db.flush()  # populate row.id without committing the whole caller txn
     return row.id
@@ -100,24 +111,26 @@ def add_entity(db: Session, name: str, type: str = "concept") -> Optional[int]:
 
 def add_relation(
     db: Session,
+    user_id: int,
     source_name: str,
     target_name: str,
     relation: str,
     weight: float = 1.0,
 ) -> Optional[int]:
-    """Create the edge ``source -[relation]-> target`` (creating either
-    endpoint entity as needed), or strengthen it (+weight) if it already
-    exists. Returns the relation id, or ``None`` on invalid input."""
+    """Create the edge ``source -[relation]-> target`` in ``user_id``'s graph
+    (creating either endpoint entity as needed), or strengthen it (+weight) if
+    it already exists. Returns the relation id, or ``None`` on invalid input."""
     rel = re.sub(r"\s+", " ", (relation or "").strip())
     rel = re.sub(r"[\[\]{}<>]", "", rel)[:_MAX_RELATION_LEN]
-    src_id = add_entity(db, source_name)
-    tgt_id = add_entity(db, target_name)
+    src_id = add_entity(db, user_id, source_name)
+    tgt_id = add_entity(db, user_id, target_name)
     if not (src_id and tgt_id and rel) or src_id == tgt_id:
         return None
 
     edge = (
         db.query(GraphRelation)
         .filter(
+            GraphRelation.user_id == user_id,
             GraphRelation.source_id == src_id,
             GraphRelation.target_id == tgt_id,
             GraphRelation.relation == rel,
@@ -130,23 +143,30 @@ def add_relation(
         return edge.id
 
     edge = GraphRelation(
-        source_id=src_id, target_id=tgt_id, relation=rel, weight=weight
+        user_id=user_id,
+        source_id=src_id,
+        target_id=tgt_id,
+        relation=rel,
+        weight=weight,
     )
     db.add(edge)
     db.flush()
     return edge.id
 
 
-def ingest_extraction(db: Session, data: Dict[str, Any]) -> int:
+def ingest_extraction(db: Session, user_id: int, data: Dict[str, Any]) -> int:
     """Persist an ``{"entities": [...], "relations": [...]}`` dict (the
-    entity_extractor output shape). Commits on success. Returns the number
-    of relations written/strengthened. Never raises."""
+    entity_extractor output shape) into ``user_id``'s graph. Commits on
+    success. Returns the number of relations written/strengthened. Never
+    raises."""
     if not isinstance(data, dict):
         return 0
     try:
         for ent in data.get("entities", []) or []:
             if isinstance(ent, dict) and ent.get("name"):
-                add_entity(db, str(ent["name"]), str(ent.get("type", "concept")))
+                add_entity(
+                    db, user_id, str(ent["name"]), str(ent.get("type", "concept"))
+                )
 
         written = 0
         for rel in data.get("relations", []) or []:
@@ -154,6 +174,7 @@ def ingest_extraction(db: Session, data: Dict[str, Any]) -> int:
                 continue
             if add_relation(
                 db,
+                user_id,
                 str(rel.get("source", "")),
                 str(rel.get("target", "")),
                 str(rel.get("relation", "related to")),
@@ -162,7 +183,8 @@ def ingest_extraction(db: Session, data: Dict[str, Any]) -> int:
 
         db.commit()
         logger.info(
-            "Knowledge graph: ingested %d entities / %d relations",
+            "Knowledge graph (user %s): ingested %d entities / %d relations",
+            user_id,
             len(data.get("entities", []) or []),
             written,
         )
@@ -173,11 +195,11 @@ def ingest_extraction(db: Session, data: Dict[str, Any]) -> int:
         return 0
 
 
-def ingest_text_async(text: str, source: str = "") -> None:
-    """Fire-and-forget: extract entities from ``text`` and write them to the
-    graph on a daemon thread with its own DB session. Returns immediately so
-    it never adds latency to chat / upload / research."""
-    if not text or not text.strip():
+def ingest_text_async(user_id: int, text: str, source: str = "") -> None:
+    """Fire-and-forget: extract entities from ``text`` and write them to
+    ``user_id``'s graph on a daemon thread with its own DB session. Returns
+    immediately so it never adds latency to chat / upload / research."""
+    if not user_id or not text or not text.strip():
         return
 
     def _worker() -> None:
@@ -194,7 +216,7 @@ def ingest_text_async(text: str, source: str = "") -> None:
         try:
             data = extract_entities(text[:MAX_EXTRACT_CHARS])
             if data.get("entities") or data.get("relations"):
-                ingest_extraction(db, data)
+                ingest_extraction(db, user_id, data)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Knowledge graph background ingest (%s) failed: %s", source, exc
@@ -211,12 +233,16 @@ def ingest_text_async(text: str, source: str = "") -> None:
 # ── Reads ─────────────────────────────────────────────────
 
 
-def _load_graph(db: Session) -> nx.DiGraph:
-    """Build the in-memory NetworkX view from the two tables."""
+def _load_graph(db: Session, user_id: int) -> nx.DiGraph:
+    """Build the in-memory NetworkX view of ``user_id``'s rows only."""
     g = nx.DiGraph()
-    for e in db.query(GraphEntity).all():
+    for e in (
+        db.query(GraphEntity).filter(GraphEntity.user_id == user_id).all()
+    ):
         g.add_node(e.id, name=e.name, type=e.type)
-    for r in db.query(GraphRelation).all():
+    for r in (
+        db.query(GraphRelation).filter(GraphRelation.user_id == user_id).all()
+    ):
         if g.has_node(r.source_id) and g.has_node(r.target_id):
             g.add_edge(
                 r.source_id, r.target_id, relation=r.relation, weight=r.weight
@@ -243,11 +269,11 @@ def _dump(g: nx.DiGraph) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def get_all_graph(
-    db: Session, limit: int = MAX_GRAPH_NODES
+    db: Session, user_id: int, limit: int = MAX_GRAPH_NODES
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """The graph for the UI visualisation, capped at ``limit`` nodes (the
-    most-connected ones) so a large graph can't overwhelm the response."""
-    g = _load_graph(db)
+    """``user_id``'s graph for the UI visualisation, capped at ``limit`` nodes
+    (the most-connected ones) so a large graph can't overwhelm the response."""
+    g = _load_graph(db, user_id)
     if g.number_of_nodes() > limit:
         top = sorted(g.nodes(), key=g.degree, reverse=True)[:limit]
         g = g.subgraph(top)
@@ -255,16 +281,16 @@ def get_all_graph(
 
 
 def search_graph(
-    db: Session, query: str, radius: int = 1
+    db: Session, user_id: int, query: str, radius: int = 1
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Return the subgraph around every entity whose name contains ``query``
-    (case-insensitive substring), expanded ``radius`` hops in either
-    direction. Empty query -> empty result."""
+    """Return the subgraph of ``user_id``'s graph around every entity whose
+    name contains ``query`` (case-insensitive substring), expanded ``radius``
+    hops in either direction. Empty query -> empty result."""
     q = (query or "").strip().lower()
     if not q:
         return {"nodes": [], "links": []}
 
-    g = _load_graph(db)
+    g = _load_graph(db, user_id)
     seeds = [n for n, d in g.nodes(data=True) if q in d.get("name", "").lower()]
     if not seeds:
         return {"nodes": [], "links": []}
@@ -318,13 +344,16 @@ def render_subgraph_text(data: Dict[str, List[Dict[str, Any]]], query: str = "")
     return "\n".join(lines)
 
 
-def inject_kg_context(db: Session, user_input: str) -> List[str]:
-    """For each [KG_QUERY: term] in ``user_input``, return a rendered
-    subgraph block. Returns [] when there are no markers or on any error."""
+def inject_kg_context(db: Session, user_id: int, user_input: str) -> List[str]:
+    """For each [KG_QUERY: term] in ``user_input``, return a rendered subgraph
+    block from ``user_id``'s graph. Returns [] when there are no markers or on
+    any error."""
     try:
         blocks = []
         for term in extract_kg_queries(user_input):
-            blocks.append(render_subgraph_text(search_graph(db, term), term))
+            blocks.append(
+                render_subgraph_text(search_graph(db, user_id, term), term)
+            )
         return blocks
     except Exception as exc:  # noqa: BLE001
         logger.warning("KG context injection failed (non-fatal): %s", exc)
@@ -338,27 +367,35 @@ if __name__ == "__main__":  # pragma: no cover - manual smoke test
 
     init_db()
     _db = SessionLocal()
+    U1, U2 = 991, 992  # two throwaway user ids
     try:
-        assert add_relation(_db, "LangGraph", "Thunder AI", "part of")
-        assert add_relation(_db, "LangGraph", "checkpointer", "uses")
+        assert add_relation(_db, U1, "LangGraph", "Thunder AI", "part of")
+        assert add_relation(_db, U1, "LangGraph", "checkpointer", "uses")
         # strengthen existing edge
-        rid = add_relation(_db, "LangGraph", "Thunder AI", "part of")
+        rid = add_relation(_db, U1, "LangGraph", "Thunder AI", "part of")
         _db.commit()
         edge = _db.get(GraphRelation, rid)
         assert edge.weight >= 2.0, edge.weight
 
-        full = get_all_graph(_db)
+        full = get_all_graph(_db, U1)
         assert any(n["name"] == "LangGraph" for n in full["nodes"])
 
-        sub = search_graph(_db, "langgraph")
+        sub = search_graph(_db, U1, "langgraph")
         assert len(sub["links"]) >= 2, sub
         assert extract_kg_queries("hmm [KG_QUERY: LangGraph] please") == ["LangGraph"]
         rendered = render_subgraph_text(sub, "langgraph")
         assert "LangGraph" in rendered
         assert "untrusted" in rendered.lower()  # injection guard present
 
+        # tenant isolation: U2 sees nothing of U1's graph
+        assert get_all_graph(_db, U2) == {"nodes": [], "links": []}
+        assert search_graph(_db, U2, "langgraph") == {"nodes": [], "links": []}
+        assert inject_kg_context(_db, U2, "[KG_QUERY: LangGraph]") == [
+            '[Knowledge graph] No entities found for "LangGraph".'
+        ]
+
         # marker-forgery names are neutralised
-        mid = add_relation(_db, "[KG_QUERY: x]", "safe", "rel")
+        mid = add_relation(_db, U1, "[KG_QUERY: x]", "safe", "rel")
         _db.commit()
         assert "[KG_QUERY" not in _db.get(GraphRelation, mid).relation
         forged = _db.get(GraphRelation, mid)
@@ -366,7 +403,16 @@ if __name__ == "__main__":  # pragma: no cover - manual smoke test
         assert "[" not in src.name and "]" not in src.name, src.name
 
         # get_all_graph honours its node cap
-        assert len(get_all_graph(_db, limit=1)["nodes"]) == 1
-        print("knowledge_graph self-check OK:", full)
+        assert len(get_all_graph(_db, U1, limit=1)["nodes"]) == 1
+
+        # cleanup
+        _db.query(GraphRelation).filter(
+            GraphRelation.user_id.in_([U1, U2])
+        ).delete(synchronize_session=False)
+        _db.query(GraphEntity).filter(
+            GraphEntity.user_id.in_([U1, U2])
+        ).delete(synchronize_session=False)
+        _db.commit()
+        print("knowledge_graph self-check OK (per-user isolation verified)")
     finally:
         _db.close()
