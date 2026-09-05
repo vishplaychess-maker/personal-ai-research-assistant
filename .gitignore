@@ -29,6 +29,7 @@ build_output.txt
 # Environment
 .env
 .env.local
+.env.bak-*
 
 # Data (created at runtime)
 /data/
