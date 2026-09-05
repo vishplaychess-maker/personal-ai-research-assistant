@@ -571,6 +571,7 @@ function App() {
         onRejectTool={handleToolReject}
         planSteps={planSteps}
         onPlanCancel={() => setPlanSteps([])}
+        onExportError={(msg) => setChatError(msg)}
       />
 
       {/* Document panel */}

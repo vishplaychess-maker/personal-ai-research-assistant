@@ -7,8 +7,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import { X } from "lucide-react";
+import { Download, FileText, Loader2, X } from "lucide-react";
 import { API, type KnowledgeGraphData } from "./api";
+import { exportDocument, type ExportFormat } from "./export";
 
 interface Props {
   onClose: () => void;
@@ -18,8 +19,29 @@ export function KnowledgeGraphPanel({ onClose }: Props) {
   const [data, setData] = useState<KnowledgeGraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
+
+  // Report Export — knowledge graph as PDF / DOCX table
+  const handleExport = async (format: ExportFormat) => {
+    if (!data || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportDocument({
+        type: "knowledge_graph",
+        format,
+        title: "Knowledge Graph",
+        data: { graph: { nodes: data.nodes, links: data.links } },
+      });
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -70,13 +92,42 @@ export function KnowledgeGraphPanel({ onClose }: Props) {
             </span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          title="Close"
-          className="rounded-lg p-1.5 transition-colors hover:bg-white/10"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {data && data.nodes.length > 0 && (
+            <div className="flex items-center gap-1">
+              {exportError && (
+                <span className="max-w-[240px] truncate text-xs text-destructive" title={exportError}>
+                  {exportError}
+                </span>
+              )}
+              <button
+                onClick={() => handleExport("pdf")}
+                disabled={exporting}
+                title="Export graph as PDF"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:opacity-50"
+              >
+                {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                PDF
+              </button>
+              <button
+                onClick={() => handleExport("docx")}
+                disabled={exporting}
+                title="Export graph as DOCX"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:opacity-50"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                DOCX
+              </button>
+            </div>
+          )}
+          <button
+            onClick={onClose}
+            title="Close"
+            className="rounded-lg p-1.5 transition-colors hover:bg-white/10"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div ref={wrapRef} className="relative flex-1 overflow-hidden">
