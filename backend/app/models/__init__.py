@@ -9,6 +9,7 @@ from app.models.models import (
     MessageRole,
     MemoryCategory,
     DocumentStatus,
+    UserSkill,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "MessageRole",
     "MemoryCategory",
     "DocumentStatus",
+    "UserSkill",
 ]

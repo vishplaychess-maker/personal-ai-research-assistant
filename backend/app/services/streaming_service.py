@@ -235,11 +235,13 @@ def prepare_chat_context(
     # load its full body into the prompt so the model follows it this turn.
     # Deterministic, no regeneration loop — the marker comes from the user
     # message (or an earlier decision) and the body is loaded upfront.
+    # DB-backed user skills resolve after filesystem skills (fs precedence).
     try:
-        from app.skills.loader import extract_skill_calls, load_skill_body
+        from app.skills.loader import extract_skill_calls
+        from app.services.user_skill_service import load_skill_body_for_user
 
         for skill_name in extract_skill_calls(user_input):
-            body_block = load_skill_body(skill_name)
+            body_block = load_skill_body_for_user(skill_name, db, user_id)
             if body_block:
                 system_parts.append(body_block)
     except Exception as exc:
@@ -428,10 +430,18 @@ async def stream_multi_agent_response(
 
     # Phase 4: compact L1 skills index (names + descriptions only) injected
     # into the Coder and Reviewer prompts. L2 bodies still load on demand.
+    # Merged view: the user's enabled DB skills are appended to the fs index
+    # (fs precedence on name collision).
     skills_index = ""
     try:
-        from app.skills.loader import skills_catalog
-        skills_index = skills_catalog() or ""
+        from app.database import SessionLocal as _SkillsSessionLocal
+        from app.services.user_skill_service import merged_skill_catalog
+
+        _skills_db = _SkillsSessionLocal()
+        try:
+            skills_index = merged_skill_catalog(_skills_db, context.user_id) or ""
+        finally:
+            _skills_db.close()
     except Exception as exc:
         logger.warning("Skills index injection failed (non-fatal): %s", exc)
 
@@ -790,19 +800,30 @@ async def stream_chat_response(
                     # marker in its text (<skill>name</skill> | USE SKILL: name |
                     # [USE_SKILL: name]), load the body and strip the markers from
                     # the user-visible response. Bounded — single load, no loop.
+                    # DB-backed user skills resolve after filesystem skills.
                     try:
                         from app.skills.loader import (
                             extract_skill_calls,
-                            load_skill_body,
                             process_skill_markers,
                         )
+                        from app.database import SessionLocal as _MarkerSessionLocal
+                        from app.services.user_skill_service import (
+                            load_skill_body_for_user,
+                        )
+
                         skill_names = extract_skill_calls(full_response_text)
                         if skill_names:
                             blocks = []
-                            for sname in skill_names:
-                                body_block = load_skill_body(sname)
-                                if body_block:
-                                    blocks.append(body_block)
+                            _db = _MarkerSessionLocal()
+                            try:
+                                for sname in skill_names:
+                                    body_block = load_skill_body_for_user(
+                                        sname, _db, context.user_id
+                                    )
+                                    if body_block:
+                                        blocks.append(body_block)
+                            finally:
+                                _db.close()
                             full_response_text = process_skill_markers(full_response_text)
                             if blocks:
                                 full_response_text += "\n\n" + "\n\n".join(blocks)

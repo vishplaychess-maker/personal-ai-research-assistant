@@ -67,6 +67,7 @@ from app.routes.settings import router as settings_router
 from app.routes.models import router as models_router
 from app.routes.providers import router as providers_router
 from app.routes.directives import router as directives_router
+from app.routes.skills import router as skills_router
 from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
@@ -135,6 +136,48 @@ def _migrate_provider_encryption():
         conn.commit()
 
 
+def _migrate_user_skills():
+    """Create the ``user_skills`` table if it does not exist yet.
+
+    Dialect-agnostic and idempotent: a plain CREATE TABLE IF NOT EXISTS that
+    runs for SQLite and PostgreSQL alike (fresh installs are also covered by
+    init_db() -> Base.metadata.create_all(); this guards databases created
+    before the table was added to the metadata).
+    """
+    inspector = inspect(engine)
+    if "user_skills" in inspector.get_table_names():
+        return
+    with engine.connect() as conn:
+        conn.execute(
+            sa_text(
+                """
+                CREATE TABLE IF NOT EXISTS user_skills (
+                    id INTEGER PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                    name VARCHAR(50) NOT NULL,
+                    description VARCHAR(200),
+                    body TEXT,
+                    trigger_keywords VARCHAR(400),
+                    enabled BOOLEAN,
+                    created_at TIMESTAMP,
+                    updated_at TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa_text("CREATE INDEX IF NOT EXISTS ix_user_skills_id ON user_skills (id)")
+        )
+        conn.execute(
+            sa_text("CREATE INDEX IF NOT EXISTS ix_user_skills_user_id ON user_skills (user_id)")
+        )
+        conn.execute(
+            sa_text("CREATE INDEX IF NOT EXISTS ix_user_skills_name ON user_skills (name)")
+        )
+        conn.commit()
+    logger.info("Created user_skills table (custom skill creator)")
+
+
 def _migrate_database():
     """Add new columns to existing tables without losing data.
 
@@ -146,6 +189,9 @@ def _migrate_database():
     """
     # API-key encryption at rest: dialect-agnostic column + data move.
     _migrate_provider_encryption()
+
+    # Custom skill creator: dialect-agnostic table creation (idempotent).
+    _migrate_user_skills()
 
     if engine.dialect.name != "sqlite":
         logger.info(
@@ -432,6 +478,7 @@ app.include_router(settings_router)
 app.include_router(models_router)
 app.include_router(providers_router)
 app.include_router(directives_router)
+app.include_router(skills_router)
 app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(scheduler_router)

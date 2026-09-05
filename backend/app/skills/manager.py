@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from .parser import parse_skill_md, Skill
 
 class SkillManager:
@@ -42,16 +42,30 @@ class SkillManager:
         
         return list(skills.values())
 
-    def get_skill_index(self, user_message: str = "") -> str:
+    def get_skill_index(
+        self,
+        user_message: str = "",
+        extra_skills: Optional[List[Tuple[str, str]]] = None,
+    ) -> str:
+        """Render the L1 skill index (name + description lines).
+
+        ``extra_skills`` are (name, description) tuples appended after the
+        filesystem skills (used to merge user-defined DB skills into the same
+        block). With no extras the output is byte-identical to the original
+        filesystem-only behavior.
+        """
         skills = self.discover_skills()
-        if not skills:
+        entries = [(s.name, s.description) for s in skills[:10]]
+        if extra_skills:
+            entries.extend(extra_skills[:10])
+        if not entries:
             return ""
 
         # TODO: Implement token budget and keyword ranking here
         # For now, simple list
         lines = ["\n\n=== Available Skills ==="]
-        for s in skills[:10]:
-            lines.append(f"- {s.name}: {s.description}")
+        for name, description in entries:
+            lines.append(f"- {name}: {description}")
         lines.append("\nTo use a skill, output <skill>skill-name</skill> or call the skill tool.")
         return "\n".join(lines)
 

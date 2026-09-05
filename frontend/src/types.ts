@@ -110,6 +110,22 @@ export interface AgentDirective {
   created_at: string;
 }
 
+// ── User-Defined Skills (custom skill creator) ────────────
+
+export interface UserSkill {
+  id: number;
+  name: string;
+  description: string;
+  trigger_keywords: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserSkillDetail extends UserSkill {
+  body: string;
+}
+
 // ── Model Types ───────────────────────────────────────────
 
 export interface ModelInfo {

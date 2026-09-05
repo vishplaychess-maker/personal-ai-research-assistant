@@ -1,7 +1,17 @@
 import datetime
 import enum
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    ForeignKey,
+    Float,
+    Boolean,
+    UniqueConstraint,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -88,6 +98,7 @@ class User(Base):
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
     providers = relationship("UserProvider", back_populates="user", cascade="all, delete-orphan")
     scheduled_tasks = relationship("ScheduledTask", back_populates="user", cascade="all, delete-orphan")
+    skills = relationship("UserSkill", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"
@@ -365,3 +376,41 @@ class AgentDirective(Base):
 
     def __repr__(self):
         return f"<AgentDirective(id={self.id}, user_id={self.user_id}, is_active={self.is_active})>"
+
+
+class UserSkill(Base):
+    """A user-defined skill stored in the database (custom skill creator).
+
+    Mirrors the filesystem ``Skill`` shape (name/description/body) so DB
+    skills can be merged into the same L1 index and L2 on-demand loading
+    path as bundled/filesystem skills. Filesystem skills take precedence
+    on name collisions (enforced at create time and at lookup time).
+    """
+
+    __tablename__ = "user_skills"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_user_skills_user_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Marker-safe name: ^[a-z0-9][a-z0-9-_]{1,48}$ (lowercase, no spaces)
+    name = Column(String(50), nullable=False, index=True)
+    description = Column(String(200), nullable=False, default="")
+    # L2 markdown body, loaded on demand when the model emits the skill marker
+    body = Column(Text, nullable=False, default="")
+    # Comma-separated lowercase keywords (sanitized, max 10, each <= 32 chars)
+    trigger_keywords = Column(String(400), nullable=False, default="")
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    user = relationship("User", back_populates="skills")
+
+    def __repr__(self):
+        return f"<UserSkill(id={self.id}, user_id={self.user_id}, name='{self.name}', enabled={self.enabled})>"

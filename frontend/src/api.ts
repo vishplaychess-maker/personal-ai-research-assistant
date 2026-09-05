@@ -18,6 +18,8 @@ import type {
   ProviderConfig,
   ProviderModelGroup,
   AgentDirective,
+  UserSkill,
+  UserSkillDetail,
   ScheduledTask,
   ScheduledTaskCreate,
   ScheduledTaskUpdate,
@@ -293,6 +295,48 @@ export const API = {
   },
   deleteDirective(id: number) {
     return request<void>(`/api/directives/${id}`, { method: "DELETE" });
+  },
+
+  // ── User-Defined Skills (custom skill creator) ───────────
+  listSkills() {
+    return request<UserSkill[]>("/api/skills");
+  },
+  getSkill(id: number) {
+    return request<UserSkillDetail>(`/api/skills/${id}`);
+  },
+  createSkill(data: {
+    name: string;
+    description: string;
+    body: string;
+    trigger_keywords?: string;
+  }) {
+    return request<UserSkillDetail>("/api/skills", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  updateSkill(
+    id: number,
+    data: Partial<{
+      name: string;
+      description: string;
+      body: string;
+      trigger_keywords: string;
+    }>
+  ) {
+    return request<UserSkillDetail>(`/api/skills/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+  deleteSkill(id: number) {
+    return request<void>(`/api/skills/${id}`, { method: "DELETE" });
+  },
+  toggleSkill(id: number) {
+    return request<{ id: number; enabled: boolean }>(
+      `/api/skills/${id}/toggle`,
+      { method: "POST" }
+    );
   },
 
   // ── Scheduler ────────────────────────────────────────────

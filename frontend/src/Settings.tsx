@@ -23,6 +23,7 @@ import type { ModelInfo, ProviderConfig, ScheduledTask } from "./types";
 import { ScheduledTasks } from "./ScheduledTasks";
 import { MCPTab } from "./MCPTab";
 import { AgentDirectives } from "./AgentDirectives";
+import { SkillsTab } from "./SkillsTab";
 
 const PROVIDER_OPTIONS = [
   { value: "glm", label: "GLM 5.3 Flash (Free)" },
@@ -52,7 +53,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) {
-  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp" | "directives">("providers");
+  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp" | "directives" | "skills">("providers");
   
   // ── Providers state ──────────────────────────────────────
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -158,12 +159,13 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp" | "directives")} className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp" | "directives" | "skills")} className="w-full">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="scheduler">Scheduled Tasks</TabsTrigger>
             <TabsTrigger value="mcp">MCP Servers</TabsTrigger>
             <TabsTrigger value="directives">Lessons Learned</TabsTrigger>
+            <TabsTrigger value="skills">Skills</TabsTrigger>
           </TabsList>
 
           {/* ── Providers Tab ── */}
@@ -351,6 +353,18 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
               </DialogDescription>
             </DialogHeader>
             <AgentDirectives />
+          </TabsContent>
+
+          {/* ── User-Defined Skills Tab ── */}
+          <TabsContent value="skills">
+            <DialogHeader>
+              <DialogTitle>Skills</DialogTitle>
+              <DialogDescription>
+                Create and manage your own skills — instruction playbooks the
+                agent can activate when a task matches.
+              </DialogDescription>
+            </DialogHeader>
+            <SkillsTab />
           </TabsContent>
         </Tabs>
       </DialogContent>

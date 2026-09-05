@@ -209,11 +209,18 @@ When you answer a question using the "Retrieved Documents" context block:
 # ── Full base prompts (terminal enabled / disabled) ────────
 
 
-def build_base_prompt(terminal_enabled: bool) -> str:
+def build_base_prompt(
+    terminal_enabled: bool,
+    skills_catalog_text: str | None = None,
+) -> str:
     """Build the base system prompt with advisor persona and tool contexts.
 
     Args:
         terminal_enabled: Whether the terminal executor tool is active.
+        skills_catalog_text: Optional pre-rendered L1 skills catalog. When
+            provided it replaces the default filesystem-only catalog (used to
+            merge the user's DB-backed skills into the same block). ``None``
+            keeps the original filesystem-only behavior.
 
     Returns:
         The assembled base system prompt string.
@@ -243,10 +250,16 @@ def build_base_prompt(terminal_enabled: bool) -> str:
 
     # L1 skills catalog: only the name+description of each skill (progressive
     # disclosure). Full bodies load on demand via [USE_SKILL: <name>] (L2).
+    # Callers may pass a pre-merged catalog (fs + user DB skills); ``None``
+    # falls back to the filesystem-only catalog (unchanged behavior).
     try:
         from app.skills.loader import SKILLS_TOOL_CONTEXT, skills_catalog
 
-        catalog = skills_catalog()
+        catalog = (
+            skills_catalog_text
+            if skills_catalog_text is not None
+            else skills_catalog()
+        )
         if catalog:
             parts.append(SKILLS_TOOL_CONTEXT)
             parts.append(catalog)

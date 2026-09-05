@@ -798,12 +798,29 @@ def _build_system_prompt(state: WorkflowState) -> str:
     """Assemble the full system prompt from base + memories + RAG + web + terminal."""
     custom_system_prompt = state.get("system_prompt", None)
 
+    # L1 skills catalog: merge the user's enabled DB skills into the
+    # filesystem index (fs precedence on name collision). Falls back to the
+    # fs-only catalog when there is no DB/user context.
+    merged_catalog = None
+    if state.get("db") is not None:
+        try:
+            from app.services.user_skill_service import merged_skill_catalog
+
+            merged_catalog = merged_skill_catalog(
+                state["db"], state.get("user_id", 1)
+            )
+        except Exception as exc:
+            logger.warning("User skill catalog merge failed (non-fatal): %s", exc)
+
     # Use per-session custom prompt if set, otherwise use the shared
     # advisor prompt with tool-specific instructions.
     base_prompt = (
         custom_system_prompt
         if custom_system_prompt
-        else build_base_prompt(terminal_enabled=settings.enable_terminal_tool)
+        else build_base_prompt(
+            terminal_enabled=settings.enable_terminal_tool,
+            skills_catalog_text=merged_catalog,
+        )
     )
 
     system_parts = [base_prompt]
@@ -856,11 +873,15 @@ def _build_system_prompt(state: WorkflowState) -> str:
 
     # L2 skills: load full skill body upfront when the user requests a skill
     # via [USE_SKILL: <name>]. Deterministic — no regeneration loop.
+    # DB-backed user skills resolve after filesystem skills (fs precedence).
     try:
-        from app.skills.loader import extract_skill_calls, load_skill_body
+        from app.skills.loader import extract_skill_calls
+        from app.services.user_skill_service import load_skill_body_for_user
 
         for skill_name in extract_skill_calls(state.get("user_input", "")):
-            body_block = load_skill_body(skill_name)
+            body_block = load_skill_body_for_user(
+                skill_name, state["db"], state.get("user_id", 1)
+            )
             if body_block:
                 system_parts.append(body_block)
     except Exception as exc:
@@ -1025,17 +1046,21 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         # Skills (L2): strip skill markers from the visible answer and, when a
         # marker like <skill>name</skill> appears, append the loaded body so it
         # is available to the pending command / regeneration paths. Defensive.
+        # DB-backed user skills resolve after filesystem skills (fs precedence).
         try:
             from app.skills.loader import (
                 extract_skill_calls,
-                load_skill_body,
                 process_skill_markers,
             )
+            from app.services.user_skill_service import load_skill_body_for_user
+
             skill_names = extract_skill_calls(response)
             if skill_names:
                 blocks = []
                 for sname in skill_names:
-                    body_block = load_skill_body(sname)
+                    body_block = load_skill_body_for_user(
+                        sname, state.get("db"), state.get("user_id", 1)
+                    )
                     if body_block:
                         blocks.append(body_block)
                 response = process_skill_markers(response)
