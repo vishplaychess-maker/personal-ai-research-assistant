@@ -44,7 +44,7 @@ def fetch_available_chat_models(db: Session = None, user_id: int = None):
     can monkeypatch this function with zero-argument stubs, e.g.
     ``lambda: None`` or ``lambda: ["llama3.2:3b"]``.
     """
-    from app.services.settings_service import list_user_providers
+    from app.services.settings_service import list_user_providers, provider_config_for_row
     from app.services.llm_providers import get_provider
 
     # If a test stub replaced this function, honor the zero-arg contract.
@@ -54,13 +54,7 @@ def fetch_available_chat_models(db: Session = None, user_id: int = None):
         rows = list_user_providers(db, user_id)
         for row in rows:
             try:
-                prov = get_provider(
-                    config={
-                        "provider": row.provider_name,
-                        "api_key": row.api_key or None,
-                        "model": row.default_model or None,
-                    }
-                )
+                prov = get_provider(config=provider_config_for_row(row))
                 names = prov.fetch_available_chat_models() or []
                 all_models.extend(names)
             except Exception:

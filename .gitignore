@@ -18,6 +18,7 @@ npm-debug.log*
 
 # Build logs
 build_log.txt
+build_output.txt
 
 # IDE
 .vscode/
