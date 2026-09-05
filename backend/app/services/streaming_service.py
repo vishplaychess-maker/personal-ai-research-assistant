@@ -174,12 +174,27 @@ def prepare_chat_context(
         history.append({"role": "user", "content": user_input})
 
     # 4. Build system prompt parts
-    # Use per-session custom system prompt if set, otherwise use default
-    base_prompt = (
-        session_system_prompt
-        if session_system_prompt
-        else DEFAULT_SYSTEM_PROMPT
-    )
+    # Use per-session custom system prompt if set, otherwise build the base
+    # prompt with the user's merged skill catalog (fs + enabled DB skills,
+    # fs precedence on name collision) so plain chat sees the same L1 index
+    # as the agent workflows. Falls back to the fs-only default on any
+    # failure — chat must never break because of skills.
+    base_prompt = session_system_prompt
+    if not base_prompt:
+        try:
+            from app.services.user_skill_service import merged_skill_catalog
+
+            merged_catalog = merged_skill_catalog(db, user_id)
+            base_prompt = build_base_prompt(
+                terminal_enabled=settings.enable_terminal_tool,
+                skills_catalog_text=merged_catalog or None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Merged skill catalog build failed (non-fatal), using fs-only default: %s",
+                exc,
+            )
+            base_prompt = DEFAULT_SYSTEM_PROMPT
     system_parts = [base_prompt]
 
     # 5. Retrieve memories (if enabled)
