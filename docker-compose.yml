@@ -77,6 +77,26 @@ services:
       - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
       - MCP_CALL_TIMEOUT_S=${MCP_CALL_TIMEOUT_S:-30}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Media Generation (Image/Video)
+      - ENABLE_MEDIA_GENERATION=${ENABLE_MEDIA_GENERATION:-true}
+      - MEDIA_PROVIDER_PRIMARY=${MEDIA_PROVIDER_PRIMARY:-venice}
+      - MEDIA_DEFAULT_IMAGE_MODEL=${MEDIA_DEFAULT_IMAGE_MODEL:-flux-schnell}
+      - MEDIA_DEFAULT_VIDEO_MODEL=${MEDIA_DEFAULT_VIDEO_MODEL:-seedance-2-0-text-to-video-basic}
+      - MEDIA_VIDEO_POLL_INTERVAL_S=${MEDIA_VIDEO_POLL_INTERVAL_S:-5}
+      - MEDIA_VIDEO_TIMEOUT_S=${MEDIA_VIDEO_TIMEOUT_S:-300}
+      - MEDIA_RATE_LIMIT_PER_MINUTE=${MEDIA_RATE_LIMIT_PER_MINUTE:-10}
+      - VENICE_API_KEY=${VENICE_API_KEY:-}
+      - VENICE_BASE_URL=${VENICE_BASE_URL:-https://api.venice.ai/api/v1}
+      - VENICE_IMAGE_MODEL=${VENICE_IMAGE_MODEL:-flux-schnell}
+      - VENICE_VIDEO_MODEL=${VENICE_VIDEO_MODEL:-seedance-2-0-text-to-video-basic}
+      - NEXA_API_KEY=${NEXA_API_KEY:-}
+      - NEXA_BASE_URL=${NEXA_BASE_URL:-https://nexa-api.com/v1}
+      - NEXA_IMAGE_MODEL=${NEXA_IMAGE_MODEL:-flux-schnell}
+      - NEXA_VIDEO_MODEL=${NEXA_VIDEO_MODEL:-kling-video}
+      - AGNES_API_KEY=${AGNES_API_KEY:-}
+      - AGNES_BASE_URL=${AGNES_BASE_URL:-https://apihub.agnes-ai.com/v1}
+      - AGNES_IMAGE_MODEL=${AGNES_IMAGE_MODEL:-agnes-image-2.1-flash}
+      - AGNES_VIDEO_MODEL=${AGNES_VIDEO_MODEL:-agnes-video-2.5-flash}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 10s

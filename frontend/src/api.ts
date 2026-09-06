@@ -26,6 +26,10 @@ import type {
   SessionExport,
   ImportResult,
   ShareCreateResult,
+  MediaProvidersResponse,
+  MediaGenerateResponse,
+  VideoPollResponse,
+  MediaProviderInfo,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -398,6 +402,39 @@ export const API = {
   // ── Knowledge Graph ───────────────────────────────────────
   getKnowledgeGraph() {
     return request<KnowledgeGraphData>("/api/knowledge-graph");
+  },
+
+  // ── Media Generation (Image/Video) ───────────────────────
+  listMediaProviders() {
+    return request<MediaProvidersResponse>("/api/media/providers");
+  },
+  generateImage(data: {
+    prompt: string;
+    provider?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+  }) {
+    return request<MediaGenerateResponse>("/api/media/generate-image", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  generateVideo(data: {
+    prompt: string;
+    provider?: string;
+    model?: string;
+    duration?: string;
+  }) {
+    return request<MediaGenerateResponse>("/api/media/generate-video", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+  pollVideo(taskId: string, provider: string, wait = false) {
+    return request<VideoPollResponse>(
+      `/api/media/video/${encodeURIComponent(taskId)}?provider=${encodeURIComponent(provider)}&wait=${wait}`
+    );
   },
 };
 

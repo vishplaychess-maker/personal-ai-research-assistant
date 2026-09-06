@@ -146,6 +146,23 @@ class Settings(BaseSettings):
     # search -> scrape -> synthesize loop so it can never run away).
     deep_research_max_scrape: int = 3
 
+    # ── Media Generation (Image/Video) ───────────────────────
+    # Master switch for media generation endpoints.
+    enable_media_generation: bool = True
+    # Primary media provider: "venice" | "nexa" | "agnes"
+    # Falls back in order: Venice -> Nexa -> Agnes
+    media_provider_primary: str = "venice"
+    # Default image model (provider-specific)
+    media_default_image_model: str = "flux-schnell"
+    # Default video model (provider-specific)
+    media_default_video_model: str = "seedance-2-0-text-to-video-basic"
+    # Video polling interval (seconds)
+    media_video_poll_interval_s: int = 5
+    # Video generation timeout (seconds)
+    media_video_timeout_s: int = 300
+    # Rate limit for media endpoints (requests per minute per user)
+    media_rate_limit_per_minute: int = 10
+
     # ── Agent skills (Claude-style SKILL.md, progressive disclosure) ──
     # Directory containing one folder per skill, each with a SKILL.md file.
     # Only name+description are injected (L1); full bodies load on demand via
@@ -259,6 +276,24 @@ class Settings(BaseSettings):
     cohere_model: str = "command-r-plus"
     cohere_max_tokens: int = 2048
     cohere_temperature: float = 0.7
+
+    # Venice AI (OpenAI-compatible API) — primary media provider
+    venice_api_key: str = ""
+    venice_base_url: str = "https://api.venice.ai/api/v1"
+    venice_image_model: str = "flux-schnell"
+    venice_video_model: str = "seedance-2-0-text-to-video-basic"
+
+    # NexaAPI (OpenAI-compatible API) — fallback media provider
+    nexa_api_key: str = ""
+    nexa_base_url: str = "https://nexa-api.com/v1"
+    nexa_image_model: str = "flux-schnell"
+    nexa_video_model: str = "kling-video"
+
+    # Agnes AI (OpenAI-compatible API) — free fallback media provider
+    agnes_api_key: str = ""
+    agnes_base_url: str = "https://apihub.agnes-ai.com/v1"
+    agnes_image_model: str = "agnes-image-2.1-flash"
+    agnes_video_model: str = "agnes-video-2.5-flash"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

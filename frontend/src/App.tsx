@@ -10,6 +10,7 @@ import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { TerminalPanel } from "./TerminalPanel";
+import { MediaGenerationPanel } from "./MediaGenerationPanel";
 // Lazy: the force-graph libs (~200 kB) load only when the panel is opened.
 const KnowledgeGraphPanel = lazy(() =>
   import("./KnowledgeGraphPanel").then((m) => ({ default: m.KnowledgeGraphPanel }))
@@ -58,6 +59,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [showMediaGeneration, setShowMediaGeneration] = useState(false);
 
   // Shareable Agent Card feedback (transient "copied" notice)
   const [shareNotice, setShareNotice] = useState<string | null>(null);
@@ -526,6 +528,7 @@ function App() {
         onOpenSettings={() => setShowSettings(true)}
         onOpenGraph={() => setShowGraph(true)}
         onOpenTerminal={() => setShowTerminal(true)}
+        onOpenMediaGeneration={() => setShowMediaGeneration(true)}
         onLogout={logout}
       />
 
@@ -655,6 +658,26 @@ function App() {
       {/* Terminal overlay */}
       {showTerminal && (
         <TerminalPanel onClose={() => setShowTerminal(false)} />
+      )}
+
+      {/* Media Generation overlay */}
+      {showMediaGeneration && activeSession && (
+        <MediaGenerationPanel
+          onClose={() => setShowMediaGeneration(false)}
+          onMediaGenerated={(type, url) => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: -Date.now(),
+                session_id: activeSession.id,
+                role: "assistant",
+                content: `Generated ${type}:`,
+                image_url: url,
+                created_at: new Date().toISOString(),
+              },
+            ]);
+          }}
+        />
       )}
     </div>
   );

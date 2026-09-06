@@ -67,6 +67,19 @@ function toPlainText(content: string): string {
     .trim();
 }
 
+// Render an attached/generated media URL as <video> for known video
+// extensions, otherwise <img>. Used for both user attachments and
+// media-generation results.
+function renderMedia(url: string, align: "start" | "end") {
+  const isVideo = /\.(mp4|webm|mov|ogg)(\?|$)/i.test(url);
+  const cls = align === "end" ? "max-w-xs rounded-lg self-end" : "max-w-xs rounded-lg self-start";
+  return isVideo ? (
+    <video src={url} controls className={cls} />
+  ) : (
+    <img src={url} alt="Generated or attached media" className={cls} />
+  );
+}
+
 function renderContent(
   msg: Message,
   onCitationClick: (citation: Citation) => void
@@ -74,13 +87,7 @@ function renderContent(
   if (msg.role !== "assistant") {
     return (
       <div className="flex flex-col gap-2">
-        {msg.image_url && (
-          <img
-            src={msg.image_url}
-            alt="User attached image"
-            className="max-w-xs rounded-lg self-end"
-          />
-        )}
+        {msg.image_url && renderMedia(msg.image_url, "end")}
         <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
       </div>
     );
@@ -94,12 +101,15 @@ function renderContent(
   }
 
   return (
-    <div className="prose max-w-none text-sm leading-relaxed">
-      <MarkdownRenderer
-        content={msg.content}
-        citations={parsedCitations}
-        onCitationClick={onCitationClick}
-      />
+    <div className="flex flex-col gap-2">
+      {msg.image_url && renderMedia(msg.image_url, "start")}
+      <div className="prose max-w-none text-sm leading-relaxed">
+        <MarkdownRenderer
+          content={msg.content}
+          citations={parsedCitations}
+          onCitationClick={onCitationClick}
+        />
+      </div>
     </div>
   );
 }
