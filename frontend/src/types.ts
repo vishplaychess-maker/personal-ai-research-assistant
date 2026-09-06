@@ -316,3 +316,39 @@ export interface PublicSharedAgent {
   cover_image_url: string | null;
   views: number;
 }
+
+// ── Media Generation Types ─────────────────────────────────
+
+export interface MediaProviderInfo {
+  name: string;
+  label: string;
+  has_api_key: boolean;
+  default_image_model: string;
+  default_video_model: string;
+  available_image_models: string[];
+  available_video_models: string[];
+}
+
+export interface MediaProvidersResponse {
+  providers: MediaProviderInfo[];
+  primary: string;
+  fallback_order: string[];
+}
+
+export interface MediaGenerateResponse {
+  success: boolean;
+  url?: string | null;
+  task_id?: string | null;
+  error?: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface VideoPollResponse {
+  success: boolean;
+  url?: string | null;
+  task_id?: string | null;
+  error?: string | null;
+  provider?: string | null;
+  status: "processing" | "completed" | "failed";
+}

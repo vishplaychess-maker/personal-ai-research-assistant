@@ -76,6 +76,7 @@ from app.routes.share import router as share_router
 from app.routes.knowledge_graph import router as knowledge_graph_router
 from app.routes.export import router as export_router
 from app.routes.terminal import router as terminal_router
+from app.routes.media import router as media_router
 
 
 def _migrate_provider_encryption():
@@ -206,6 +207,39 @@ def _migrate_user_skills():
     logger.info("Created user_skills table (custom skill creator)")
 
 
+def _migrate_media_video_tasks():
+    """Create the ``media_video_tasks`` table if it does not exist yet.
+
+    Dialect-agnostic, idempotent CREATE TABLE IF NOT EXISTS (fresh installs are
+    also covered by init_db() -> Base.metadata.create_all(); this guards
+    databases created before the table was added to the metadata).
+    """
+    inspector = inspect(engine)
+    if "media_video_tasks" in inspector.get_table_names():
+        return
+    with engine.connect() as conn:
+        conn.execute(
+            sa_text(
+                """
+                CREATE TABLE IF NOT EXISTS media_video_tasks (
+                    task_id VARCHAR(200) PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                    provider VARCHAR(40) NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa_text(
+                "CREATE INDEX IF NOT EXISTS ix_media_video_tasks_user_id "
+                "ON media_video_tasks (user_id)"
+            )
+        )
+        conn.commit()
+    logger.info("Created media_video_tasks table (video task ownership)")
+
+
 def _migrate_database():
     """Add new columns to existing tables without losing data.
 
@@ -220,6 +254,9 @@ def _migrate_database():
 
     # Custom skill creator: dialect-agnostic table creation (idempotent).
     _migrate_user_skills()
+
+    # Video task ownership: dialect-agnostic table creation (idempotent).
+    _migrate_media_video_tasks()
 
     if engine.dialect.name != "sqlite":
         logger.info(
@@ -516,6 +553,7 @@ app.include_router(share_router)
 app.include_router(knowledge_graph_router)
 app.include_router(export_router)
 app.include_router(terminal_router)
+app.include_router(media_router)
 
 
 @app.get("/api/health")

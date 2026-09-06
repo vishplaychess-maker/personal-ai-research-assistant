@@ -20,6 +20,8 @@ import {
   Loader2,
   Network,
   SquareTerminal,
+  Image,
+  Video,
 } from "lucide-react";
 import { getAuthHeadersAsync } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -54,6 +56,7 @@ interface SidebarProps {
   onOpenSettings?: () => void;
   onOpenGraph?: () => void;
   onOpenTerminal?: () => void;
+  onOpenMediaGeneration?: () => void;
 }
 
 export function Sidebar({
@@ -72,6 +75,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenGraph,
   onOpenTerminal,
+  onOpenMediaGeneration,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -431,6 +435,18 @@ export function Sidebar({
               className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
             >
               <SquareTerminal className="h-4 w-4 icon-secondary" />
+            </Button>
+          )}
+          {onOpenMediaGeneration && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onOpenMediaGeneration}
+              title="Media Generation"
+              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
+            >
+              <Image className="h-4 w-4 icon-secondary" />
+              <Video className="h-4 w-4 icon-secondary ml-1 -mt-1" />
             </Button>
           )}
           {onOpenSettings && (
