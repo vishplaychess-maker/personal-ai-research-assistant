@@ -108,6 +108,11 @@ def validate_command(command: str) -> List[str]:
         raise CommandRejected("empty command")
     if len(text) > _MAX_COMMAND_LEN:
         raise CommandRejected(f"command too long (> {_MAX_COMMAND_LEN} chars)")
+    # A single command never contains a newline/NUL. Reject before shlex,
+    # which would otherwise treat an embedded newline as a plain separator
+    # and hide a pasted multi-line script.
+    if any(c in text for c in ("\n", "\r", "\x00")):
+        raise CommandRejected("newline / NUL in command")
 
     for pat in _BLOCK_PATTERNS:
         if pat.search(text):
