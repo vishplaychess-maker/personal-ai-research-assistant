@@ -107,15 +107,23 @@ class Settings(BaseSettings):
     # shell=False, a fixed cwd, a minimal env, and a hard timeout. This is
     # NOT the agent-proposed-command approval flow ([PROPOSED_COMMAND]) —
     # that is untouched.
+    #
+    # The allowlist is a security boundary, so it holds ONLY commands that do
+    # not themselves execute arbitrary code. Language interpreters and build
+    # tools (python, node, pip, npm, make, go, cargo, pytest, …) are
+    # deliberately excluded — `python -c`, `node -e`, `find -exec`,
+    # `make <target>`, `pip install` (setup.py) are all RCE and no blocklist
+    # can enclose them. `find` and `git` are allowed but arg-guarded in
+    # validate_command() (no -exec/-delete; read-only git subcommands, no -c).
+    # Adding an interpreter here re-opens full RCE for anyone who can reach
+    # the endpoint — do it only on a trusted single-user box and know the cost.
     enable_terminal_panel: bool = False
     terminal_panel_timeout_s: int = 30
     terminal_panel_max_output_bytes: int = 200_000
     terminal_panel_allowlist: str = (
-        "echo,ls,pwd,cat,head,tail,wc,grep,rg,find,tree,stat,file,"
-        "git,python,python3,pip,pip3,pytest,ruff,mypy,black,"
-        "node,npm,npx,pnpm,yarn,tsc,"
-        "go,cargo,rustc,make,"
-        "df,du,uname,whoami,id,date,env,printenv,which,hostname"
+        "echo,printf,ls,pwd,cat,head,tail,wc,grep,rg,find,tree,stat,file,realpath,"
+        "basename,dirname,sort,uniq,cut,nl,diff,cmp,sleep,true,false,"
+        "git,df,du,uname,whoami,id,date,env,printenv,which,hostname,uptime,free"
     )
 
     # ── Browser automation (multi-agent Browser Operator) ─

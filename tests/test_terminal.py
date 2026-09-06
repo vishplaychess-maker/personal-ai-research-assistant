@@ -52,10 +52,38 @@ def test_validate_returns_argv():
     "wget http://x/y",          # not in allowlist
     "git push origin main",     # repo mutation blocked
     "echo hi\nrm x",            # newline arg-smuggling
+    # interpreter / build-tool RCE — argv[0] no longer allowlisted
+    "python -c print(1)",
+    "python3 -c pass",
+    "node -e 1",
+    "pip install anything",
+    "pytest",
+    "make sometarget",
+    "go run main.go",
+    "cargo build",
+    "npm run x",
+    # exec/write options on otherwise-allowed commands
+    "find . -name x -exec sh -c id ;",
+    "find . -delete",
+    "git -c core.pager=sh log",
+    "git clone http://x/y",
+    "git log --output /tmp/pwn",
 ])
 def test_blocked_commands_rejected(cmd):
     with pytest.raises(CommandRejected):
         validate_command(cmd)
+
+
+@pytest.mark.parametrize("cmd", [
+    "echo hello world",
+    "git log --oneline -3",
+    "git status",
+    "grep -c pattern file",   # -c is a count flag here, not an interpreter flag
+    "uniq -c",
+    "find . -name '*.py' -type f",
+])
+def test_safe_commands_allowed(cmd):
+    validate_command(cmd)  # must not raise
 
 
 def test_shell_metachars_are_inert_not_blocked():
@@ -96,7 +124,7 @@ def test_route_404_when_disabled(monkeypatch):
 # ── 3. timeout ───────────────────────────────────────────
 
 def test_timeout_kills_long_command():
-    events = _run('python -c "import time; time.sleep(5)"', timeout=1)
+    events = _run("sleep 5", timeout=1)
     assert events[-1]["event"] == "timeout", events
 
 
@@ -109,9 +137,12 @@ def test_dry_run_does_not_execute():
 
 
 def test_output_byte_cap(monkeypatch):
-    monkeypatch.setattr(settings, "terminal_panel_max_output_bytes", 40)
-    events = _run('python -c "print(\'x\'*500)"')
-    assert any("truncated" in e.get("line", "") for e in events), events
+    monkeypatch.setattr(settings, "terminal_panel_max_output_bytes", 30)
+    # find on a populated dir -> many lines, comfortably over 30 bytes
+    events = _run("find /usr/bin -maxdepth 1 -type f")
+    assert any("truncated" in e.get("line", "").lower() for e in events), events
+    body = sum(len(e.get("line", "")) for e in events if e["event"] == "stdout")
+    assert body <= 60, body  # capped, allowing one partial line of slack
 
 
 def test_terminal_hitl_untouched():
