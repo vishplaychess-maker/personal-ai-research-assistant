@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Loader2,
   Network,
+  SquareTerminal,
 } from "lucide-react";
 import { getAuthHeadersAsync } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -52,6 +53,7 @@ interface SidebarProps {
   onLogout?: () => void;
   onOpenSettings?: () => void;
   onOpenGraph?: () => void;
+  onOpenTerminal?: () => void;
 }
 
 export function Sidebar({
@@ -69,6 +71,7 @@ export function Sidebar({
   onLogout,
   onOpenSettings,
   onOpenGraph,
+  onOpenTerminal,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -417,6 +420,17 @@ export function Sidebar({
               className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
             >
               <Network className="h-4 w-4 icon-secondary" />
+            </Button>
+          )}
+          {onOpenTerminal && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onOpenTerminal}
+              title="Terminal"
+              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
+            >
+              <SquareTerminal className="h-4 w-4 icon-secondary" />
             </Button>
           )}
           {onOpenSettings && (

@@ -75,6 +75,7 @@ from app.routes.mcp import router as mcp_router
 from app.routes.share import router as share_router
 from app.routes.knowledge_graph import router as knowledge_graph_router
 from app.routes.export import router as export_router
+from app.routes.terminal import router as terminal_router
 
 
 def _migrate_provider_encryption():
@@ -514,6 +515,7 @@ app.include_router(mcp_router)
 app.include_router(share_router)
 app.include_router(knowledge_graph_router)
 app.include_router(export_router)
+app.include_router(terminal_router)
 
 
 @app.get("/api/health")

@@ -101,6 +101,23 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
+    # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
+    # OFF by default. When on, POST /api/terminal/execute streams the output
+    # of an allowlisted command (argv[0] must be in the list), run with
+    # shell=False, a fixed cwd, a minimal env, and a hard timeout. This is
+    # NOT the agent-proposed-command approval flow ([PROPOSED_COMMAND]) —
+    # that is untouched.
+    enable_terminal_panel: bool = False
+    terminal_panel_timeout_s: int = 30
+    terminal_panel_max_output_bytes: int = 200_000
+    terminal_panel_allowlist: str = (
+        "echo,ls,pwd,cat,head,tail,wc,grep,rg,find,tree,stat,file,"
+        "git,python,python3,pip,pip3,pytest,ruff,mypy,black,"
+        "node,npm,npx,pnpm,yarn,tsc,"
+        "go,cargo,rustc,make,"
+        "df,du,uname,whoami,id,date,env,printenv,which,hostname"
+    )
+
     # ── Browser automation (multi-agent Browser Operator) ─
     # OFF by default: lets the LangGraph team drive a real Chromium (click,
     # type, navigate) via [BROWSER_ACTION: ...]. Risky actions (login,

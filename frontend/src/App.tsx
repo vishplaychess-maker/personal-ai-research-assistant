@@ -9,6 +9,7 @@ import { ChatArea } from "./ChatArea";
 import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
 import { MemoryPanel } from "./MemoryPanel";
+import { TerminalPanel } from "./TerminalPanel";
 // Lazy: the force-graph libs (~200 kB) load only when the panel is opened.
 const KnowledgeGraphPanel = lazy(() =>
   import("./KnowledgeGraphPanel").then((m) => ({ default: m.KnowledgeGraphPanel }))
@@ -56,6 +57,7 @@ function App() {
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
 
   // Shareable Agent Card feedback (transient "copied" notice)
   const [shareNotice, setShareNotice] = useState<string | null>(null);
@@ -523,6 +525,7 @@ function App() {
         onShareSession={handleShareSession}
         onOpenSettings={() => setShowSettings(true)}
         onOpenGraph={() => setShowGraph(true)}
+        onOpenTerminal={() => setShowTerminal(true)}
         onLogout={logout}
       />
 
@@ -647,6 +650,11 @@ function App() {
         <Suspense fallback={null}>
           <KnowledgeGraphPanel onClose={() => setShowGraph(false)} />
         </Suspense>
+      )}
+
+      {/* Terminal overlay */}
+      {showTerminal && (
+        <TerminalPanel onClose={() => setShowTerminal(false)} />
       )}
     </div>
   );
