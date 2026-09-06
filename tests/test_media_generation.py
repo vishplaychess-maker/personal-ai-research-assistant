@@ -330,24 +330,68 @@ class TestRateLimitKey:
 
 
 class TestTaskOwnership:
-    """poll_video authorises by task creator (IDOR guard)."""
+    """poll_video authorises by the persisted task creator (IDOR guard).
 
-    def test_foreign_task_id_is_rejected(self):
-        from app.routes import media as media_mod
+    Exercises the real media_video_tasks table via a DB session.
+    """
 
-        media_mod._task_owners.clear()
-        media_mod._task_owners["task-abc"] = 1  # owned by user 1
+    @pytest.fixture
+    def db(self):
+        from app.database import SessionLocal
+        from app.models.models import MediaVideoTask
 
-        # poll_video refuses when _task_owners.get(task_id) != current_user.id
-        assert media_mod._task_owners.get("task-abc") != 2
+        s = SessionLocal()
+        s.query(MediaVideoTask).filter(
+            MediaVideoTask.task_id.like("pytest-%")
+        ).delete(synchronize_session=False)
+        s.commit()
+        yield s
+        s.query(MediaVideoTask).filter(
+            MediaVideoTask.task_id.like("pytest-%")
+        ).delete(synchronize_session=False)
+        s.commit()
+        s.close()
 
-    def test_unknown_task_id_is_refused_fail_closed(self):
-        # No ownership record (never seen, or lost on restart) -> the predicate
-        # `owner != current_user.id` is true for any user -> 404, not proxied.
-        from app.routes import media as media_mod
+    def test_owner_can_poll_foreign_user_cannot(self, db):
+        from app.routes.media import _record_video_task, _user_owns_task
 
-        media_mod._task_owners.clear()
-        assert media_mod._task_owners.get("never-seen") != 7
+        _record_video_task(db, "pytest-task-1", user_id=4242, provider="venice")
+
+        assert _user_owns_task(db, "pytest-task-1", 4242) is True
+        assert _user_owns_task(db, "pytest-task-1", 1) is False  # foreign user
+
+    def test_unknown_task_id_is_refused_fail_closed(self, db):
+        from app.routes.media import _user_owns_task
+
+        # No row (never seen, or pruned) -> False for any user -> poll_video 404s.
+        assert _user_owns_task(db, "pytest-never-seen", 7) is False
+
+    def test_stale_rows_pruned_on_record(self, db):
+        import datetime
+
+        from app.models.models import MediaVideoTask
+        from app.routes.media import _record_video_task
+
+        db.merge(
+            MediaVideoTask(
+                task_id="pytest-stale",
+                user_id=1,
+                provider="venice",
+                created_at=datetime.datetime.utcnow() - datetime.timedelta(days=1),
+            )
+        )
+        db.commit()
+
+        _record_video_task(db, "pytest-fresh", user_id=1, provider="venice")
+
+        assert (
+            db.query(MediaVideoTask).filter(MediaVideoTask.task_id == "pytest-stale").first()
+            is None
+        )
+        assert (
+            db.query(MediaVideoTask).filter(MediaVideoTask.task_id == "pytest-fresh").first()
+            is not None
+        )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ GET    /api/media/video/{task_id} — Poll video generation status
 GET    /api/media/providers       — List available media providers
 """
 
+import datetime
 import logging
 from typing import Literal, Optional
 
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models.models import User
+from app.models.models import MediaVideoTask, User
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.media_generation import GenerationResult, get_media_service
@@ -28,11 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Rate limiter key prefix
 MEDIA_RATE_LIMIT_PREFIX = "media_gen"
-
-# task_id -> owning user id. Video tasks are not persisted, so this in-memory
-# map is what authorises polling. Single-process only.
-# ponytail: move to a media_tasks table if the backend ever runs >1 worker.
-_task_owners: dict[str, int] = {}
 
 
 # ── Schemas ─────────────────────────────────────────────────
@@ -142,6 +138,38 @@ def _check_media_rate_limit(user: User) -> None:
         )
 
 
+def _record_video_task(db: Session, task_id: str, user_id: int, provider: str) -> None:
+    """Persist task ownership (authorises later polling) and opportunistically
+    prune rows older than ~2x the video timeout — no scheduler in this app."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(
+        seconds=2 * settings.media_video_timeout_s
+    )
+    db.query(MediaVideoTask).filter(MediaVideoTask.created_at < cutoff).delete(
+        synchronize_session=False
+    )
+    # merge, not add: a provider that re-issues a task_id must not 500 on the PK.
+    db.merge(
+        MediaVideoTask(
+            task_id=task_id,
+            user_id=user_id,
+            provider=provider or "",
+            created_at=datetime.datetime.utcnow(),
+        )
+    )
+    db.commit()
+
+
+def _user_owns_task(db: Session, task_id: str, user_id: int) -> bool:
+    """True only if this user created this task. Fail closed: an unknown
+    task_id (never seen, or the row was pruned) returns False."""
+    return (
+        db.query(MediaVideoTask.task_id)
+        .filter(MediaVideoTask.task_id == task_id, MediaVideoTask.user_id == user_id)
+        .first()
+        is not None
+    )
+
+
 def _result_to_response(result: GenerationResult) -> MediaGenerateResponse:
     """Convert GenerationResult to API response."""
     return MediaGenerateResponse(
@@ -238,10 +266,7 @@ async def generate_video(
         raise HTTPException(status_code=502, detail=result.error or "Video generation failed")
 
     if result.task_id:
-        # Bounded to keep this from growing without limit; oldest entry drops.
-        if len(_task_owners) >= 10_000:
-            _task_owners.pop(next(iter(_task_owners)), None)
-        _task_owners[result.task_id] = current_user.id
+        _record_video_task(db, result.task_id, current_user.id, result.provider or "")
 
     return _result_to_response(result)
 
@@ -259,10 +284,10 @@ async def poll_video(
     _check_media_rate_limit(current_user)
 
     # Authorise: a task may only be polled by the user who created it.
-    # Fail CLOSED — an unknown task_id (never seen, or lost on restart) is
+    # Fail CLOSED — an unknown task_id (never seen, or its row pruned) is
     # refused, not proxied. 404 (not 403) so it stays indistinguishable from
     # a task that does not exist.
-    if _task_owners.get(task_id) != current_user.id:
+    if not _user_owns_task(db, task_id, current_user.id):
         raise HTTPException(status_code=404, detail="Unknown task")
 
     service = get_media_service()

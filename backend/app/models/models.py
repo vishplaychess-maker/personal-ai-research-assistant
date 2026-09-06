@@ -473,3 +473,31 @@ class GraphRelation(Base):
             f"<GraphRelation({self.source_id} -[{self.relation}]-> "
             f"{self.target_id}, w={self.weight})>"
         )
+
+
+class MediaVideoTask(Base):
+    """Ownership record for an async video-generation task.
+
+    Video providers issue an opaque ``task_id``; the media itself is not
+    persisted. This row is what authorises polling ``GET /video/{task_id}`` —
+    a task may only be polled by the user who created it. Rows are short-lived
+    and pruned opportunistically once older than ~2x the video timeout.
+    """
+
+    __tablename__ = "media_video_tasks"
+
+    task_id = Column(String(200), primary_key=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider = Column(String(40), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<MediaVideoTask(task_id='{self.task_id}', user_id={self.user_id}, "
+            f"provider='{self.provider}')>"
+        )
