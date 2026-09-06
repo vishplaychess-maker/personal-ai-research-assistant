@@ -101,6 +101,31 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
+    # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
+    # OFF by default. When on, POST /api/terminal/execute streams the output
+    # of an allowlisted command (argv[0] must be in the list), run with
+    # shell=False, a fixed cwd, a minimal env, and a hard timeout. This is
+    # NOT the agent-proposed-command approval flow ([PROPOSED_COMMAND]) —
+    # that is untouched.
+    #
+    # The allowlist is a security boundary, so it holds ONLY commands that do
+    # not themselves execute arbitrary code. Language interpreters and build
+    # tools (python, node, pip, npm, make, go, cargo, pytest, …) are
+    # deliberately excluded — `python -c`, `node -e`, `find -exec`,
+    # `make <target>`, `pip install` (setup.py) are all RCE and no blocklist
+    # can enclose them. `find` and `git` are allowed but arg-guarded in
+    # validate_command() (no -exec/-delete; read-only git subcommands, no -c).
+    # Adding an interpreter here re-opens full RCE for anyone who can reach
+    # the endpoint — do it only on a trusted single-user box and know the cost.
+    enable_terminal_panel: bool = False
+    terminal_panel_timeout_s: int = 30
+    terminal_panel_max_output_bytes: int = 200_000
+    terminal_panel_allowlist: str = (
+        "echo,printf,ls,pwd,cat,head,tail,wc,grep,rg,find,tree,stat,file,realpath,"
+        "basename,dirname,sort,uniq,cut,nl,diff,cmp,sleep,true,false,"
+        "git,df,du,uname,whoami,id,date,env,printenv,which,hostname,uptime,free"
+    )
+
     # ── Browser automation (multi-agent Browser Operator) ─
     # OFF by default: lets the LangGraph team drive a real Chromium (click,
     # type, navigate) via [BROWSER_ACTION: ...]. Risky actions (login,
