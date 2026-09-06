@@ -8,10 +8,10 @@ GET    /api/media/providers       — List available media providers
 """
 
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -29,23 +29,28 @@ logger = logging.getLogger(__name__)
 # Rate limiter key prefix
 MEDIA_RATE_LIMIT_PREFIX = "media_gen"
 
+# task_id -> owning user id. Video tasks are not persisted, so this in-memory
+# map is what authorises polling. Single-process only.
+# ponytail: move to a media_tasks table if the backend ever runs >1 worker.
+_task_owners: dict[str, int] = {}
+
 
 # ── Schemas ─────────────────────────────────────────────────
 
 
 class ImageGenerateRequest(BaseModel):
-    prompt: str
-    provider: Optional[str] = None  # "venice" | "nexa" | "agnes"
-    model: Optional[str] = None
-    width: int = 1024
-    height: int = 1024
+    prompt: str = Field(min_length=1, max_length=4000)
+    provider: Optional[Literal["venice", "nexa", "agnes"]] = None
+    model: Optional[str] = Field(default=None, max_length=100)
+    width: int = Field(default=1024, ge=256, le=2048)
+    height: int = Field(default=1024, ge=256, le=2048)
 
 
 class VideoGenerateRequest(BaseModel):
-    prompt: str
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    duration: str = "5s"
+    prompt: str = Field(min_length=1, max_length=4000)
+    provider: Optional[Literal["venice", "nexa", "agnes"]] = None
+    model: Optional[str] = Field(default=None, max_length=100)
+    duration: Literal["3s", "5s", "10s"] = "5s"
 
 
 class MediaGenerateResponse(BaseModel):
@@ -119,22 +124,18 @@ def _check_media_enabled() -> None:
         )
 
 
-def _get_client_ip(request) -> str:
-    """Extract client IP for rate limiting."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+def _check_media_rate_limit(user: User) -> None:
+    """Check rate limit for media generation endpoints.
 
-
-async def _check_media_rate_limit(request, user: User) -> None:
-    """Check rate limit for media generation endpoints."""
+    Keyed on the authenticated user id only — the user is the stable identity
+    here, and folding in a client-supplied (X-Forwarded-For) IP would let a
+    caller rotate the header to bypass their quota.
+    """
     limiter = get_rate_limiter()
-    key = f"{MEDIA_RATE_LIMIT_PREFIX}:{user.id}:{_get_client_ip(request)}"
+    key = f"{MEDIA_RATE_LIMIT_PREFIX}:{user.id}"
     max_attempts = settings.media_rate_limit_per_minute
-    window_seconds = 60
 
-    if limiter.is_rate_limited(key, max_attempts, window_seconds):
+    if limiter.is_rate_limited(key, max_attempts, 60):
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Maximum {max_attempts} requests per minute.",
@@ -191,14 +192,13 @@ def list_providers(
 @router.post("/generate-image", response_model=MediaGenerateResponse)
 async def generate_image(
     request: ImageGenerateRequest,
-    http_request: Request,  # FastAPI Request for rate limiting
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ):
     """Generate an image using the specified or fallback provider."""
     _check_media_enabled()
-    await _check_media_rate_limit(http_request, current_user)
+    _check_media_rate_limit(current_user)
 
     service = get_media_service()
     result = await service.generate_image(
@@ -218,14 +218,13 @@ async def generate_image(
 @router.post("/generate-video", response_model=MediaGenerateResponse)
 async def generate_video(
     request: VideoGenerateRequest,
-    http_request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ):
     """Start video generation (async). Returns task_id for polling."""
     _check_media_enabled()
-    await _check_media_rate_limit(http_request, current_user)
+    _check_media_rate_limit(current_user)
 
     service = get_media_service()
     result = await service.generate_video(
@@ -237,6 +236,12 @@ async def generate_video(
 
     if not result.success:
         raise HTTPException(status_code=502, detail=result.error or "Video generation failed")
+
+    if result.task_id:
+        # Bounded to keep this from growing without limit; oldest entry drops.
+        if len(_task_owners) >= 10_000:
+            _task_owners.pop(next(iter(_task_owners)), None)
+        _task_owners[result.task_id] = current_user.id
 
     return _result_to_response(result)
 
@@ -251,6 +256,13 @@ async def poll_video(
 ):
     """Poll video generation status. Optionally wait for completion."""
     _check_media_enabled()
+    _check_media_rate_limit(current_user)
+
+    # Authorise: a task may only be polled by the user who created it.
+    # 404 (not 403) so an unknown/foreign task_id is indistinguishable.
+    owner = _task_owners.get(task_id)
+    if owner is not None and owner != current_user.id:
+        raise HTTPException(status_code=404, detail="Unknown task")
 
     service = get_media_service()
 

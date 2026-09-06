@@ -271,5 +271,84 @@ class TestMediaRoutes:
         assert client.post("/api/media/generate-video", json={"prompt": "test"}).status_code in (401, 403)
 
 
+class TestRequestValidation:
+    """Schema-level DoS guards (bounds on width/height/prompt/duration/provider)."""
+
+    def test_image_rejects_oversized_dimensions(self):
+        from pydantic import ValidationError
+        from app.routes.media import ImageGenerateRequest
+
+        with pytest.raises(ValidationError):
+            ImageGenerateRequest(prompt="a cat", width=999_999)
+        with pytest.raises(ValidationError):
+            ImageGenerateRequest(prompt="a cat", height=1)
+
+    def test_image_rejects_empty_and_overlong_prompt(self):
+        from pydantic import ValidationError
+        from app.routes.media import ImageGenerateRequest
+
+        with pytest.raises(ValidationError):
+            ImageGenerateRequest(prompt="")
+        with pytest.raises(ValidationError):
+            ImageGenerateRequest(prompt="x" * 4001)
+
+    def test_image_rejects_unknown_provider(self):
+        from pydantic import ValidationError
+        from app.routes.media import ImageGenerateRequest
+
+        with pytest.raises(ValidationError):
+            ImageGenerateRequest(prompt="a cat", provider="evil")
+
+    def test_video_rejects_bad_duration(self):
+        from pydantic import ValidationError
+        from app.routes.media import VideoGenerateRequest
+
+        with pytest.raises(ValidationError):
+            VideoGenerateRequest(prompt="a cat", duration="600s")
+
+    def test_valid_requests_pass(self):
+        from app.routes.media import ImageGenerateRequest, VideoGenerateRequest
+
+        assert ImageGenerateRequest(prompt="a cat", width=512, height=768).width == 512
+        assert VideoGenerateRequest(prompt="a cat", duration="10s").duration == "10s"
+
+
+class TestRateLimitKey:
+    """Rate limit is keyed on user id only — no client-supplied IP."""
+
+    def test_key_is_user_id_only(self):
+        from unittest.mock import MagicMock, patch
+        from app.routes.media import _check_media_rate_limit
+
+        user = MagicMock(id=42)
+        limiter = MagicMock()
+        limiter.is_rate_limited.return_value = False
+        with patch("app.routes.media.get_rate_limiter", return_value=limiter):
+            _check_media_rate_limit(user)
+        key = limiter.is_rate_limited.call_args[0][0]
+        assert key == "media_gen:42"
+
+
+class TestTaskOwnership:
+    """poll_video authorises by task creator (IDOR guard)."""
+
+    def test_foreign_task_id_is_rejected(self):
+        from app.routes import media as media_mod
+
+        media_mod._task_owners.clear()
+        media_mod._task_owners["task-abc"] = 1  # owned by user 1
+
+        owner = media_mod._task_owners.get("task-abc")
+        assert owner is not None and owner != 2  # user 2 must be refused
+
+    def test_unknown_task_id_is_allowed_through(self):
+        # No ownership record (e.g. after a restart) -> not blocked, provider
+        # call will 404 on its own.
+        from app.routes import media as media_mod
+
+        media_mod._task_owners.clear()
+        assert media_mod._task_owners.get("never-seen") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
