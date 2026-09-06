@@ -259,9 +259,10 @@ async def poll_video(
     _check_media_rate_limit(current_user)
 
     # Authorise: a task may only be polled by the user who created it.
-    # 404 (not 403) so an unknown/foreign task_id is indistinguishable.
-    owner = _task_owners.get(task_id)
-    if owner is not None and owner != current_user.id:
+    # Fail CLOSED — an unknown task_id (never seen, or lost on restart) is
+    # refused, not proxied. 404 (not 403) so it stays indistinguishable from
+    # a task that does not exist.
+    if _task_owners.get(task_id) != current_user.id:
         raise HTTPException(status_code=404, detail="Unknown task")
 
     service = get_media_service()

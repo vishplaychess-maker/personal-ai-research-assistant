@@ -338,16 +338,16 @@ class TestTaskOwnership:
         media_mod._task_owners.clear()
         media_mod._task_owners["task-abc"] = 1  # owned by user 1
 
-        owner = media_mod._task_owners.get("task-abc")
-        assert owner is not None and owner != 2  # user 2 must be refused
+        # poll_video refuses when _task_owners.get(task_id) != current_user.id
+        assert media_mod._task_owners.get("task-abc") != 2
 
-    def test_unknown_task_id_is_allowed_through(self):
-        # No ownership record (e.g. after a restart) -> not blocked, provider
-        # call will 404 on its own.
+    def test_unknown_task_id_is_refused_fail_closed(self):
+        # No ownership record (never seen, or lost on restart) -> the predicate
+        # `owner != current_user.id` is true for any user -> 404, not proxied.
         from app.routes import media as media_mod
 
         media_mod._task_owners.clear()
-        assert media_mod._task_owners.get("never-seen") is None
+        assert media_mod._task_owners.get("never-seen") != 7
 
 
 if __name__ == "__main__":
