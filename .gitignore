@@ -11,6 +11,12 @@ build/
 venv/
 env/
 
+# Eval harness build artifacts (regenerated locally; CI publishes the
+# authoritative copies from a clean checkout — see evals/README.md).
+evals/report.json
+evals/report.*.json
+evals/recordings/
+
 # Node
 node_modules/
 npm-debug.log*

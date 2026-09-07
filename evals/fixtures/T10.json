@@ -1,0 +1,25 @@
+{
+  "task_id": "T10",
+  "response_text": "Parser result for a malformed [MCP_CALL] marker: [] (the marker was dropped; nothing was dispatched).",
+  "citations": [],
+  "status_code": 200,
+  "response_json": null,
+  "provenance": {
+    "fixture_kind": "synthetic_regression",
+    "evidence_level": "synthetic",
+    "source_commit_sha": "778982fb7074ff17bcf0d7a28b87b31cce3b0f6a",
+    "captured_at": "2026-09-06T21:54:09.106808+00:00",
+    "capture_mode": "offline",
+    "application_path": "authored fixture (synthetic regression) - reflects verified code reading, NOT a live capture",
+    "provider": null,
+    "model": null,
+    "model_revision": null,
+    "runtime": "authored",
+    "dataset_version": "1a-closure.1",
+    "prompt_version": "n/a-phase1a",
+    "grader_version": "none",
+    "from_product_code": false,
+    "tools_mocked": [],
+    "human_reviewed": false
+  }
+}
