@@ -75,27 +75,56 @@ Reports and payloads are run through `redact()`:
 
 ## Backend adapter safety (`--backend`, Gate C)
 
-The backend adapter registers a user, creates a session, and makes a **live model call**. It is
-**default-closed** — `evals/adapters/backend_http.py :: _authorise_target()` must pass first:
+The backend adapter registers a user, creates a session, and *may* make a **live model call**. It
+is **default-closed**, with **two independent authorization gates** —
+`evals/adapters/backend_http.py`:
 
-| Requirement | Behaviour |
+### GATE 1 — target authorization (`_authorise_target()`)
+
+*May the eval client contact this backend at all, for ANY request?* Health / register / login /
+create-session invoke **no model** and are gated only by this.
+
+| Rule | Behaviour |
 |---|---|
-| URL scheme | `http` / `https` only; anything else is refused |
+| URL scheme | `http` / `https` only; anything else refused |
 | Local target (`localhost`, loopback, or a host in `EVAL_BACKEND_ALLOW_HOSTS`) | allowed by default |
-| Non-local target | requires `EVAL_ALLOW_REMOTE_BACKEND=true`, then is additionally run through the repo SSRF guard (`app.services.browser_agent.assert_url_allowed`, guarded import) so it still cannot be a private / link-local / cloud-metadata address |
-| Live model call | requires `EVAL_ALLOW_LLM_CALLS=true` regardless of target |
-| `PAID_ENABLED` (default `false`) | while `false`, only a **local** target is allowed — a remote backend's provider cannot be verified as free/local from here and there is **no implicit paid fallback** |
-| Credentials | uses `EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD` when both are set; otherwise registers an ephemeral account named `eval-ephemeral-<utc-ts>-<rand>` |
+| Non-local target | requires `EVAL_ALLOW_REMOTE_BACKEND=true`, then run through the repo SSRF/URL guard (`app.services.browser_agent.assert_url_allowed`, guarded import; stdlib fallback) — still cannot be a private / link-local / reserved / cloud-metadata address |
+| Redirects | not followed (`follow_redirects=False`) |
+| **Independent of** | `EVAL_ALLOW_LLM_CALLS`, `PAID_ENABLED` — an authorized staging/test backend runs every non-model check with paid calls still disabled |
+
+### GATE 2 — live-model authorization (`_authorise_live_model()`)
+
+*May THIS run trigger a live model invocation (the SSE stream)?*
+
+| Rule | Behaviour |
+|---|---|
+| Always | requires `EVAL_ALLOW_LLM_CALLS=true`. `EVAL_ALLOW_REMOTE_BACKEND=true` does **not** authorize a model call |
+| Local target | `EVAL_ALLOW_LLM_CALLS=true` is the operator's assertion that their own local stack (GLM router / Ollama) is free — allowed |
+| Remote target | allowed **only** when the effective model is *verifiable* free/local: model id known **and** provider known **and** `app.schemas.sessions.is_free_model(model, provider)` **and** id in `EVAL_FREE_MODEL_ALLOWLIST` (explicit, comma-separated). Never inferred from the name alone; the allowlist is always also required |
+| Paid | disabled by default; **never a silent fallback** — there is no code path that substitutes a provider/model |
+| Gate C | stays manual (`workflow_dispatch`) and non-gating |
+
+**Known limitation (documented, not worked around).** Thunder AI's `GET /api/sessions/{id}/model`
+returns only a bare model string — **no provider, no routing / fallback policy**. So for a remote
+backend the effective provider is unknown to the adapter and **GATE 2 refuses the live-model
+portion as `unverified`**; GATE 1 checks (connectivity / auth / session) still run and pass. Remote
+live-model evaluation is therefore not achievable against the current API and is honestly reported
+as unverified — no guarantee is invented.
+
+### Credentials, timeouts, redaction
+
+| | |
+|---|---|
+| Credentials | `EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD` when both set; otherwise an ephemeral `eval-ephemeral-<utc-ts>-<rand>` account |
 | Timeouts | connect 5s / read 30s / write 10s / pool 5s; SSE stream idle-gap 45s; SSE total wall-clock 180s |
-| Redaction | Bearer/CSRF headers and any backend error body are redacted before they can reach a report |
+| Redaction | Bearer/CSRF headers and any backend error body redacted before they can reach a report; every failure message names the reason and never echoes an env value or token |
 
 **Ephemeral account cleanup.** The API has no user-delete endpoint, so ephemeral rows persist. An
 operator running Gate C against a long-lived dev DB should periodically prune
 `users WHERE username LIKE 'eval-ephemeral-%'` and their sessions/messages. Prefer setting
-`EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD` to a single pre-provisioned evaluation account to
-avoid the accumulation entirely.
+`EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD` to one pre-provisioned evaluation account.
 
-Example (local free stack):
+Example (local free stack — the supported live path):
 
 ```bash
 EVAL_ALLOW_LLM_CALLS=true PYTHONPATH=backend \

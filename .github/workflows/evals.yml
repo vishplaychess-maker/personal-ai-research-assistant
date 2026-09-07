@@ -66,14 +66,18 @@ jobs:
       - run: pip install -r backend/requirements.txt
       - name: "Live eval (requires EVAL_BACKEND_URL + a free provider; do not gate merges on this)"
         env:
-          # The backend adapter is default-closed. A live model call needs
-          # EVAL_ALLOW_LLM_CALLS=true; a non-loopback URL additionally needs
-          # EVAL_ALLOW_REMOTE_BACKEND=true and PAID_ENABLED=true (see
-          # evals/README.md). Set these as workflow-run variables/secrets when
-          # dispatching against a real environment.
+          # The backend adapter is default-closed with two independent gates
+          # (see evals/README.md):
+          #  GATE 1 target auth  — non-loopback URL needs EVAL_ALLOW_REMOTE_BACKEND=true
+          #  GATE 2 live-model   — any model call needs EVAL_ALLOW_LLM_CALLS=true; a
+          #    remote model call also needs the effective model in
+          #    EVAL_FREE_MODEL_ALLOWLIST and a verifiable free provider (which the
+          #    current API cannot expose -> remote live-model stays unverified).
+          # Set these as workflow-run variables when dispatching.
           EVAL_BACKEND_URL: ${{ vars.EVAL_BACKEND_URL }}
           EVAL_ALLOW_LLM_CALLS: ${{ vars.EVAL_ALLOW_LLM_CALLS }}
           EVAL_ALLOW_REMOTE_BACKEND: ${{ vars.EVAL_ALLOW_REMOTE_BACKEND }}
+          EVAL_FREE_MODEL_ALLOWLIST: ${{ vars.EVAL_FREE_MODEL_ALLOWLIST }}
           PAID_ENABLED: ${{ vars.PAID_ENABLED }}
         run: |
           if [ -z "${EVAL_BACKEND_URL:-}" ]; then

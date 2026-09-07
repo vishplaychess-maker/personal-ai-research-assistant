@@ -10,33 +10,54 @@ Route names and the auth/CSRF contract are taken from the repository
 Safety model (default-closed — this is the only eval code that can register a
 user and make a live model call)
 --------------------------------------------------------------------------
-`_authorise_target()` must pass before anything is sent:
+Two INDEPENDENT authorization decisions, each its own gate:
 
-* `EVAL_BACKEND_URL` must be set and use an http/https scheme. Any other
-  scheme (file:, ftp:, gopher:, ...) is refused.
-* The target is classified local vs remote by resolving its host the same way
-  `app.services.browser_agent.assert_url_allowed` does (loopback IPs only ->
-  local). Localhost / loopback / a host named in `EVAL_BACKEND_ALLOW_HOSTS`
-  is permitted by default.
-* A NON-LOCAL target requires `EVAL_ALLOW_REMOTE_BACKEND=true` AND is then
-  additionally run through the repo SSRF guard (`assert_url_allowed`, guarded
-  import) so a remote target still cannot be a private / cloud-metadata
-  address unless the operator allow-listed it there.
-* A live model call requires `EVAL_ALLOW_LLM_CALLS=true` regardless of target.
-* `PAID_ENABLED` defaults to false. While false, only a LOCAL target is
-  allowed — a remote backend's provider cannot be verified as free/local from
-  here and there is no implicit paid fallback.
-* Credentials: a pre-provisioned `EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD`
-  pair is used when both are set. Otherwise an ephemeral account named
-  `eval-ephemeral-<utc-ts>-<rand>` is registered. There is no user-delete
-  endpoint in the API, so these rows persist: an operator running Gate C
-  against a long-lived dev DB should periodically prune
-  `users WHERE username LIKE 'eval-ephemeral-%'` (and their sessions/messages).
-* connect / read / write / pool timeouts on the client; a stream-idle gap and
-  a total wall-clock deadline on the SSE read.
-* Credentials, JWTs, cookies and any backend error body are redacted before
-  they can reach a report (`redact` / `_redact_str`); prompts and response
-  bodies are redacted by the runner's `redact()` pass over every payload.
+GATE 1 — target authorization  (`_authorise_target()`): may the eval client
+contact this backend AT ALL, for ANY request (health / register / login /
+create session — none of which invoke a model)?
+  * `EVAL_BACKEND_URL` must be set and use an http/https scheme. Any other
+    scheme (file:, ftp:, gopher:, ...) is refused.
+  * Host is classified local vs non-local by resolving it the same way
+    `app.services.browser_agent.assert_url_allowed` does (loopback only ->
+    local). localhost / loopback / a host in `EVAL_BACKEND_ALLOW_HOSTS` is
+    permitted by default.
+  * A NON-LOCAL target requires `EVAL_ALLOW_REMOTE_BACKEND=true` AND is then
+    run through the repo SSRF/URL guard (`assert_url_allowed`, guarded import;
+    stdlib fallback) so it still cannot be a private / link-local / reserved /
+    cloud-metadata address unless allow-listed there.
+  * Redirects are NOT followed (`follow_redirects=False`) so a 3xx to an
+    unvalidated location fails instead of being chased.
+  * Gate 1 does NOT consult `EVAL_ALLOW_LLM_CALLS` or `PAID_ENABLED`. An
+    authorized staging/test backend may run every non-model check with paid
+    calls still disabled.
+
+GATE 2 — live-model authorization  (`_authorise_live_model()`): may THIS run
+trigger a live model invocation (the SSE stream)?
+  * Always requires `EVAL_ALLOW_LLM_CALLS=true`. Paid calls stay disabled by
+    default; `EVAL_ALLOW_REMOTE_BACKEND=true` does NOT authorize a model call.
+  * LOCAL target: `EVAL_ALLOW_LLM_CALLS=true` is the operator's assertion that
+    their own local stack (GLM router :8320 / Ollama) is free. Allowed.
+  * NON-LOCAL target: a local env var is not proof of a remote server's
+    routing. The live-model portion is allowed ONLY when the effective model
+    can be verified free/local — the model id is known, its provider is known
+    and `app.schemas.sessions.is_free_model(model, provider)` is True, AND the
+    id is in `EVAL_FREE_MODEL_ALLOWLIST` (explicit, comma-separated). Never
+    inferred from the name alone; never a silent paid fallback.
+  * KNOWN LIMITATION (documented, not worked around): the Thunder AI API's
+    `GET /api/sessions/{id}/model` returns only a bare model string — no
+    provider, no routing/fallback policy. So for a remote backend the provider
+    is unknown here and Gate 2 REFUSES the live-model portion as `unverified`.
+    Gate 1 checks (connectivity / auth / session) still run and still pass.
+    Gate C stays manual (`workflow_dispatch`) and non-gating.
+
+Credentials: pre-provisioned `EVAL_BACKEND_USERNAME` / `EVAL_BACKEND_PASSWORD`
+when both are set; otherwise an ephemeral `eval-ephemeral-<utc-ts>-<rand>`
+account (no user-delete endpoint exists — prune
+`users WHERE username LIKE 'eval-ephemeral-%'` periodically). connect / read /
+write / pool + stream-idle + stream-total timeouts. Bearer/CSRF headers and
+any backend error body are redacted before they can reach a report; the runner
+`redact()`s every payload again. Failure messages name the reason and never
+echo an env value or token.
 
 Unreachable / unauthorised target -> `AdapterUnavailable` so the runner
 records `unverified` (never a pass). It never sends a paid request itself.
@@ -137,9 +158,20 @@ def _ssrf_check_remote(url: str) -> None:
         raise AdapterUnavailable(f"remote backend refused by SSRF guard: {exc}") from exc
 
 
+def _target_is_local(host: str) -> bool:
+    return host.lower() in _allow_hosts() or _host_is_local(host)
+
+
 def _authorise_target() -> str:
-    """Validate every precondition and return the normalised base URL.
-    Pure except for env + DNS; unit-tested directly."""
+    """GATE 1 — target authorization. May the eval client contact this backend
+    for ANY request (health / register / login / create session — none invoke a
+    model)? Returns the normalised base URL. Does NOT authorise a live model
+    call — that is `_authorise_live_model()`. Pure except for env + DNS.
+
+    Independent of `EVAL_ALLOW_LLM_CALLS` and `PAID_ENABLED` by design: an
+    authorized staging/test backend may run every non-model check with paid
+    calls still disabled.
+    """
     raw = os.environ.get("EVAL_BACKEND_URL", "").strip()
     if not raw:
         raise AdapterUnavailable("EVAL_BACKEND_URL not set (pass --backend BASE_URL)")
@@ -151,29 +183,103 @@ def _authorise_target() -> str:
     if not host:
         raise AdapterUnavailable(f"backend URL has no host: {raw!r}")
 
-    is_local = host in _allow_hosts() or _host_is_local(host)
-
-    if not is_local:
+    if not _target_is_local(host):
         if not _truthy("EVAL_ALLOW_REMOTE_BACKEND"):
             raise AdapterUnavailable(
                 f"non-local backend {host!r} refused; set EVAL_ALLOW_REMOTE_BACKEND=true "
-                "to target a non-loopback URL"
+                "to authorise a non-loopback target (this does NOT authorise a model call)"
             )
-        _ssrf_check_remote(raw)
-
-    if not _truthy("EVAL_ALLOW_LLM_CALLS"):
-        raise AdapterUnavailable(
-            "backend mode issues a live model call; set EVAL_ALLOW_LLM_CALLS=true to allow it"
-        )
-
-    if not _truthy("PAID_ENABLED") and not is_local:
-        raise AdapterUnavailable(
-            "PAID_ENABLED is not true and the target is not local — the running "
-            "backend's provider cannot be verified as free/local from here and there "
-            "is no implicit paid fallback; refused"
-        )
+        _ssrf_check_remote(raw)  # repo SSRF/URL guard; rejects private/metadata/rebind-to-private
 
     return raw.rstrip("/")
+
+
+def _free_model_allowlist() -> set[str]:
+    return {
+        m.strip()
+        for m in os.environ.get("EVAL_FREE_MODEL_ALLOWLIST", "").split(",")
+        if m.strip()
+    }
+
+
+def _is_free_model_mirror(model_id: str, provider: str | None) -> bool:
+    """Byte-for-byte mirror of app.schemas.sessions.is_free_model, used ONLY
+    when backend/app is not importable (e.g. hermetic Gate A). Not weaker —
+    identical logic. Keep in sync if the repo helper changes."""
+    name_lower = (model_id or "").lower()
+    provider_lower = (provider or "").lower()
+    if provider_lower in ("ollama", "local", "glm"):
+        return True
+    if provider_lower == "openrouter":
+        return True
+    if ":free" in name_lower:
+        return True
+    return False
+
+
+def _is_free_model(model_id: str, provider: str | None) -> bool:
+    """Reuse the repo's own classifier (`app.schemas.sessions.is_free_model`)
+    when importable, else the in-sync mirror above. An unknown provider is not
+    verifiable -> False. This is only ONE of the conditions GATE 2 requires; the
+    explicit `EVAL_FREE_MODEL_ALLOWLIST` is always also enforced, so a name-only
+    `:free` match can never by itself authorise a remote model call."""
+    if provider is None:
+        return False
+    try:
+        from app.schemas.sessions import is_free_model  # guarded import
+        return bool(is_free_model(model_id, provider))
+    except Exception:
+        return _is_free_model_mirror(model_id, provider)
+
+
+def _authorise_live_model(base_url: str, *, effective_model: str | None,
+                          effective_provider: str | None) -> None:
+    """GATE 2 — live-model authorization. Raises `AdapterUnavailable`
+    (classified, credential-safe) when THIS run may not trigger a model
+    invocation. Independent of GATE 1.
+    """
+    if not _truthy("EVAL_ALLOW_LLM_CALLS"):
+        raise AdapterUnavailable(
+            "live model call not authorised: set EVAL_ALLOW_LLM_CALLS=true "
+            "(EVAL_ALLOW_REMOTE_BACKEND does not authorise a model call)"
+        )
+
+    host = (urlparse(base_url).hostname or "").lower()
+    if _target_is_local(host):
+        # The operator's own local stack (GLM router / Ollama). EVAL_ALLOW_LLM_CALLS
+        # is their explicit assertion that local routing is free.
+        return
+
+    # Remote: a local env var is not proof of a remote server's routing. Require
+    # the effective model to be *verifiable* free/local. Never inferred from the
+    # name; never a silent paid fallback.
+    if not _truthy("EVAL_ALLOW_REMOTE_BACKEND"):
+        raise AdapterUnavailable(
+            "remote live-model call requires EVAL_ALLOW_REMOTE_BACKEND=true (GATE 1)"
+        )
+    if not effective_model:
+        raise AdapterUnavailable(
+            "remote live-model routing UNVERIFIED: backend exposed no effective model id; "
+            "live-model evaluation refused (non-model checks still ran)"
+        )
+    if effective_provider is None:
+        raise AdapterUnavailable(
+            "remote live-model routing UNVERIFIED: effective provider unknown for model "
+            f"{effective_model!r} (GET /api/sessions/{{id}}/model exposes no provider or "
+            "routing/fallback policy); cannot prove free-only routing; live-model "
+            "evaluation refused (non-model checks still ran)"
+        )
+    if not _is_free_model(effective_model, effective_provider):
+        raise AdapterUnavailable(
+            f"remote model {effective_model!r} (provider {effective_provider!r}) not "
+            "verified free/local by app.schemas.sessions.is_free_model; refused (no paid fallback)"
+        )
+    if effective_model not in _free_model_allowlist():
+        raise AdapterUnavailable(
+            f"remote model {effective_model!r} not in EVAL_FREE_MODEL_ALLOWLIST; "
+            "refused as unverified"
+        )
+    # verified: known free model + known provider + explicit operator allowlist
 
 
 def _client(base: str):
@@ -274,14 +380,31 @@ def run(task: Task) -> tuple[dict, dict]:
     if task.blocked_by:
         raise AdapterUnavailable(f"{task.id} blocked_by {task.blocked_by}")
 
-    base = _authorise_target()
+    base = _authorise_target()  # GATE 1
     c = _client(base)
     try:
+        # ── non-model checks (GATE 1 only) ────────────────────────────────
         headers, _csrf = _auth(c)
         s = c.post("/api/sessions", headers=headers, json={"title": f"eval {task.id}"})
         if s.status_code not in (200, 201):
             raise AdapterUnavailable(f"create session -> HTTP {s.status_code}")
         session_id = s.json()["id"]
+
+        # ── live-model check (GATE 2) ─────────────────────────────────────
+        # The API exposes only a bare model string (no provider / routing
+        # policy), so effective_provider is None -> for a remote target GATE 2
+        # refuses the live-model portion as unverified. Non-model checks above
+        # have already run and passed.
+        effective_model = None
+        try:
+            mr = c.get(f"/api/sessions/{session_id}/model", headers=headers)
+            if mr.status_code == 200:
+                effective_model = (mr.json() or {}).get("model")
+        except Exception:
+            effective_model = None
+        _authorise_live_model(base, effective_model=effective_model,
+                              effective_provider=None)
+
         content = _stream_message(c, headers, session_id, task.input)
     finally:
         c.close()

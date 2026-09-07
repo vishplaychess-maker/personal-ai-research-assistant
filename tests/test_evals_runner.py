@@ -539,6 +539,9 @@ def test_report_doc_carries_truthful_vcs_provenance():
 
 
 # ── Part A close-out: backend adapter authorisation (hermetic) ──────────
+# Two INDEPENDENT gates:
+#   GATE 1  _authorise_target()      — may we contact this backend at all?
+#   GATE 2  _authorise_live_model()  — may THIS run invoke a live model?
 
 
 import evals.adapters.backend_http as _bh  # noqa: E402
@@ -547,8 +550,9 @@ from evals.provenance import AdapterUnavailable  # noqa: E402
 _BACKEND_ENV = (
     "EVAL_BACKEND_URL", "EVAL_ALLOW_REMOTE_BACKEND", "EVAL_ALLOW_LLM_CALLS",
     "PAID_ENABLED", "EVAL_BACKEND_ALLOW_HOSTS", "EVAL_BACKEND_USERNAME",
-    "EVAL_BACKEND_PASSWORD",
+    "EVAL_BACKEND_PASSWORD", "EVAL_FREE_MODEL_ALLOWLIST",
 )
+_REMOTE = "https://staging.thunder-ai.example.com"
 
 
 @pytest.fixture
@@ -557,61 +561,148 @@ def clean_backend_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     # never touch the network from Gate A
     monkeypatch.setattr(_bh, "_ssrf_check_remote", lambda url: None)
+    monkeypatch.setattr(_bh, "_host_is_local", lambda h: h.lower() in _bh._LOCAL_HOST_LITERALS)
     return monkeypatch
 
 
-def test_backend_rejects_unset_url(clean_backend_env):
+# ---- GATE 1: target authorization (independent of LLM / paid) ----------
+
+def test_gate1_rejects_unset_url(clean_backend_env):
     with pytest.raises(AdapterUnavailable):
         _bh._authorise_target()
 
 
-def test_backend_rejects_unsupported_scheme(clean_backend_env):
+def test_gate1_rejects_unsupported_scheme(clean_backend_env):
     clean_backend_env.setenv("EVAL_BACKEND_URL", "ftp://example.com/path")
-    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
     with pytest.raises(AdapterUnavailable) as e:
         _bh._authorise_target()
     assert "scheme" in str(e.value).lower()
 
 
-def test_backend_rejects_remote_without_explicit_authorization(clean_backend_env):
-    clean_backend_env.setattr(_bh, "_host_is_local", lambda h: False)
-    clean_backend_env.setenv("EVAL_BACKEND_URL", "https://api.thunder-ai.example.com")
-    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+def test_gate1_rejects_remote_without_explicit_authorization(clean_backend_env):
+    clean_backend_env.setenv("EVAL_BACKEND_URL", _REMOTE)
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")  # must NOT help
     with pytest.raises(AdapterUnavailable) as e:
         _bh._authorise_target()
     assert "EVAL_ALLOW_REMOTE_BACKEND" in str(e.value)
 
 
-def test_backend_rejects_live_model_call_without_flag(clean_backend_env):
-    clean_backend_env.setenv("EVAL_BACKEND_URL", "http://127.0.0.1:8000")
-    with pytest.raises(AdapterUnavailable) as e:
-        _bh._authorise_target()
-    assert "EVAL_ALLOW_LLM_CALLS" in str(e.value)
-
-
-def test_backend_remote_still_blocked_by_paid_policy(clean_backend_env):
-    clean_backend_env.setattr(_bh, "_host_is_local", lambda h: False)
-    clean_backend_env.setenv("EVAL_BACKEND_URL", "https://api.thunder-ai.example.com")
-    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+def test_gate1_authorized_remote_runs_nonllm_checks_with_paid_disabled(clean_backend_env):
+    # An authorized remote test backend: GATE 1 passes with paid calls disabled
+    # and EVAL_ALLOW_LLM_CALLS unset. Non-model checks (health/auth/session) are
+    # gated only by this.
+    # clean_backend_env deleted PAID_ENABLED and EVAL_ALLOW_LLM_CALLS
+    clean_backend_env.setenv("EVAL_BACKEND_URL", _REMOTE + "/")
     clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    assert _bh._authorise_target() == _REMOTE
+
+
+def test_gate1_ssrf_guard_still_rejects_unsafe_remote_even_with_llm_flag(clean_backend_env):
+    clean_backend_env.setenv("EVAL_BACKEND_URL", "http://169.254.169.254/latest/")
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")  # must NOT bypass SSRF
+    clean_backend_env.setattr(
+        _bh, "_ssrf_check_remote",
+        lambda url: (_ for _ in ()).throw(AdapterUnavailable("SSRF: link-local 169.254.169.254")),
+    )
     with pytest.raises(AdapterUnavailable) as e:
         _bh._authorise_target()
-    assert "PAID_ENABLED" in str(e.value)
+    assert "SSRF" in str(e.value)
 
 
-def test_backend_allows_local_target_with_llm_flag(clean_backend_env):
+def test_gate1_allows_local_target(clean_backend_env):
     clean_backend_env.setenv("EVAL_BACKEND_URL", "http://127.0.0.1:8000/")
-    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
     assert _bh._authorise_target() == "http://127.0.0.1:8000"
 
 
-def test_backend_allows_remote_when_fully_authorised(clean_backend_env):
-    clean_backend_env.setattr(_bh, "_host_is_local", lambda h: False)
-    clean_backend_env.setenv("EVAL_BACKEND_URL", "https://api.thunder-ai.example.com/")
+# ---- GATE 2: live-model authorization (independent of target auth) -----
+
+def test_gate2_local_needs_llm_flag(clean_backend_env):
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_live_model("http://127.0.0.1:8000",
+                                  effective_model="llama3.2:3b", effective_provider="ollama")
+    assert "EVAL_ALLOW_LLM_CALLS" in str(e.value)
+
+
+def test_gate2_remote_flag_does_not_authorize_llm_call(clean_backend_env):
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")  # GATE 1 flag
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_live_model(_REMOTE, effective_model="gpt-4o", effective_provider="openai")
+    assert "EVAL_ALLOW_LLM_CALLS" in str(e.value)
+
+
+def test_gate2_local_ok_with_llm_flag(clean_backend_env):
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+    assert _bh._authorise_live_model("http://127.0.0.1:8000",
+                                     effective_model=None, effective_provider=None) is None
+
+
+def test_gate2_remote_llm_refused_without_verifiable_free_routing(clean_backend_env):
+    # All flags on, paid explicitly on — still refused: provider unknown, so
+    # free-only routing cannot be proven. No silent paid fallback.
     clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
     clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
     clean_backend_env.setenv("PAID_ENABLED", "true")
-    assert _bh._authorise_target() == "https://api.thunder-ai.example.com"
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_live_model(_REMOTE, effective_model="llama-3.1-8b",
+                                  effective_provider=None)
+    assert "UNVERIFIED" in str(e.value)
+
+
+def test_gate2_remote_llm_refused_when_model_not_in_allowlist(clean_backend_env):
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    # provider known + free, but operator did not allowlist the id
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_live_model(_REMOTE, effective_model="qwen2:free",
+                                  effective_provider="ollama")
+    assert "EVAL_FREE_MODEL_ALLOWLIST" in str(e.value)
+
+
+def test_gate2_remote_llm_allowed_only_when_fully_verified(clean_backend_env):
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    clean_backend_env.setenv("EVAL_FREE_MODEL_ALLOWLIST", "llama3.2:3b, qwen2:free")
+    # known free provider + id in the explicit allowlist -> the only pass path
+    assert _bh._authorise_live_model(_REMOTE, effective_model="qwen2:free",
+                                     effective_provider="ollama") is None
+
+
+def test_gate2_no_paid_fallback_when_verification_fails(clean_backend_env):
+    # Every remote path where free/local routing is not provable RAISES — there
+    # is no branch that returns success with a paid/unknown model.
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    clean_backend_env.setenv("PAID_ENABLED", "true")
+    clean_backend_env.setenv("EVAL_FREE_MODEL_ALLOWLIST", "some-free-model")
+    for model, provider in [("gpt-4o", "openai"), ("claude-3", "anthropic"),
+                            ("mystery", None), ("some-free-model", None),
+                            ("not-listed:free", "ollama")]:
+        with pytest.raises(AdapterUnavailable):
+            _bh._authorise_live_model(_REMOTE, effective_model=model,
+                                      effective_provider=provider)
+
+
+# ---- classification accuracy + no credential leakage ------------------
+
+def test_auth_failures_are_classified_without_leaking_credentials(clean_backend_env):
+    clean_backend_env.setenv("EVAL_BACKEND_URL", "gopher://secret.example.com")
+    clean_backend_env.setenv("EVAL_BACKEND_PASSWORD", "SUPER-SECRET-PW")
+    clean_backend_env.setenv("EVAL_BACKEND_USERNAME", "svc-eval")
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_target()
+    msg = str(e.value)
+    assert "scheme" in msg.lower()               # accurate reason
+    assert "SUPER-SECRET-PW" not in msg and "svc-eval" not in msg  # no leak
+
+
+def test_remote_llm_refusal_message_is_credential_safe(clean_backend_env):
+    clean_backend_env.setenv("EVAL_ALLOW_LLM_CALLS", "true")
+    clean_backend_env.setenv("EVAL_ALLOW_REMOTE_BACKEND", "true")
+    clean_backend_env.setenv("EVAL_BACKEND_PASSWORD", "SUPER-SECRET-PW")
+    with pytest.raises(AdapterUnavailable) as e:
+        _bh._authorise_live_model(_REMOTE, effective_model="x", effective_provider=None)
+    assert "SUPER-SECRET-PW" not in str(e.value)
 
 
 def test_backend_run_is_blocked_for_blocked_task(clean_backend_env):
