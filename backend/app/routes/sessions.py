@@ -36,15 +36,37 @@ logger = logging.getLogger(__name__)
 def fetch_available_chat_models(db: Session = None, user_id: int = None):
     """Return available chat models from ALL of the user's configured providers.
 
+    Two SAVED-credential sources are consulted, in this order, and ONLY for
+    the authenticated user:
+
+    1. the multi-provider rows (``user_providers``), via
+       ``provider_config_for_row`` — each row key is decrypted individually;
+    2. the legacy single-provider row (``user_settings``) written by
+       ``PUT /api/settings`` — the Settings UI path — via
+       ``get_user_llm_config``, the SAME secure resolver the run path uses.
+
+    Source 2 is why a user can select a model after saving only an OpenRouter
+    key through Settings: reading ``user_providers`` alone made the saved key
+    invisible here and the route answered 503 "no provider model discovery"
+    even though the key was stored (encrypted) and runnable.
+
     Falls back to the globally configured provider (e.g. the deterministic
-    LocalProvider when LLM_PROVIDER=local) when the user has no saved
-    provider rows, so model validation still works for fresh accounts.
+    LocalProvider when LLM_PROVIDER=local, or an env-configured key) when the
+    user has nothing saved or nothing reachable, so model validation still
+    works for fresh accounts and the intentional global-env path keeps
+    working.
+
+    Key material is never returned and never logged by this function: configs
+    are passed straight to the provider factory, and failures are swallowed
+    as bounded no-ops.
 
     Note: ``db``/``user_id`` are optional so tests (and older call sites)
     can monkeypatch this function with zero-argument stubs, e.g.
     ``lambda: None`` or ``lambda: ["llama3.2:3b"]``.
     """
-    from app.services.settings_service import list_user_providers, provider_config_for_row
+    from app.services.settings_service import (
+        get_user_llm_config, list_user_providers, provider_config_for_row,
+    )
     from app.services.llm_providers import get_provider
 
     # If a test stub replaced this function, honor the zero-arg contract.
@@ -62,6 +84,26 @@ def fetch_available_chat_models(db: Session = None, user_id: int = None):
 
         if all_models:
             return all_models
+
+        # The Settings UI saves through PUT /api/settings into user_settings,
+        # which list_user_providers above does NOT read. Use the same secure
+        # resolver the run path uses: it decrypts ONLY this user_id active
+        # provider row or user_settings row (with the intentional env-key
+        # fallback), so discovery now works from the saved key alone while
+        # staying user-isolated. The config is handed to the factory; it is
+        # never returned here and never logged.
+        try:
+            saved_config = get_user_llm_config(db, user_id)
+        except Exception:
+            saved_config = None
+        if saved_config:
+            try:
+                prov = get_provider(config=saved_config)
+                all_models.extend(prov.fetch_available_chat_models() or [])
+            except Exception:
+                pass
+            if all_models:
+                return all_models
 
     # No user providers configured (or none reachable) — fall back to the
     # globally configured provider's discovery.

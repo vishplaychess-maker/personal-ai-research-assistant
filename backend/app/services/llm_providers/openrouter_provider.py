@@ -9,6 +9,8 @@ API docs: https://openrouter.ai/docs
 """
 
 import json
+from app.services.llm_providers.errors import (PROVIDER_RATE_LIMITED,
+                                                  ProviderRateLimited)
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -112,6 +114,10 @@ class OpenRouterProvider(LLMProvider):
             raise RuntimeError("OpenRouter request failed.") from exc
 
         if resp.status_code != 200:
+            if resp.status_code == 429:
+                # Bounded classification: no upstream body, status line, header
+                # or credential ever crosses this boundary.
+                raise ProviderRateLimited() from None
             detail = resp.text[:300]
             raise RuntimeError(
                 f"OpenRouter returned HTTP {resp.status_code}: {detail}"
@@ -168,6 +174,10 @@ class OpenRouterProvider(LLMProvider):
             raise RuntimeError("OpenRouter request failed.") from exc
 
         if resp.status_code != 200:
+            if resp.status_code == 429:
+                # Bounded classification: no upstream body, status line, header
+                # or credential ever crosses this boundary.
+                raise ProviderRateLimited() from None
             detail = resp.text[:300]
             raise RuntimeError(
                 f"OpenRouter returned HTTP {resp.status_code}: {detail}"
@@ -216,6 +226,16 @@ class OpenRouterProvider(LLMProvider):
                     json=payload,
                 ) as response:
                     if response.status_code != 200:
+                        if response.status_code == 429:
+                            # Bounded classification: the upstream body, status
+                            # line, headers and credentials never cross this
+                            # boundary, and the code survives normalization.
+                            yield {
+                                "type": "error",
+                                "code": PROVIDER_RATE_LIMITED,
+                                "error": "The model provider is rate limiting requests.",
+                            }
+                            return
                         detail = await response.aread()
                         detail_text = detail.decode("utf-8", errors="replace")[:300]
                         yield {
