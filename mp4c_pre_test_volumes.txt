@@ -1,8 +1,0 @@
-VOLUME NAME                                                        DRIVER    MOUNTPOINT
-6c1dd0da65b09eede3ccca2a91547d89be692e52376873daf9798636e6864d0c   local     /var/lib/docker/volumes/6c1dd0da65b09eede3ccca2a91547d89be692e52376873daf9798636e6864d0c/_data
-e8850492dedd5380a472792550937209b549775d909b6a13c4fc4edb3dd355c0   local     /var/lib/docker/volumes/e8850492dedd5380a472792550937209b549775d909b6a13c4fc4edb3dd355c0/_data
-personal-ai-research-assistant_app_data                            local     /var/lib/docker/volumes/personal-ai-research-assistant_app_data/_data
-personal-ai-research-assistant_chromadb_data                       local     /var/lib/docker/volumes/personal-ai-research-assistant_chromadb_data/_data
-supabase_db_JobBeacon                                              local     /var/lib/docker/volumes/supabase_db_JobBeacon/_data
-supabase_edge_runtime_JobBeacon                                    local     /var/lib/docker/volumes/supabase_edge_runtime_JobBeacon/_data
-supabase_storage_JobBeacon                                         local     /var/lib/docker/volumes/supabase_storage_JobBeacon/_data

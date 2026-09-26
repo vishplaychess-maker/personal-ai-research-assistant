@@ -347,4 +347,3 @@ def test_j_tool_output_payload_opens_only_with_its_exact_binding(eng, monkeypatc
     meta = " ".join(str(getattr(row, c)) for c in row.__table__.columns.keys()
                     if c != "ciphertext")
     assert "TOOL-RESULT-OK" not in meta, meta
-

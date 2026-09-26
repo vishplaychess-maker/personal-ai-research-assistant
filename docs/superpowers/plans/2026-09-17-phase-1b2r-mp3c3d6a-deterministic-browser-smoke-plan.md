@@ -544,4 +544,3 @@ Risk 9 is the honest limit of a deterministic offline smoke and is the strongest
 Rationale: D0 calls D6 small but notes a hidden dependency; proving one mode end to end first converts that unknown into evidence, and it keeps the change surface to one config decision plus test-only modules. A single monolithic phase would couple a genuinely uncertain seam and proxy decision to a large amount of journey scripting, so a harness defect would be misread as a product defect.
 
 MP-4 remains **not started** and must not begin until at least D6B passes and the user reviews the result.
-

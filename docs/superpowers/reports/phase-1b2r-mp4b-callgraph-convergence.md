@@ -324,4 +324,3 @@ discarded run is not cited as evidence anywhere above.
    journeys used the approved `VITE_API_BASE_URL` direct-backend path.
 6. Ungated `[PYTHON_CODE:]` legacy execution paths remain open for MP-4C.
 7. MP-4C, MP-4D, MP-5, MP-6 remain **NOT STARTED**.
-

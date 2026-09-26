@@ -54,3 +54,6 @@ Thumbs.db
 secrets/*
 !secrets/README.md
 !secrets/*.example
+# Disposable-stack inventories and stray probe output - never committed.
+mp4c_pre_test_*.txt
+undefined/
