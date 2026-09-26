@@ -431,8 +431,22 @@ def extract_memory_from_message(
         logger.warning("Memory extraction: extracted content blocked by sensitive filter")
         return MemoryExtractionResult(reason="sensitive_content")
 
-    # Deduplicate and save
-    memory = _save_memory_if_new(db, user_id, content, category, session_id)
+    # ── MP-4C: automatic (model-directed) extraction MUST NOT persist. ──
+    # This is the single shared write boundary reached by BOTH automatic paths
+    # (streaming_service.run_memory_extraction -> routes/messages.py, and the
+    # langgraph_workflow.extract_memory node). Explicit user-initiated writes go
+    # through save_memory(), which is untouched, and the [SAVE_MEMORY] marker
+    # path is already write-nothing. The candidate is deliberately NOT echoed
+    # back: content and category are None so no candidate text can reach public
+    # progress, errors or logs through this result.
+    logger.info("Memory extraction: automatic persistence requires authorization; not saved")
+    return MemoryExtractionResult(
+        saved=False,
+        memory_id=None,
+        reason="automatic_write_requires_authorization",
+        content=None,
+        category=None,
+    )
     if memory:
         if memory.content == content:
             logger.info(

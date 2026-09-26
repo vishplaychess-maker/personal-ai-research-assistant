@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from pathlib import Path
 from typing import List
 
@@ -101,6 +102,229 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
+    # ── Approval gateway (Phase 1B.2) ────────────────────
+    # Required by default for enabled MCP execution: when enable_mcp_tool is on
+    # and this is true, MCP calls route through the trusted approval gateway
+    # (app.approval.gateway) — a call with no valid one-time approval / matching
+    # SessionGrant returns a structured `approval_required` result and does NOT
+    # execute. Setting this False disables risky MCP execution; it NEVER
+    # restores the legacy zero-approval marker auto-execution.
+    approval_gateway_required: bool = True
+    # Operational kill-switch: when False the gateway is treated as UNAVAILABLE
+    # and MCP execution is blocked (fail closed). Distinct from
+    # approval_gateway_required (a policy toggle) — this models an outage.
+    approval_gateway_available: bool = True
+    # Bounded active-proposal caps (Phase 1B.2 correction). "Active" = a
+    # PendingApproval still in `requested` or `approved` (it can still consume
+    # resources / be acted on). The gateway refuses to create a NEW proposal
+    # once any of these ceilings is reached for the attempt's scope — it fails
+    # closed with reason_code `active_proposal_limit`. A retry of an ALREADY
+    # pending logical call is never blocked by these caps (it reuses its row).
+    # The client cannot raise or disable them; they are validated as >= 1 at
+    # startup. Shared distributed (multi-worker / PostgreSQL) enforcement is
+    # still subject to the hosted-deployment PostgreSQL verification gate.
+    max_active_proposals_per_turn: int = 3      # == the MCP marker cap per response
+    max_active_proposals_per_session: int = 10
+    max_active_proposals_per_user: int = 20
+    # Hard cap on [MCP_CALL] markers parsed from ONE generated assistant
+    # response (bounds the parse -> propose fan-out). Validated as >= 1.
+    max_mcp_calls_per_response: int = 3
+
+    # ── Durable run engine (Phase 1B.2R — MP-0 schema foundation only) ──
+    # MP-0 adds the durable run ledger schema + state machine + encrypted
+    # payload store. NO worker, route, streaming adapter, approval resume, or
+    # tool execution is wired in MP-0. These are configuration *seams* — the
+    # master flag is OFF and unused until a later mini-phase turns a flow on.
+    run_engine_enabled: bool = False
+    # Max plaintext bytes for a single encrypted `run_payloads` row (sealed
+    # with the repo's Fernet service — AES-128-CBC + HMAC-SHA256). A larger
+    # payload is rejected at seal time (fail closed). Validated as >= 1.
+    run_payload_max_bytes: int = 65536
+    # Text-delta batching for `run_events` (D7): a future writer flushes a text
+    # batch at ~this many bytes OR ~this many ms, whichever first. Control /
+    # security / lifecycle events are ALWAYS written immediately and never wait
+    # for a text batch. MP-0 only validates these (>= 1); no batching logic yet.
+    run_event_text_flush_bytes: int = 4096
+    run_event_text_flush_ms: int = 100
+    # ── Phase 1B.2R MP-1A — RunEngine core transactional-service safety limits ──
+    # Server-side only. A client cannot raise or disable them; they are
+    # validated as >= 1 at startup. Conservative, repo-evidenced defaults:
+    #   * key length  == the `runs.idempotency_key VARCHAR(80)` column width
+    #   * event bytes == the text-flush byte budget (control `data` is tiny JSON)
+    #   * read page   == a bounded control-event replay page
+    run_idempotency_key_max_bytes: int = 80
+    run_control_event_max_bytes: int = 4096
+    run_event_read_max_page: int = 200
+    # ── Phase 1B.2R MP-1B — RunWorker (claim / lease / recovery core) ──
+    # The worker is a MECHANISM only in MP-1B. Phase 1B.2R MP-3C3A wires it into
+    # the FastAPI app lifespan through `RunWorkerSupervisor` — it still starts
+    # ONLY when BOTH `run_engine_enabled` and `run_worker_enabled` are true (both
+    # off by default), and ONLY after every boot check (migrations + schema
+    # verification + HMAC key) has succeeded. The handler registry ships EMPTY —
+    # an unknown `run.kind` fails the run closed. The client cannot set any of
+    # these; the integer knobs are validated as >= 1.
+    run_worker_enabled: bool = False
+    run_worker_id: str = ""                    # blank -> a per-process id is generated
+    run_worker_lease_ttl_s: int = 60          # lease lifetime granted per claim / renew
+    run_worker_poll_interval_s: int = 5       # sleep between sweeps in run_forever()
+    run_worker_max_attempts: int = 3          # × handler timeout = the recovery wall-clock budget
+    run_worker_handler_timeout_s: int = 300   # per-run handler wall-clock budget
+    run_worker_recover_batch: int = 20        # max expired-lease runs handled per sweep
+    # ── Phase 1B.2R MP-3C3A — embedded worker lifespan supervisor ──
+    # The embedded worker's SUPPORTED topology is self-host, exactly ONE web
+    # process, SQLite or PostgreSQL. Set this to the real web-process count. If it
+    # is > 1 while `database_url` is SQLite AND the worker is enabled, startup is
+    # HALTED (multiple embedded workers against one SQLite file is unsafe until
+    # the MP-6 PostgreSQL concurrency verification). A dedicated worker process is
+    # a future (MP-6) topology; the `RunWorker` interface already supports it.
+    run_worker_web_concurrency: int = 1
+    # Bounded graceful period (seconds) the lifespan shutdown waits for the
+    # in-flight sweep to unwind after the cooperative stop signal is set. When it
+    # expires the supervisor records a bounded operational error and returns; it
+    # NEVER force-kills a thread and NEVER marks a run cancelled or succeeded.
+    # Keep it comfortably above `run_worker_lease_ttl_s // 3` (the stalled-provider
+    # idle-tick cadence) so a stalled generation is noticed and closed in time.
+    run_worker_shutdown_grace_s: int = 30
+    # Supervisor-level bounded exponential backoff bounds (seconds) after an
+    # unexpected sweep failure. Backoff resets to the minimum after any
+    # successful sweep; the stop signal interrupts a backoff sleep promptly.
+    run_worker_backoff_min_s: int = 2
+    run_worker_backoff_max_s: int = 60
+    # ── Phase 1B.2R MP-3C3B — durable /messages/stream backend cutover ──
+    # OFF by default. When on, POST /api/sessions/{id}/messages/stream submits (or
+    # reuses) a durable `chat_stream` run and streams its PERSISTED `run_events`,
+    # adapted into the exact legacy SSE wire format. When off the route is the
+    # byte-for-byte legacy path and NOTHING durable (Run/Message/RunStep/RunPayload/
+    # event) is created. Enabling it also requires `run_engine_enabled`,
+    # `run_worker_enabled`, `run_chat_stream_enabled`, `run_public_api_enabled`, a
+    # valid `RUN_IDEMPOTENCY_HMAC_KEY`, a live/ready `RunWorkerSupervisor`, and
+    # `enable_deep_research` + `enable_multi_agent` BOTH off (the durable engine
+    # persists neither citations/confidence nor deep-research / multi-agent
+    # progress — those request modes fail closed BEFORE any persistence). NOT a
+    # frontend cutover; NOT enabled in any default / deployment config.
+    run_messages_stream_durable_enabled: bool = False
+    # Phase 1B.2R MP-3C3D4C — master flag for the END-TO-END durable Deep
+    # Research worker (acquisition + cited synthesis + finalization). OFF by
+    # default; never set true in any default/deployment config. Executability
+    # additionally requires run_engine_enabled + run_worker_enabled +
+    # run_chat_stream_enabled (deep-research synthesis reuses the SAME
+    # generation bridge as durable chat) + run_public_api_enabled + a
+    # configured RUN_IDEMPOTENCY_HMAC_KEY — see
+    # app.run_engine.deep_research_readiness.deep_research_executable(), the
+    # ONE authoritative predicate every route/capability/worker gate reuses.
+    run_deep_research_enabled: bool = False
+    # Phase 1B.2R MP-3C3D5B — master flag for the FUTURE end-to-end durable
+    # Multi-Agent worker. OFF by default; never set true in any default/
+    # deployment config. This flag alone activates NOTHING in this phase —
+    # D5B wires no public route, no capability response, and no worker
+    # sweep to it at all (see app.run_engine.multi_agent_readiness, whose
+    # own predicate additionally cannot become true until D5C flips its
+    # explicit implementation-readiness gate). D5C will require this
+    # flag AND run_engine_enabled + run_worker_enabled + run_chat_stream_enabled
+    # + run_public_api_enabled + a configured RUN_IDEMPOTENCY_HMAC_KEY, the
+    # same shape as run_deep_research_enabled's own prerequisite chain.
+    run_multi_agent_enabled: bool = False
+    # Fail-fast consistency guards, not deployer tuning knobs: the durable
+    # multi-agent role graph is a FIXED 3-role, 3-provider-call sequence
+    # (app.run_engine.multi_agent_orchestration.ROLE_ORDER /
+    # MAX_PROVIDER_CALLS) — these two settings exist only so a future
+    # accidental drift between that hardcoded contract and configuration
+    # is caught at startup, never silently. Client cannot override; a
+    # deployer changing either away from 3 fails config validation below.
+    multi_agent_max_roles: int = 3
+    multi_agent_max_provider_calls: int = 3
+    # Per-role provider-call wall-clock timeout and the run's total deadline
+    # (mirrors research_fetch_timeout_s / research_total_deadline_s's exact
+    # shape — validated below to keep role_timeout strictly under the total).
+    multi_agent_role_timeout_s: float = 120.0
+    multi_agent_total_deadline_s: float = 360.0
+    # Sealed inter-agent artifact bounds (app.run_engine.multi_agent_artifacts).
+    # multi_agent_max_artifact_bytes must never exceed run_payload_max_bytes —
+    # the sealed-payload envelope's own hard cap (validated below).
+    multi_agent_max_artifact_bytes: int = 65536
+    multi_agent_max_content_chars: int = 24_000
+    multi_agent_max_claims: int = 32
+    multi_agent_max_assumptions: int = 16
+    multi_agent_max_uncertainties: int = 16
+    # Phase 1B.2R MP-3C3D5B — FOUNDATION-ONLY setting: D5B defines and
+    # validates this bound but enforces NOTHING (no worker sweep exists to
+    # count or reject against it yet). D5C is the exact enforcement point:
+    # its submission path must count the caller's own non-terminal
+    # `Run.kind == "multi_agent"` rows and reject a new one transactionally
+    # once this ceiling is reached — the SAME shape as
+    # `max_active_proposals_per_user` above, not the unrelated
+    # `run_messages_stream_max_concurrent_per_user` (which bounds concurrently
+    # OPEN SSE streams, not concurrently ACTIVE runs, and a client can close a
+    # stream and reopen it against the same still-running run).
+    multi_agent_max_active_runs_per_user: int = 2
+    # Max concurrently open durable message streams per user (bounded in-process;
+    # a new stream past this returns 429). Client cannot raise it. Validated >= 1.
+    run_messages_stream_max_concurrent_per_user: int = 4
+    # Rate limit (submissions per minute per user) for the durable submit path,
+    # reusing the existing in-memory rate-limiter seam. Validated >= 1.
+    run_messages_stream_submits_per_min: int = 30
+    # ── Phase 1B.2R MP-3A — durable Run public API + persisted text events + SSE ──
+    # The additive `/api/runs` router is registered always but every route calls
+    # `require_run_public_api()` first: 404 when this flag is off (disabled by
+    # default), 503 when the flag is on but `RUN_IDEMPOTENCY_HMAC_KEY` (env only,
+    # no default, never logged) is missing — fail closed. No execution happens in
+    # any route. `RUN_IDEMPOTENCY_HMAC_KEY` is deliberately NOT a Settings field.
+    run_public_api_enabled: bool = False
+    run_sse_poll_interval_s: int = 2          # DB poll cadence for the SSE tail
+    run_sse_heartbeat_s: int = 15             # `: heartbeat` comment cadence (no fake events)
+    run_sse_max_seconds: int = 1800          # hard SSE connection lifetime cap
+    run_text_event_max_bytes: int = 8192     # per `text` run_events row (UTF-8, whole codepoints)
+    # ── Phase 1B.2R MP-3B — worker-backed durable chat generation ──
+    # OFF by default. When on (AND `run_engine_enabled`), the RunWorker's chat
+    # driver claims/advances durable `chat_stream` runs itself (they are then
+    # excluded from the generic claim/recover paths), invokes the existing
+    # LLMProvider streaming seam once, persists text through TextEventBuffer,
+    # heartbeats its lease, and creates the final assistant Message exactly once.
+    # Still NOT a `/messages/stream` cutover (MP-3C). Provider attempts = 1.
+    run_chat_stream_enabled: bool = False
+    # ── Phase 1B.2R MP-3C2 — durable chat -> MCP approval -> same-run resume ──
+    # Rides `run_chat_stream_enabled` (no new flag). When a durable chat segment
+    # emits a COMPLETE [MCP_CALL] marker the chat run parks for approval via the
+    # existing MP-2 gateway and, on approval, the SAME run resumes: the MCP call
+    # executes at-most-once and generation continues with the sealed tool result.
+    # Server-side only; the client never supplies any identity / hash / dedupe key.
+    #   * marker-capture hard cap — a captured [MCP_CALL] block larger than this
+    #     (UTF-8 bytes) fails closed (`tool_marker_oversized`); bounds the
+    #     confidential capture buffer. Validated as >= 1.
+    run_chat_tool_marker_max_bytes: int = 4096
+    #   * max sequential MCP tool cycles per chat run — enforced from durable
+    #     `run_steps` (count of tool_dispatch steps), never an in-memory counter.
+    #     A request for cycle N+1 fails closed (`tool_cycle_limit`) with NO new
+    #     proposal / turn / dispatch. Validated as >= 1.
+    run_chat_max_tool_cycles: int = 3
+    #   * max UTF-8 bytes of a tool-result envelope fed back to the provider as
+    #     an untrusted, clearly-delimited data message (never the system prompt).
+    #     A larger result is middle-truncated. Validated as >= 1.
+    run_chat_tool_result_max_bytes: int = 8192
+
+    # ── Phase 1B.2R MP-4C — approval-gated Python execution ──
+    # OFF by default; never set true in any default/deployment config, and
+    # never enabled in .env, Docker, or tests globally. This flag authorizes
+    # ONLY the creation of a server-owned Python execution PROPOSAL (an
+    # approval request bound to the run / turn / tool-call identity). It
+    # NEVER authorizes execution: no flag combination permits a Python
+    # subprocess, a model-directed memory write, or a knowledge-graph
+    # mutation before a valid server-owned approval has been consumed.
+    # When False, every model-emitted [PYTHON_CODE: …] marker fails closed —
+    # no proposal, no subprocess, no success Message, and no marker text in
+    # user-visible output. Legacy direct auto-execution is unreachable in
+    # EVERY configuration, including True (see services/streaming_service.py
+    # and services/langgraph_workflow.py, which now fail closed rather than
+    # run model-emitted code).
+    run_engine_sandbox: bool = False
+    # Hard maximum UTF-8 size of ONE captured [PYTHON_CODE: …] body; a larger
+    # body fails closed as oversized (bounded slug, never the code itself).
+    run_engine_sandbox_max_code_bytes: int = 8192
+    # Wall-clock seconds allowed for the approval-gated sandbox subprocess.
+    run_engine_sandbox_timeout_s: int = 10
+    # Captured stdout/stderr is truncated to this many bytes before sealing.
+    run_engine_sandbox_max_output_bytes: int = 4000
+
     # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
     # OFF by default. When on, POST /api/terminal/execute streams the output
     # of an allowlisted command (argv[0] must be in the list), run with
@@ -145,6 +369,21 @@ class Settings(BaseSettings):
     # How many of the top results to scrape per pass (hard cap — bounds the
     # search -> scrape -> synthesize loop so it can never run away).
     deep_research_max_scrape: int = 3
+
+    # ── Durable Deep Research acquisition (Phase 1B.2R MP-3C3D4B) ──
+    # Bounds for the safe, free/local-only search+fetch acquisition
+    # primitive. Server-owned only — never client-overridable. Reuses
+    # `deep_research_max_results` (results per query) and
+    # `deep_research_max_scrape` (pages fetched) above; only NEW bounds are
+    # added here.
+    research_max_queries: int = 1
+    research_max_query_chars: int = 300
+    research_max_result_urls: int = 10
+    research_max_redirects: int = 3
+    research_fetch_timeout_s: float = 10.0
+    research_total_deadline_s: float = 45.0
+    research_max_response_bytes: int = 2_000_000
+    research_max_extracted_chars: int = 20_000
 
     # ── Media Generation (Image/Video) ───────────────────────
     # Master switch for media generation endpoints.
@@ -296,6 +535,122 @@ class Settings(BaseSettings):
     agnes_video_model: str = "agnes-video-2.5-flash"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    @model_validator(mode="after")
+    def _validate_approval_limits(self) -> "Settings":
+        """Fail-fast on a nonsensical self-host limit config (Phase 1B.2 / 1B.2R)."""
+        for name in (
+            "max_active_proposals_per_turn",
+            "max_active_proposals_per_session",
+            "max_active_proposals_per_user",
+            "max_mcp_calls_per_response",
+            "run_payload_max_bytes",
+            "run_event_text_flush_bytes",
+            "run_event_text_flush_ms",
+            "run_idempotency_key_max_bytes",
+            "run_control_event_max_bytes",
+            "run_event_read_max_page",
+            "run_worker_lease_ttl_s",
+            "run_worker_poll_interval_s",
+            "run_worker_max_attempts",
+            "run_worker_handler_timeout_s",
+            "run_worker_recover_batch",
+            "run_sse_poll_interval_s",
+            "run_sse_heartbeat_s",
+            "run_sse_max_seconds",
+            "run_text_event_max_bytes",
+            "run_chat_tool_marker_max_bytes",
+            "run_chat_max_tool_cycles",
+            "run_chat_tool_result_max_bytes",
+            # Phase 1B.2R MP-4C — approval-gated Python execution bounds.
+            "run_engine_sandbox_max_code_bytes",
+            "run_engine_sandbox_timeout_s",
+            "run_engine_sandbox_max_output_bytes",
+            "run_worker_web_concurrency",
+            "run_worker_shutdown_grace_s",
+            "run_worker_backoff_min_s",
+            "run_worker_backoff_max_s",
+            "run_messages_stream_max_concurrent_per_user",
+            "run_messages_stream_submits_per_min",
+            # Phase 1B.2R MP-3C3D4B — durable deep-research acquisition bounds
+            # (int-valued only; the two float timeout/deadline fields are
+            # validated separately below, since a plain `isinstance(x, int)`
+            # check would wrongly reject a valid float).
+            "research_max_queries",
+            "research_max_query_chars",
+            "research_max_result_urls",
+            "research_max_redirects",
+            "research_max_response_bytes",
+            "research_max_extracted_chars",
+            # Phase 1B.2R MP-3C3D5B — durable multi-agent artifact bounds
+            # (int-valued only; the two float timeout/deadline fields, and
+            # the ==3 / artifact-byte-cap consistency checks, are validated
+            # separately below).
+            "multi_agent_max_artifact_bytes",
+            "multi_agent_max_content_chars",
+            "multi_agent_max_claims",
+            "multi_agent_max_assumptions",
+            "multi_agent_max_uncertainties",
+            "multi_agent_max_active_runs_per_user",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be an integer >= 1 (got {value!r})")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_research_timeouts(self) -> "Settings":
+        """Fail-fast on a nonsensical durable deep-research timeout config
+        (Phase 1B.2R MP-3C3D4B). Both fields are floats (seconds), so they
+        cannot share `_validate_approval_limits`'s integer-only check above.
+        Server-owned only — never client-overridable."""
+        import math
+
+        for name in ("research_fetch_timeout_s", "research_total_deadline_s"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or math.isnan(value) or math.isinf(value) or value <= 0):
+                raise ValueError(f"{name} must be a finite number > 0 (got {value!r})")
+        if self.research_fetch_timeout_s >= self.research_total_deadline_s:
+            raise ValueError(
+                "research_fetch_timeout_s must be strictly less than "
+                "research_total_deadline_s (a single fetch may never be "
+                "allowed to consume the entire acquisition deadline)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_multi_agent_limits(self) -> "Settings":
+        """Fail-fast on a nonsensical durable multi-agent config
+        (Phase 1B.2R MP-3C3D5B). Server-owned only — never client-
+        overridable."""
+        import math
+
+        if self.multi_agent_max_roles != 3 or self.multi_agent_max_provider_calls != 3:
+            raise ValueError(
+                "multi_agent_max_roles and multi_agent_max_provider_calls must "
+                "both be exactly 3 — the durable multi-agent role graph "
+                "(app.run_engine.multi_agent_orchestration.ROLE_ORDER) is a "
+                "fixed 3-role, 3-call sequence, not a tunable value"
+            )
+        for name in ("multi_agent_role_timeout_s", "multi_agent_total_deadline_s"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or math.isnan(value) or math.isinf(value) or value <= 0):
+                raise ValueError(f"{name} must be a finite number > 0 (got {value!r})")
+        if self.multi_agent_role_timeout_s >= self.multi_agent_total_deadline_s:
+            raise ValueError(
+                "multi_agent_role_timeout_s must be strictly less than "
+                "multi_agent_total_deadline_s (a single role's provider call "
+                "may never be allowed to consume the entire run deadline)"
+            )
+        if self.multi_agent_max_artifact_bytes > self.run_payload_max_bytes:
+            raise ValueError(
+                "multi_agent_max_artifact_bytes must not exceed "
+                "run_payload_max_bytes (the sealed-payload envelope's own "
+                "hard cap)"
+            )
+        return self
 
     @property
     def chromadb_url(self) -> str:

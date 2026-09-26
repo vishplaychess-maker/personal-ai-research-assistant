@@ -2123,3 +2123,28 @@ class TestPhase7CCORS:
         })
         assert resp.status_code == 200  # Request still processed
         assert resp.headers.get("access-control-allow-origin") != "http://evil.example.com"
+
+    def test_cors_preflight_permits_durable_stream_headers(self, client):
+        """Phase 1B.2R MP-3C3C — a cross-origin preflight for the durable
+        /messages/stream contract must allow the Idempotency-Key + Last-Event-ID
+        request headers."""
+        resp = client.options("/api/sessions/1/messages/stream", headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "idempotency-key,last-event-id,authorization,x-csrf-token",
+        })
+        assert resp.status_code == 200
+        allowed = resp.headers.get("access-control-allow-headers", "").lower()
+        assert "idempotency-key" in allowed
+        assert "last-event-id" in allowed
+
+    def test_cors_exposes_x_run_id_on_actual_response(self, client):
+        """Phase 1B.2R MP-3C3C — X-Run-Id must be script-readable cross-origin
+        (Starlette emits Expose-Headers on the actual response, not preflight)."""
+        token, _ = _register_and_login(client, "testuser_cors4")
+        resp = client.get("/api/auth/sessions", headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "http://localhost:5173",
+        })
+        assert resp.status_code == 200
+        assert "X-Run-Id" in resp.headers.get("access-control-expose-headers", "")

@@ -18,6 +18,16 @@ def test_extract_multiple_capped_at_3():
     assert len(extract_mcp_calls(text)) == 3
 
 
+def test_extract_cap_is_config_driven(monkeypatch):
+    # Decision 5: MCP calls parsed per generated response are bounded and the
+    # bound comes from validated settings, not a hard-coded constant.
+    text = "\n".join(f'[MCP_CALL: mcp__s__t{i} {{}}]' for i in range(10))
+    monkeypatch.setattr(mcp_tool.settings, "max_mcp_calls_per_response", 1)
+    assert len(extract_mcp_calls(text)) == 1
+    monkeypatch.setattr(mcp_tool.settings, "max_mcp_calls_per_response", 5)
+    assert len(extract_mcp_calls(text)) == 5
+
+
 def test_extract_skips_malformed_json():
     assert extract_mcp_calls('[MCP_CALL: mcp__s__t {not json}]') == []
 
@@ -27,44 +37,52 @@ def test_format_result_error_marker():
     assert "mcp__s__t" in out and "[error]" in out
 
 
-def test_run_rejects_unknown_without_spawn(monkeypatch):
-    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: None)
-    called = {"n": 0}
+# Phase 1B.2: run_mcp_calls is the LIVE chat-path entry and NEVER auto-executes.
+# It always returns a structured blocked/approval-required block and never
+# invokes mcp_service.call_tool. (The trusted internal path
+# dispatch_mcp_call_via_gateway is tested in tests/test_approval_gateway.py.)
+
+
+@pytest.fixture
+def _no_calltool(monkeypatch):
+    seen = {"n": 0}
     monkeypatch.setattr(mcp_tool.mcp_service, "call_tool",
-                        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or ("", False))
+                        lambda *a, **k: seen.__setitem__("n", seen["n"] + 1) or ("X", False))
+    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: None)
+    return seen
+
+
+def test_run_mcp_calls_blocked_when_tools_disabled(monkeypatch, _no_calltool):
+    monkeypatch.setattr(mcp_tool.settings, "enable_mcp_tool", False)
     out = run_mcp_calls([("mcp__x__y", {})], db=None, user_id=1)
-    assert called["n"] == 0
-    assert "unknown" in out.lower() or "not available" in out.lower()
+    assert _no_calltool["n"] == 0
+    assert "[error]" in out and "disabled" in out.lower()
 
 
-def test_run_dispatches_known(monkeypatch):
-    from app.services.mcp_service import MCPServerCfg
-    cfg = MCPServerCfg(id=1, name="s", command="python", args=(), env=None, tool_allowlist=None)
-    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: (cfg, "t"))
-    monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", lambda c, t, a: ("RESULT", False))
-    out = run_mcp_calls([("mcp__s__t", {"a": 1})], db=None, user_id=1)
-    assert "RESULT" in out
+def test_run_mcp_calls_blocked_when_gateway_not_required(monkeypatch, _no_calltool):
+    monkeypatch.setattr(mcp_tool.settings, "enable_mcp_tool", True)
+    monkeypatch.setattr(mcp_tool.settings, "approval_gateway_required", False)
+    out = run_mcp_calls([("mcp__x__y", {})], db=None, user_id=1)
+    assert _no_calltool["n"] == 0
+    assert "[error]" in out and "disabled" in out.lower()
+    assert "auto-execution" in out.lower()  # never restores legacy behavior
 
 
-def test_run_call_tool_exception_becomes_error_block(monkeypatch):
-    from app.services.mcp_service import MCPServerCfg
-    cfg = MCPServerCfg(id=1, name="s", command="python", args=(), env=None, tool_allowlist=None)
-
-    def _boom(c, t, a):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: (cfg, "t"))
-    monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", _boom)
-    out = run_mcp_calls([("mcp__s__t", {})], db=None, user_id=1)
-    assert "[error] RuntimeError: boom" in out
+def test_run_mcp_calls_blocked_when_gateway_unavailable(monkeypatch, _no_calltool):
+    monkeypatch.setattr(mcp_tool.settings, "enable_mcp_tool", True)
+    monkeypatch.setattr(mcp_tool.settings, "approval_gateway_required", True)
+    monkeypatch.setattr(mcp_tool.settings, "approval_gateway_available", False)
+    out = run_mcp_calls([("mcp__x__y", {})], db=None, user_id=1)
+    assert _no_calltool["n"] == 0
+    assert "[error]" in out and "unavailable" in out.lower()
 
 
-def test_run_joins_multiple_blocks(monkeypatch):
-    from app.services.mcp_service import MCPServerCfg
-    cfg = MCPServerCfg(id=1, name="s", command="python", args=(), env=None, tool_allowlist=None)
-    monkeypatch.setattr(mcp_tool.tool_registry, "resolve_mcp", lambda db, uid, n: (cfg, "t"))
-    monkeypatch.setattr(mcp_tool.mcp_service, "call_tool", lambda c, t, a: ("RESULT", False))
+def test_run_mcp_calls_approval_required_when_gateway_on(monkeypatch, _no_calltool):
+    monkeypatch.setattr(mcp_tool.settings, "enable_mcp_tool", True)
+    monkeypatch.setattr(mcp_tool.settings, "approval_gateway_required", True)
+    monkeypatch.setattr(mcp_tool.settings, "approval_gateway_available", True)
     out = run_mcp_calls([("mcp__s__t1", {}), ("mcp__s__t2", {})], db=None, user_id=1)
-    assert out.count("RESULT") == 2
-    assert out.count("=== MCP Tool Result") == 2
-    assert "=== End of MCP Tool Result ===\n\n=== MCP Tool Result" in out
+    assert _no_calltool["n"] == 0                      # never executes
+    assert out.count("=== MCP Tool Result") == 2       # one block per call
+    assert "approval" in out.lower() and "no tool was executed" in out.lower()
+    assert "durable-run" in out.lower()                # documents the limitation

@@ -60,6 +60,7 @@ from app.services.cookie_service import (
 )
 from app.services.refresh_token_service import (
     create_refresh_session,
+    family_id_for_raw_token,
     rotate_refresh_token,
     revoke_refresh_session,
     revoke_all_user_sessions,
@@ -275,16 +276,29 @@ def login_user(
     user.locked_until = None
     db.commit()
 
-    # 7. Create access token (short-lived)
-    access_token = create_access_token(
-        data={"sub": str(user.id)},
-        expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
-    )
-
-    # 8. Create refresh session
+    # 7. Create the refresh session FIRST so the access token can bind to its
+    #    refresh-token family (Phase 1B.2R D5). `create_refresh_session` mints
+    #    exactly one family; we look up its id by the raw token's hash.
     refresh_token = create_refresh_session(
         db, user, device_info=f"ip:{client_ip}",
     )
+
+    # 8. Bind the access token to that family via the `sid` claim (an OIDC-style
+    #    session id = a `refresh_sessions.family_id`, never a token). If steps
+    #    8-9 fail after the session is persisted, revoke it so an undisclosed
+    #    refresh family cannot accumulate (the raw token was never delivered).
+    try:
+        family_id = family_id_for_raw_token(db, refresh_token)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "sid": family_id},
+            expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
+        )
+    except Exception:
+        try:
+            revoke_refresh_session(db, user, refresh_token)
+        except Exception:  # best-effort; never mask the original failure
+            logger.warning("Failed to revoke orphan refresh session for user_id=%d", user.id)
+        raise
 
     # 9. Periodic cleanup (every login, lightweight)
     cleanup_expired_sessions(db)
@@ -377,9 +391,12 @@ def refresh_token(
         clear_csrf_cookie(error_response)
         return error_response
 
-    # Issue a new access token for the correct user
+    # Issue a new access token for the correct user, re-bound to the (stable)
+    # refresh family — `rotate_refresh_token` preserves `family_id` across
+    # rotation, so the `sid` claim is continuous for the life of the login.
+    family_id = family_id_for_raw_token(db, new_raw_token)
     access_token = create_access_token(
-        data={"sub": str(user_id)},
+        data={"sub": str(user_id), "sid": family_id},
         expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
     )
 

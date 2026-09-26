@@ -77,6 +77,15 @@ services:
       - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
       - MCP_CALL_TIMEOUT_S=${MCP_CALL_TIMEOUT_S:-30}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # MP-4C: the SAME signing secret the executor verifies. Provisioned to
+      # these TWO services only, and never as an inline value.
+      - EXECUTOR_SERVICE_GRANT_KEY_FILE=/run/secrets/executor_grant_key
+      # MP-4C: the isolated executor endpoint and the explicit operator opt-in.
+      # BOTH default to EMPTY, which means OFF: no broker client is built, the
+      # ONE authority (real_python_execution_available) stays False, and every
+      # python_sandbox proposal/dispatch fails closed.
+      - EXECUTOR_SERVICE_URL=${EXECUTOR_SERVICE_URL:-}
+      - EXECUTOR_OPERATOR_OPT_IN=${EXECUTOR_OPERATOR_OPT_IN:-}
       # Media Generation (Image/Video)
       - ENABLE_MEDIA_GENERATION=${ENABLE_MEDIA_GENERATION:-true}
       - MEDIA_PROVIDER_PRIMARY=${MEDIA_PROVIDER_PRIMARY:-venice}
@@ -107,8 +116,64 @@ services:
       chromadb:
         condition: service_started
     networks:
+      # Its existing required access is preserved: chromadb + host.docker.internal
+      # (Ollama / GLM) via research-network. executor-internal is ADDED so this
+      # backend is the only workload that can reach the executor.
       - research-network
+      - executor-internal
     restart: unless-stopped
+    secrets:
+      - executor_grant_key
+
+  # ── MP-4C dedicated Python executor (internal only) ─────
+  # The ONLY service that reaches the Docker daemon. It publishes NO host port:
+  # the endpoint is reachable solely by the backend, over `executor-internal`.
+  # The backend, the frontend and every executed Python container receive no
+  # Docker socket and no daemon credentials.
+  #
+  # Keep exactly ONE replica. Its quotas (1 active execution per user, 2
+  # globally) are PROCESS-LOCAL, so a second replica would each enforce its own
+  # caps and could exceed the intended global limit.
+  executor:
+    build:
+      context: .
+      dockerfile: executor_service/Dockerfile
+    image: thunder-executor:mp4c
+    container_name: research-assistant-executor
+    restart: unless-stopped
+    volumes:
+      # The socket is the daemon credential. It is mounted into THIS service only.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The DURABLE replay guard. This is what makes the SAME signed request
+      # refuse after a restart: the consumed jti survives on the volume. Losing
+      # this volume (docker compose down -v) LOSES that guarantee.
+      - executor_nonce_data:/var/lib/executor
+    secrets:
+      # The backend<->executor signing secret arrives as a FILE secret (see the
+      # top-level `secrets:` block), never as an environment value, so it never
+      # appears in `docker compose config`, Config.Env or ps output.
+      - executor_grant_key
+    environment:
+      - EXECUTOR_SERVICE_GRANT_KEY_FILE=/run/secrets/executor_grant_key
+      - EXECUTOR_SERVICE_NONCE_DB=/var/lib/executor/nonces.db
+      - EXECUTOR_SERVICE_OWNER=mp4c-executor
+      # Non-loopback bind is an explicit opt-in, required because the backend
+      # reaches this service from another container. It is safe only because no
+      # host port is published and the network is internal.
+      - EXECUTOR_SERVICE_HOST=0.0.0.0
+      - EXECUTOR_SERVICE_ALLOW_INTERNAL_BIND=1
+    expose:
+      - "8091"
+    networks:
+      - executor-internal
+    healthcheck:
+      # /healthz is 200 only when the daemon is reachable, the EXACT pinned image
+      # is present and the full isolation probe passed at startup.
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys\ntry:\n sys.exit(0 if u.urlopen('http://127.0.0.1:8091/healthz').status==200 else 1)\nexcept Exception:\n sys.exit(1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 900s
 
   # ── React frontend (Vite dev server) ────────────────────
   frontend:
@@ -129,7 +194,23 @@ services:
 networks:
   research-network:
     driver: bridge
+  # Internal-only: no external route and no published ports. Only services
+  # attached to it (the backend) can reach the executor.
+  executor-internal:
+    driver: bridge
+    internal: true
+
+secrets:
+  # Operator-provided and NEVER checked in (see .gitignore and secrets/README.md).
+  # Create it before the first start:
+  #   secrets/executor_service_tokens.json
+  #     {"<token>": {"principal": "backend", "user_id": 1, "tenant_id": null}}
+  executor_grant_key:
+    file: ./secrets/executor_grant_key
 
 volumes:
   app_data:
   chromadb_data:
+  # Durable nonce store. `docker compose down -v` DESTROYS it, and with it the
+  # cross-restart replay guarantee.
+  executor_nonce_data:

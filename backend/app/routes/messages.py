@@ -4,7 +4,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+
+from app.database import SessionLocal
+from app.services.auth_service import bearer_scheme
 
 from app.database import get_db
 from app.models.models import Message, ResearchSession, MessageRole, User
@@ -309,6 +313,7 @@ async def stream_chat(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
+    _bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     """
     Send a user message and stream the AI response token-by-token via SSE.
@@ -327,7 +332,31 @@ async def stream_chat(
 
     Memory extraction runs as a background step after the stream completes.
     On cancellation, partial responses are NOT saved to the database.
+
+    Phase 1B.2R MP-3C3B: when ``run_messages_stream_durable_enabled`` is on, this
+    route instead submits/reuses a durable ``chat_stream`` run and streams its
+    persisted events adapted into the exact wire format below. When the flag is
+    off (default) the code below is the unchanged legacy path.
     """
+    # Phase 1B.2R MP-3C3D3A — validate/canonicalize the request-level mode
+    # ONCE, before either branch, so an invalid mode fails identically (422,
+    # before any persistence) regardless of the durable cutover flag. The
+    # ONE authoritative allowlist/normalization lives in
+    # app.run_engine.submission.validate_request_mode — reused here, not
+    # duplicated. Omitted (None) is intentionally distinct from explicit
+    # "chat" (see that function's docstring).
+    from app.run_engine.submission import validate_request_mode
+    try:
+        resolved_mode = validate_request_mode(payload.mode)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Unrecognized request mode.")
+
+    if settings.run_messages_stream_durable_enabled:
+        return await _stream_chat_durable(
+            session_id, payload, request, db, current_user, _bearer,
+            resolved_mode=resolved_mode,
+        )
+
     # Validate session ID format
     if session_id <= 0:
         raise HTTPException(status_code=422, detail="Invalid session ID")
@@ -339,6 +368,17 @@ async def stream_chat(
             detail="Message exceeds maximum length of 10,000 characters",
         )
 
+    # Phase 1B.2R MP-3C3D3A — legacy capability gate: an explicitly requested
+    # mode this deployment has not enabled must fail BEFORE persistence.
+    # prepare_chat_context() below saves the user Message immediately (its
+    # own step 2), so this check must run first, never inside it.
+    if resolved_mode == "deep_research" and not settings.enable_deep_research:
+        raise HTTPException(status_code=422,
+                            detail="deep_research mode is not enabled on this deployment.")
+    if resolved_mode == "multi_agent" and not settings.enable_multi_agent:
+        raise HTTPException(status_code=422,
+                            detail="multi_agent mode is not enabled on this deployment.")
+
     # Synchronous setup: validate session, save user message, prepare context
     try:
         context = prepare_chat_context(
@@ -347,6 +387,7 @@ async def stream_chat(
             db=db,
             user_id=current_user.id,
             image_url=payload.image_url,
+            mode=resolved_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -484,4 +525,112 @@ async def stream_chat(
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+_LEGACY_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+
+async def _stream_chat_durable(
+    session_id: int,
+    payload: "ChatRequest",
+    request: Request,
+    db: Session,
+    current_user: User,
+    bearer: Optional[HTTPAuthorizationCredentials],
+    *,
+    resolved_mode: Optional[str] = None,
+) -> StreamingResponse:
+    """Phase 1B.2R MP-3C3B durable cutover. Fails closed BEFORE any persistence
+    unless every dependency is satisfied; submits (or idempotently reuses) a
+    durable ``chat_stream`` run — NO executor is called here — and streams its
+    persisted events in the legacy wire format. Reached only when the cutover
+    flag is on.
+
+    ``resolved_mode`` (MP-3C3D3A) is the caller's already-validated request
+    mode — ``None`` when omitted (resolves to ``DURABLE_STREAM_MODE``, i.e.
+    "chat", preserving MP-3C3D1 behavior exactly), or one of the canonical
+    mode strings. ``deep_research``/``multi_agent`` are recognized but not
+    yet executable durably and are rejected below, before any persistence."""
+    from app.run_engine import messages_stream as _ms
+    from app.run_engine.context import build_auth_context
+    from app.services.auth_service import decode_access_token
+
+    supervisor = getattr(request.app.state, "run_worker_supervisor", None)
+    try:
+        _ms.assert_durable_stream_ready(supervisor)
+    except _ms.DurableStreamError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
+
+    if session_id <= 0:
+        raise HTTPException(status_code=422, detail="Invalid session ID")
+    if len(payload.message) > 10000:
+        raise HTTPException(status_code=422,
+                            detail="Message exceeds maximum length of 10,000 characters")
+
+    reason = _ms.unsupported_mode_code(
+        has_image=payload.image_url is not None,
+        mode=(resolved_mode or _ms.DURABLE_STREAM_MODE),
+    )
+    if reason is not None:
+        logger.info("durable /messages/stream refused unsupported mode: %s", reason)
+        raise HTTPException(
+            status_code=422,
+            detail="Durable streaming currently supports plain chat and "
+                   "tool-approval conversations only.",
+        )
+
+    idem = request.headers.get("idempotency-key")
+    if not _ms.valid_idempotency_key(idem):
+        raise HTTPException(status_code=422,
+                            detail="A valid Idempotency-Key header is required.")
+
+    if bearer is None:
+        raise HTTPException(status_code=401,
+                            detail="A bearer access token is required for durable streaming.")
+    try:
+        claims = decode_access_token(bearer.credentials)
+        ctx = build_auth_context(db, user=current_user, token_payload=claims)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid access token.")
+
+    if _ms.submit_rate_limited(current_user.id):
+        raise HTTPException(status_code=429,
+                            detail="Too many durable stream submissions; please slow down.")
+
+    try:
+        run, _created = _ms.resolve_and_submit(
+            db, ctx, session_id=session_id, message=payload.message,
+            idempotency_key=idem, mode=resolved_mode,
+        )
+    except _ms.DurableStreamError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
+
+    uid = current_user.id
+    if not _ms.acquire_stream_slot(uid):
+        raise HTTPException(status_code=429,
+                            detail="Too many concurrent durable streams for this account.")
+
+    cursor = _ms.parse_cursor(request.headers.get("last-event-id"),
+                              request.query_params.get("after_seq"))
+
+    async def _durable_gen():
+        try:
+            async for frame in _ms.stream_legacy_wire(
+                request, SessionLocal, ctx, run.id, after_seq=cursor,
+            ):
+                yield frame
+        finally:
+            _ms.release_stream_slot(uid)
+
+    return StreamingResponse(
+        _durable_gen(),
+        media_type="text/event-stream",
+        headers={**_LEGACY_SSE_HEADERS, "X-Run-Id": run.id},
     )

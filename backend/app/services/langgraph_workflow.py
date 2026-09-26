@@ -424,13 +424,11 @@ def deep_research(state: WorkflowState) -> WorkflowState:
 
     state["deep_research_context"] = context
     state["deep_research_used"] = bool(context)
-    if context:
-        try:
-            from app.services.knowledge_graph import ingest_text_async
-
-            ingest_text_async(state.get("user_id", 1), context, "deep_research")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("KG ingest (deep_research) skipped: %s", exc)
+    # MP-4C: model/pipeline-directed KG ingestion is NOT scheduled here. The
+    # research context still feeds the answer; only the automatic graph write
+    # is denied. The explicit authenticated document upload
+    # (routes/documents.py) remains the sole KG writer, and [KG_QUERY] reads
+    # are unaffected.
     if context:
         logger.info(
             "Deep research gathered context for user %s (query=%.60s)",
@@ -599,15 +597,13 @@ def agent_code(state: WorkflowState) -> WorkflowState:
     state["coder_output"] = response
     state["tokens_generated"] = state.get("tokens_generated", 0) + len(response)
 
-    # Sandbox: auto-execute emitted Python code (same policy as the
-    # single-agent path) so the Reviewer sees real run results.
-    code = extract_python_code(response)
-    if code:
-        logger.info("Multi-agent Coder emitted Python code (%d chars)", len(code))
-        result = run_python_code(code)
-        state["agent_code_result"] = format_code_result(code, result)
-    else:
-        state["agent_code_result"] = ""
+    # Phase 1B.2R MP-4C: the Coder's emitted Python is NOT executed. A legacy
+    # path cannot perform durable approval+resume (MP-5 owns retiring this
+    # workflow), so it fails closed and the Reviewer receives the bounded
+    # notice instead of a real run result.
+    from app.run_engine.sandbox_policy import legacy_python_fail_closed
+
+    state["agent_code_result"] = legacy_python_fail_closed(response)
 
     # Terminal (HITL): a proposed command pauses the graph for user approval.
     if settings.enable_terminal_tool and not state.get("pending_command"):
@@ -1198,13 +1194,19 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
             db.refresh(assistant_msg)
             state["assistant_message_id"] = assistant_msg.id
 
-    # Detect LLM-emitted Python code (sandbox) - auto-execute, no approval.
+    # Phase 1B.2R MP-4C: model-emitted Python is NEVER auto-executed here.
+    # Legacy paths cannot perform durable approval+resume, so they fail closed;
+    # the raw marker is stripped so it can never be persisted or rendered.
     if not state.get("regenerate") and not state.get("pending_command"):
-        code = extract_python_code(response)
-        if code:
-            logger.info("LLM emitted Python code (%d chars)", len(code))
-            result = run_python_code(code)
-            state["code_result"] = format_code_result(code, result)
+        from app.run_engine.sandbox_policy import (
+            legacy_python_fail_closed,
+            strip_python_marker,
+        )
+
+        _python_block = legacy_python_fail_closed(response)
+        if _python_block:
+            response = strip_python_marker(response)
+            state["code_result"] = _python_block
             state["regenerate"] = True
 
             assistant_msg = Message(

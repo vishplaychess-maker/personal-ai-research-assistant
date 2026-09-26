@@ -10,20 +10,35 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     image_url: Optional[str] = Field(None, description="Base64-encoded image data URL (data:image/...;base64,...)")
+    # Phase 1B.2R MP-3C3D3A — optional canonical mode ("chat"/"deep_research"/
+    # "multi_agent"). Omitted (None) is intentionally distinct from explicit
+    # "chat": omitted preserves existing heuristic/global-flag-driven legacy
+    # routing; explicit "chat" forces the plain single-agent path regardless
+    # of those flags. Bounded here (type + length) only — the canonical
+    # allowlist/normalization is app.run_engine.submission.validate_request_mode,
+    # the one authoritative definition reused by every mode-aware route.
+    mode: Optional[str] = Field(None, max_length=32)
 
 
 # ── Citation schemas ───────────────────────────────────────
 
 
 class Citation(BaseModel):
-    """A single citation marker with source information."""
+    """A single citation marker with source information.
 
-    marker: str  # e.g. "[1]", "[2]"
-    document_id: int
+    Phase 1B.2R MP-3C3D4C: ``document_id``/``chunk_id`` are now Optional —
+    a web-research citation (marker ``[W1]``, ``[W2]``, ...) has neither,
+    only a validated ``url`` from a sealed D4B source snapshot. Existing
+    document citations (marker ``[1]``, ``[2]``, ...) always populate both
+    unchanged — fully backward compatible, additive only."""
+
+    marker: str  # e.g. "[1]", "[2]" (document) or "[W1]", "[W2]" (web research)
+    document_id: Optional[int] = None
     filename: str
     page_number: Optional[int] = None
-    chunk_id: int
+    chunk_id: Optional[int] = None
     snippet: str
+    url: Optional[str] = None  # web-research citations only; validated, sealed-source URL
 
 
 # ── Document schemas ───────────────────────────────────────

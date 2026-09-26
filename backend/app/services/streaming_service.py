@@ -54,9 +54,11 @@ DEFAULT_SYSTEM_PROMPT = build_base_prompt(
 # ── SSE event formatting ──────────────────────────────────
 
 
-def format_sse(event: str, data: dict) -> str:
-    """Format a Server-Sent Event string."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+# MP-4B: the canonical serializer moved to the neutral durable module
+# (app.run_engine.sse) so that durable code has ZERO reverse dependency on this
+# legacy service. It is re-exported here, unchanged, so the legacy callers in
+# routes/messages.py and the existing tests keep working during the transition.
+from app.run_engine.sse import format_sse  # noqa: E402,F401
 
 
 # ── Context preparation ───────────────────────────────────
@@ -83,6 +85,7 @@ class ChatContext:
         provider_config: Optional[dict] = None,
         user_input: Optional[str] = None,
         directives_block: str = "",
+        mode: Optional[str] = None,
     ):
         self.session_id = session_id
         self.user_message = user_message
@@ -96,6 +99,10 @@ class ChatContext:
         self.provider_config = provider_config
         self.user_input = user_input
         self.directives_block = directives_block
+        # Phase 1B.2R MP-3C3D3A — the request's validated canonical mode
+        # (None | "chat" | "deep_research" | "multi_agent"); None means
+        # omitted, preserving original heuristic/global-flag routing.
+        self.mode = mode
 
 
 def prepare_chat_context(
@@ -104,6 +111,7 @@ def prepare_chat_context(
     db: DBSession,
     user_id: int = 1,
     image_url: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> ChatContext:
     """
     Prepare all context needed for a streaming chat response.
@@ -113,6 +121,15 @@ def prepare_chat_context(
         user_input: The user's message text.
         db: Database session.
         user_id: The user ID (scoped session lookup).
+        mode: Phase 1B.2R MP-3C3D3A — the request's validated canonical mode
+            (``None`` | ``"chat"`` | ``"deep_research"`` | ``"multi_agent"``),
+            already resolved by ``app.run_engine.submission.
+            validate_request_mode`` at the route boundary — never a raw
+            client string. ``None`` (omitted) preserves the exact original
+            global-flag/heuristic-driven behavior. Stored on the returned
+            ``ChatContext`` so ``stream_chat_response`` can apply the same
+            explicit-vs-omitted rule to its own (multi-agent) routing
+            decision, downstream of this function.
 
     Steps:
       1. Validate session exists and belongs to user
@@ -319,25 +336,48 @@ def prepare_chat_context(
     except Exception as exc:
         logger.warning("Web scraping failed (non-fatal): %s", exc)
 
-    # 7b. Deep Research Mode — autonomous web search + scrape, gated by the
-    # Phase 4 keyword detector: runs ONLY when the user did not supply a URL
-    # AND the prompt explicitly asks for research (short/ambiguous prompts
-    # skip the expensive search+scrape pass).
-    if settings.enable_deep_research and not web_scraped:
+    # 7b. Deep Research Mode — autonomous web search + scrape.
+    #
+    # Phase 1B.2R MP-3C3D3A — explicit request-level `mode` now governs this
+    # (and the multi-agent check in stream_chat_response, further down the
+    # pipeline): omitted mode (None) preserves the EXACT original behavior —
+    # global `enable_deep_research` + the Phase 4 keyword heuristic
+    # (`detect_research_task`) decide, unchanged. `mode="deep_research"`
+    # forces this step (bypassing the heuristic — the caller already
+    # explicitly asked, and routes/messages.py already rejected this mode
+    # before persistence if `enable_deep_research` is globally off, so
+    # reaching here with this mode means it's enabled). `mode="chat"` or
+    # `mode="multi_agent"` skip this step entirely — an explicit mode is
+    # exclusive, never composed with another mode's context injection.
+    # Still gated on `not web_scraped` regardless of mode (an explicit URL
+    # already answered the "what to look at" question).
+    run_deep_research_step = False
+    if mode == "deep_research":
+        run_deep_research_step = not web_scraped
+    elif mode is None:
         from app.services.agent_personas import detect_research_task
 
-        if detect_research_task(user_input):
-            try:
-                from app.tools.deep_research import run_deep_research
+        run_deep_research_step = (
+            settings.enable_deep_research and not web_scraped
+            and detect_research_task(user_input)
+        )
+    # mode in ("chat", "multi_agent"): run_deep_research_step stays False.
 
-                research_context = run_deep_research(user_input)
-                if research_context:
-                    system_parts.append(research_context)
-                    from app.services.knowledge_graph import ingest_text_async
+    if run_deep_research_step:
+        try:
+            from app.tools.deep_research import run_deep_research
 
-                    ingest_text_async(user_id, research_context, "deep_research")
-            except Exception as exc:
-                logger.warning("Deep research failed (non-fatal): %s", exc)
+            research_context = run_deep_research(user_input)
+            if research_context:
+                system_parts.append(research_context)
+                # MP-4C: model/pipeline-directed KG ingestion is NOT
+                # scheduled here. The research context still feeds the
+                # answer; only the automatic graph write is denied. The
+                # explicit authenticated document upload
+                # (routes/documents.py) remains the sole KG writer, and
+                # [KG_QUERY] reads are unaffected.
+        except Exception as exc:
+            logger.warning("Deep research failed (non-fatal): %s", exc)
 
     system_prompt = "\n\n".join(system_parts)
 
@@ -362,6 +402,7 @@ def prepare_chat_context(
         provider_config=provider_config,
         user_input=user_input,
         directives_block=directives_block,
+        mode=mode,
     )
 
 
@@ -497,11 +538,12 @@ async def stream_multi_agent_response(
             return "\n\n".join(parts)
 
         async def _run_sandbox(coder_output: str) -> str:
-            code = extract_python_code(coder_output)
-            if not code:
-                return ""
-            result = await run_python_code_async(code)
-            return format_code_result(code, result)
+            # Phase 1B.2R MP-4C: a LEGACY path must never auto-execute
+            # model-emitted Python. No flag combination re-enables this; the
+            # bounded, marker-free notice replaces both the code and any result.
+            from app.run_engine.sandbox_policy import legacy_python_fail_closed
+
+            return legacy_python_fail_closed(coder_output)
 
         def _persist_reviewer_markers(text: str) -> str:
             """Persist [SAVE_DIRECTIVE]/[SAVE_MEMORY] the Reviewer emitted
@@ -704,17 +746,35 @@ async def stream_chat_response(
     # NOTE (Phase 4): research-keyword prompts do NOT divert this router —
     # detect_research_task is deliberately separate from detect_complex_task,
     # so prompts with build/code phrasing keep multi-agent routing priority.
-    from app.services.agent_personas import detect_complex_task
-
+    #
+    # Phase 1B.2R MP-3C3D3A — explicit request-level context.mode now governs
+    # this alongside the original heuristic: omitted mode (None) preserves
+    # the EXACT original behavior — global enable_multi_agent + the
+    # detect_complex_task heuristic decide, unchanged. mode="multi_agent"
+    # forces this route (bypassing the heuristic — routes/messages.py already
+    # rejected this mode before persistence if enable_multi_agent is globally
+    # off, so reaching here means it's enabled). mode="chat" or
+    # mode="deep_research" skip this route entirely — exclusive, not
+    # composed with the deep-research context injection above.
     _last_msg = context.history[-1] if context.history else {}
-    if (
-        settings.enable_multi_agent
-        and detect_complex_task(context.user_input or "")
-        and isinstance(_last_msg.get("content"), str)
-    ):
+    _has_text_content = isinstance(_last_msg.get("content"), str)
+    if context.mode == "multi_agent":
+        run_multi_agent_step = _has_text_content
+    elif context.mode is None:
+        from app.services.agent_personas import detect_complex_task
+
+        run_multi_agent_step = (
+            settings.enable_multi_agent
+            and detect_complex_task(context.user_input or "")
+            and _has_text_content
+        )
+    else:  # "chat" or "deep_research": never routed to multi-agent
+        run_multi_agent_step = False
+
+    if run_multi_agent_step:
         logger.info(
-            "Complex task detected — routing session %s to the multi-agent team",
-            context.session_id,
+            "Routing session %s to the multi-agent team (mode=%s)",
+            context.session_id, context.mode or "auto",
         )
         async for sse_event in stream_multi_agent_response(context):
             yield sse_event
@@ -796,11 +856,19 @@ async def stream_chat_response(
                     if held:
                         yield format_sse("token", {"token": held})
                     full_response_text = chunk.get("response", "")
-                    # Execute any [PYTHON_CODE: ...] the LLM emitted (single-pass).
-                    code = extract_python_code(full_response_text)
-                    if code:
-                        result = await run_python_code_async(code)
-                        full_response_text += "\n\n" + format_code_result(code, result)
+                    # Phase 1B.2R MP-4C: NO auto-execution of model-emitted
+                    # Python on this legacy path. The raw marker is stripped so
+                    # it is never streamed or persisted, and the bounded
+                    # fail-closed notice replaces any result.
+                    from app.run_engine.sandbox_policy import (
+                        legacy_python_fail_closed,
+                        strip_python_marker,
+                    )
+
+                    _python_block = legacy_python_fail_closed(full_response_text)
+                    full_response_text = strip_python_marker(full_response_text)
+                    if _python_block:
+                        full_response_text += "\n\n" + _python_block
                     # [MCP_CALL: …] — Hermes auto-correction loop (up to 3 retries)
                     mcp_calls = []
                     mcp_retry = 0

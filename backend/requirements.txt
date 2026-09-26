@@ -7,6 +7,15 @@ psycopg2-binary==2.9.10
 pydantic==2.9.0
 pydantic-settings==2.5.2  # bumped from 2.5.0: mcp 1.12.4 requires pydantic-settings>=2.5.2
 httpx==0.27.2
+# ── Approval domain (Phase 1B.1) — RFC 8785 JSON Canonicalization Scheme ──
+# The reference pure-Python implementation by Trail of Bits. Apache-2.0, ZERO
+# runtime dependencies, Requires-Python>=3.8 (no conflict with the pinned
+# stack). Used by app/approval/canonical.py to produce the deterministic bytes
+# that args_hash / action_hash / grant_scope_hash / the ActionLog chain hash.
+# Chosen over hand-rolled ECMAScript number serialization (exponent thresholds,
+# rounding boundaries, subnormals, negative zero) and validated against the RFC
+# 8785 Appendix B vectors in tests/test_approval_domain.py.
+rfc8785==0.1.4
 chromadb==1.5.9
 langgraph==0.3.2
 langgraph-checkpoint==2.0.16

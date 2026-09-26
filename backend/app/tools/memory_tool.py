@@ -32,34 +32,33 @@ def extract_memory_markers(text: str) -> List[str]:
     return [m.strip() for m in SAVE_MEMORY_PATTERN.findall(text) if m.strip()]
 
 
+def memory_write_requires_approval() -> bool:
+    """Phase 1B.2R MP-4C — a model-emitted [SAVE_MEMORY: ...] is a PROPOSAL,
+    never a write. ALWAYS True: no flag combination permits a model-directed
+    durable-memory mutation before a server-owned approval has been consumed.
+    Named (rather than a bare literal at the call site) so the invariant is
+    testable and cannot drift per caller."""
+    return True
+
+
 def process_memory_markers(
     text: str,
     db: DBSession,
     user_id: int,
     session_id: Optional[int] = None,
 ) -> Tuple[str, int]:
-    """Save every [SAVE_MEMORY: ...] marker and return (cleaned_text, saved_count).
+    """Strip every [SAVE_MEMORY: ...] marker and persist NOTHING.
 
-    The cleaned text has all markers removed so the user never sees raw
-    tool markers in the response.
+    Phase 1B.2R MP-4C: this legacy helper used to write each marker straight to
+    the user's durable memory with NO approval. It now fails closed — markers
+    are removed from the user-visible text (so raw marker text can never render
+    or be persisted) and ZERO memories are written. Approval-gated memory
+    writes are not implemented yet; until they are, model output can never
+    mutate durable memory. Always returns (cleaned_text, 0).
     """
-    markers = extract_memory_markers(text)
-    saved = 0
-    for content in markers:
-        mem = save_memory(
-            db, user_id, content, category="preference", session_id=session_id
-        )
-        if mem:
-            saved += 1
-            logger.info(
-                "save_memory tool saved memory id=%d: %.60s", mem.id, mem.content
-            )
-        else:
-            logger.info("save_memory tool skipped memory: %.60s", content)
-
-    cleaned = SAVE_MEMORY_PATTERN.sub("", text)
+    cleaned = SAVE_MEMORY_PATTERN.sub("", text or "")
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, saved
+    return cleaned, 0
 
 
 def _retrieve_memories_for_query(db: DBSession, user_id: int, query: str) -> str:

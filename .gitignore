@@ -48,3 +48,9 @@ chroma_db/
 # OS
 .DS_Store
 Thumbs.db
+
+# MP-4C executor-service credentials — NEVER checked in.
+# The README and the .example template stay tracked; the real token does not.
+secrets/*
+!secrets/README.md
+!secrets/*.example

@@ -10,6 +10,12 @@
 # Local development is unchanged: use docker-compose.yml (SQLite + dev
 # frontend + ChromaDB on 127.0.0.1:8080/5173).
 #
+# MP-4C note: the dedicated Python executor service is deliberately NOT defined
+# here. It needs a Docker daemon reached over a bind-mounted socket, which this
+# managed/cloud topology does not provide. The executor exists only in
+# docker-compose.yml (single-instance trusted self-host). Do not add it here
+# without a separately designed, daemon-isolated runtime.
+#
 # Validate: docker compose -f docker-compose.prod.yml config --quiet
 
 services:
