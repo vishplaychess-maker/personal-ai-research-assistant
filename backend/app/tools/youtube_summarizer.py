@@ -57,27 +57,38 @@ def is_youtube_url(url: str) -> bool:
 
 
 def fetch_transcript(url: str) -> str:
-    """Fetch and combine a YouTube video's transcript, truncated to ~4000 chars."""
-    video_id = extract_video_id(url)
+    """Fetch and combine a YouTube video's transcript, truncated to ~4000 chars.
+
+    Delegates the ENTIRE fetch to ``app.tools.youtube_transcript_context`` — the
+    one implementation: it validates the URL and video ID BEFORE any network
+    call, probes whichever ``youtube-transcript-api`` surface is actually
+    installed, and classifies the outcome. This function only renders that
+    result as the tool's free-text contract, so there is no second fetch.
+
+    The previous direct ``YouTubeTranscriptApi.get_transcript(video_id)`` call
+    was dead against the installed 1.x library (the classmethod was removed),
+    which made this tool unusable for every real URL; failures now come back as
+    a clear, bounded message instead of an upstream exception string.
+    """
+    video_id = extract_video_id(url or "")
     if not video_id:
         return "[YouTube Summarizer] Error: could not extract a video ID from '%s'." % url
 
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
+    from app.tools.youtube_transcript_context import (
+        STATUS_FETCH_FAILED, STATUS_NO_TRANSCRIPT, STATUS_OK, load_transcript,
+    )
 
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    except Exception as exc:
-        error_msg = (
-            "[YouTube Summarizer] Error fetching transcript for %s: %s: %s"
-            % (video_id, type(exc).__name__, exc)
-        )
-        logger.error(error_msg, exc_info=True)
-        return error_msg
+    result = load_transcript(url)
+    if result.status == STATUS_NO_TRANSCRIPT:
+        return ("[YouTube Summarizer] No transcript available for video %s."
+                % result.video_id)
+    if result.status == STATUS_FETCH_FAILED:
+        return ("[YouTube Summarizer] Error fetching transcript for %s: %s"
+                % (result.video_id, result.reason))
+    if result.status != STATUS_OK:
+        return "[YouTube Summarizer] Error: no transcript was used for '%s'." % url
 
-    if not transcript:
-        return "[YouTube Summarizer] No transcript available for video %s." % video_id
-
-    combined = " ".join(item.get("text", "") for item in transcript).strip()
+    combined = " ".join(seg.text for seg in result.segments).strip()
 
     if len(combined) > MAX_TRANSCRIPT_CHARS:
         combined = (
