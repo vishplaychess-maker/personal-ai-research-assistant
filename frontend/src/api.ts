@@ -30,6 +30,10 @@ import type {
   MediaGenerateResponse,
   VideoPollResponse,
   MediaProviderInfo,
+  ApprovalActionPreview,
+  ApprovalDetail,
+  ApprovalDecision,
+  RunCancelResult,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -183,6 +187,37 @@ export const API = {
   // Messages
   listMessages(sessionId: number) {
     return request<Message[]>(`/api/sessions/${sessionId}/messages`);
+  },
+
+  // Phase 1B.2R MP-3C3C — durable run + MCP approval (bearer + CSRF via request()).
+  // The approval detail is the ONLY sanctioned source of tool info; the browser
+  // never reconstructs it from marker text and never executes MCP.
+  getApproval(approvalId: string) {
+    return request<ApprovalDetail>(`/api/approvals/${encodeURIComponent(approvalId)}`);
+  },
+  // MP-4C — the EXACT python_sandbox code for a requested approval (owner only).
+  getApprovalAction(approvalId: string) {
+    return request<ApprovalActionPreview>(
+      `/api/approvals/${encodeURIComponent(approvalId)}/action`,
+    );
+  },
+  approveRun(approvalId: string) {
+    return request<ApprovalDecision>(
+      `/api/approvals/${encodeURIComponent(approvalId)}/approve`,
+      { method: "POST", body: "{}" },
+    );
+  },
+  denyRun(approvalId: string) {
+    return request<ApprovalDecision>(
+      `/api/approvals/${encodeURIComponent(approvalId)}/deny`,
+      { method: "POST", body: "{}" },
+    );
+  },
+  cancelRun(runId: string) {
+    return request<RunCancelResult>(
+      `/api/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: "POST", body: "{}" },
+    );
   },
   sendMessage(sessionId: number, message: string) {
     return request<ChatResponse>(`/api/sessions/${sessionId}/messages`, {

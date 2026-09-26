@@ -81,6 +81,29 @@ export interface UserSettings {
   llm_provider: string;
   api_key: string;
   model: string;
+  /** MP-3C3D3B — advisory per-mode availability; optional so existing PUT
+   *  payloads that omit it (unaffected by this phase) still type-check. */
+  chat_modes?: ChatModeCapability[];
+}
+
+// ── Mode selector (Phase 1B.2R MP-3C3D3B) ─────────────────
+//
+// "auto" is a frontend-only choice: it means "omit `mode` from the request"
+// and preserves whatever the server's existing omitted-mode behavior is
+// (global-flag/heuristic routing on legacy, plain chat on durable). It is
+// never sent on the wire and never appears in `BackendChatMode`.
+
+/** Canonical wire values — must match `submission._ALLOWED_MODES` exactly. */
+export type BackendChatMode = "chat" | "deep_research" | "multi_agent";
+
+/** UI selection state: the three backend modes plus the frontend-only "auto". */
+export type UIChatMode = "auto" | BackendChatMode;
+
+/** Advisory capability info for one backend mode, from `GET /api/settings`. */
+export interface ChatModeCapability {
+  mode: BackendChatMode;
+  available: boolean;
+  reason?: string | null;
 }
 
 // ── Multiple Providers Manager ───────────────────────────
@@ -351,4 +374,52 @@ export interface VideoPollResponse {
   error?: string | null;
   provider?: string | null;
   status: "processing" | "completed" | "failed";
+}
+
+// ── Phase 1B.2R MP-3C3C — durable run + MCP approval ──────
+
+/** Approval detail from GET /api/approvals/{id}. The UI renders ONLY the safe
+ *  subset (tool_id, state, risk_level, display_summary, purpose_redacted,
+ *  created_at, expires_at). action_hash / session-family ids are never shown. */
+export interface ApprovalDetail {
+  id: string;
+  state: "requested" | "approved" | "denied" | "expired" | "consumed" | "revoked" | string;
+  tool_id: string;
+  source_type?: string;
+  risk_level?: string;
+  run_id?: string | null;
+  display_summary?: Record<string, unknown>;
+  purpose_redacted?: string;
+  created_at?: string | null;
+  decided_at?: string | null;
+  expires_at?: string | null;
+  /** non-secret binding hash — used ONLY to match the exact-action preview;
+   *  never rendered. */
+  action_hash?: string;
+}
+
+/** MP-4C — the exact python_sandbox action from
+ *  GET /api/approvals/{id}/action (owner + requested only, read-only). */
+export interface ApprovalActionPreview {
+  approval_id: string;
+  tool_id: string;
+  code: string;
+  code_bytes: number;
+  args_hash: string;
+  action_hash: string;
+  purpose?: string;
+  expires_at?: string | null;
+}
+
+export interface ApprovalDecision {
+  id: string;
+  state: string;
+  idempotent?: boolean;
+}
+
+export interface RunCancelResult {
+  run_id: string;
+  status: string;
+  cancellation_requested: boolean;
+  already_terminal: boolean;
 }

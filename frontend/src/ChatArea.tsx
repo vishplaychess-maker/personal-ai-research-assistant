@@ -34,6 +34,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PlanCard } from "./PlanCard";
 import { ConfidenceBadge } from "./ConfidenceBadge";
 import { ModelSelector } from "./ModelSelector";
+import { ModeSelector } from "./ModeSelector";
 import { ProviderSwitcher } from "./ProviderSwitcher";
 import { Button } from "./components/ui/button";
 import {
@@ -46,7 +47,7 @@ import { cn } from "./lib/utils";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "./hooks/useSpeechSynthesis";
 import { exportDocument, type ExportFormat } from "./export";
-import type { Session, Message, Citation, RetryTarget } from "./types";
+import type { Session, Message, Citation, RetryTarget, UIChatMode } from "./types";
 
 // ── Helpers ───────────────────────────────────────────────
 
@@ -129,6 +130,10 @@ interface ChatAreaProps {
   onKeyDown: (e: React.KeyboardEvent) => void;
   inputRef: React.RefObject<HTMLTextAreaElement> | React.MutableRefObject<HTMLTextAreaElement | null>;
 
+  // MP-3C3D3B — per-message response mode
+  chatMode: UIChatMode;
+  onChatModeChange: (mode: UIChatMode) => void;
+
   isStreaming: boolean;
   streamedContent: string;
   generationStopped: boolean;
@@ -168,6 +173,7 @@ interface ChatAreaProps {
 
   // F6 Capability 1 — plan preview (v1, read-only + cancel)
   planSteps?: Array<Record<string, unknown>>;
+  agentProgress?: string | null;
   onPlanCancel?: () => void;
 
   // Report Export — transient error surfaced via the existing chat error banner
@@ -187,6 +193,8 @@ export function ChatArea({
   onSend,
   onKeyDown,
   inputRef,
+  chatMode,
+  onChatModeChange,
   isStreaming,
   streamedContent,
   generationStopped,
@@ -216,6 +224,7 @@ export function ChatArea({
   onApproveTool,
   onRejectTool,
   planSteps = [],
+  agentProgress = null,
   onPlanCancel,
   onExportError,
 }: ChatAreaProps) {
@@ -560,6 +569,10 @@ export function ChatArea({
                         </Button>
                       </div>
                     )}
+                    {/* MP-3C3D3B — per-message response mode */}
+                    <div className="mb-2 flex items-center px-1">
+                      <ModeSelector mode={chatMode} onModeChange={onChatModeChange} disabled={isStreaming} />
+                    </div>
                     <div className="flex items-end gap-2">
                       <textarea
                         ref={inputRef}
@@ -769,7 +782,14 @@ export function ChatArea({
                           <span className="typing-dot" />
                         </div>
                       )}
-                      <div className="mt-1 text-[10px] text-secondary">Generating…</div>
+                      <div role="status" className="mt-1 text-[10px] text-secondary">{({
+                        agent_researching: "Researching…",
+                        agent_research_complete: "Research complete",
+                        agent_solving: "Developing solution…",
+                        agent_solution_complete: "Solution complete",
+                        agent_reviewing: "Reviewing…",
+                        agent_finalizing: "Finalizing…",
+                      } as Record<string, string>)[agentProgress ?? ""] ?? "Generating…"}</div>
                     </div>
                   </div>
                 )}
@@ -894,6 +914,10 @@ export function ChatArea({
                     </Button>
                   </div>
                 )}
+                {/* MP-3C3D3B — per-message response mode */}
+                <div className="mb-2 flex items-center px-1">
+                  <ModeSelector mode={chatMode} onModeChange={onChatModeChange} disabled={isStreaming} />
+                </div>
                 <div className="flex items-end gap-2">
                   <textarea
                     ref={inputRef}

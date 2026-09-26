@@ -284,7 +284,11 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const [showOnlyFree, setShowOnlyFree] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const dropdownRectRef = useRef<DOMRect | null>(null);
+  // State (not a ref): the portal is gated on this value, so measuring the
+  // trigger must trigger the re-render that mounts the menu. As a ref it only
+  // mounted after some OTHER state change, leaving the picker blank while the
+  // model request was in flight (the "Loading models…" branch was unreachable).
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null);
 
   const fetchModels = useCallback(async () => {
     setLoading(true);
@@ -350,8 +354,7 @@ export function ModelSelector({
   // Calculate dropdown position when open
   useEffect(() => {
     if (open && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      dropdownRectRef.current = rect;
+      setDropdownRect(triggerRef.current.getBoundingClientRect());
     }
   }, [open]);
 
@@ -400,7 +403,7 @@ export function ModelSelector({
         />
       </button>
 
-      {open && dropdownRectRef.current && (
+      {open && dropdownRect && (
         <DropdownContent
           groups={groups}
           currentModel={currentModel}
@@ -411,7 +414,7 @@ export function ModelSelector({
           onRefresh={fetchModels}
           onSelect={handleSelect}
           saving={saving}
-          triggerRect={dropdownRectRef.current}
+          triggerRect={dropdownRect}
           showOnlyFree={showOnlyFree}
           onToggleFree={setShowOnlyFree}
         />

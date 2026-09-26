@@ -6,6 +6,7 @@ import { SystemPromptEditor } from "./SystemPromptEditor";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
 import { ChatArea } from "./ChatArea";
+import { ApprovalDialog } from "./components/ApprovalDialog";
 import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
 import { MemoryPanel } from "./MemoryPanel";
@@ -16,7 +17,7 @@ const KnowledgeGraphPanel = lazy(() =>
   import("./KnowledgeGraphPanel").then((m) => ({ default: m.KnowledgeGraphPanel }))
 );
 import { API } from "./api";
-import type { Session, Message, Citation, Document, Memory, HealthStatus, SessionExport } from "./types";
+import type { Session, Message, Citation, Document, Memory, HealthStatus, SessionExport, UIChatMode } from "./types";
 import "./App.css";
 // ── App Component ─────────────────────────────────────────
 
@@ -37,6 +38,9 @@ function App() {
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  // MP-3C3D3B — per-message response mode; "auto" is the default and omits
+  // `mode` from the request entirely, preserving existing behavior.
+  const [chatMode, setChatMode] = useState<UIChatMode>("auto");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string; image_url?: string } | null>(null);
@@ -83,10 +87,17 @@ function App() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
 
   // Streaming state
-  const { isStreaming, streamedContent, startStream, cancelStream } = useStreaming();
+  const {
+    isStreaming, streamedContent, startStream, cancelStream,
+    durableRunId, phase: durablePhase, cancelDurableRun, resumeAfterApproval,
+  } = useStreaming();
   const [generationStopped, setGenerationStopped] = useState(false);
   const [pendingToolApproval, setPendingToolApproval] = useState<{ tool: string; args: any; server?: string } | null>(null);
+  // MP-3C3C — durable MCP approval (redacted; detail comes from the approval API)
+  const [durableApproval, setDurableApproval] = useState<{ approvalId: string; toolId?: string } | null>(null);
+  const durableRunTerminalRef = useRef(false);
   const [planSteps, setPlanSteps] = useState<Array<Record<string, unknown>>>([]);
+  const [agentProgress, setAgentProgress] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionListRequestRef = useRef(0);
@@ -130,6 +141,11 @@ function App() {
   // clear account-specific state so another account never inherits it.
   useEffect(() => {
     sessionListRequestRef.current += 1;
+    // D6C-J4: discard any in-flight message load (a logout must never be followed
+    // by a stale state mutation) and re-arm initial hydration so a later login
+    // hydrates again.
+    messagesRequestRef.current += 1;
+    hydratedSessionRef.current = null;
     setSessions([]);
     setActiveSessionId(null);
     setMessages([]);
@@ -255,12 +271,27 @@ function App() {
   // exactly once (no infinite retry loop) when a session disappears.
   const recovered404Ref = useRef<Set<number>>(new Set());
 
+  // D6C-J4: newest-wins guard for message loads. Mirrors the
+  // `sessionListRequestRef` idiom in `loadSessions`, so a slow response can never
+  // overwrite a newer selection (for example the initial hydration landing after
+  // the user has already clicked a different session).
+  const messagesRequestRef = useRef(0);
+
+  // D6C-J4: the session id whose messages the automatic initial-selection path has
+  // already hydrated. Keeps StrictMode's double-invoked mount effect, and any
+  // unrelated re-run, from issuing a second identical request.
+  const hydratedSessionRef = useRef<number | null>(null);
+
   const loadMessages = useCallback(async (sessionId: number) => {
+    const requestId = ++messagesRequestRef.current;
     try {
-      setMessages(await API.listMessages(sessionId));
+      const data = await API.listMessages(sessionId);
+      if (requestId !== messagesRequestRef.current) return; // a newer load won
+      setMessages(data);
       setChatError(null);
       recovered404Ref.current.delete(sessionId);
     } catch (err) {
+      if (requestId !== messagesRequestRef.current) return; // stale failure
       const msg = err instanceof Error ? err.message : "";
       if (/not found/i.test(msg)) {
         // Session is no longer available (deleted or not owned).
@@ -280,11 +311,25 @@ function App() {
 
   // Ensure the selected session is always present in the latest list; if the
   // user had nothing selected, select the first valid session when appropriate.
+  //
+  // D6C-J4: selecting is not enough - the selection must also be HYDRATED. Without
+  // this, a page reload restored the session but rendered an empty conversation
+  // ("0 messages") even though the messages were persisted and the API returned
+  // them; the user had to click the session row to see them. `loadMessages` is the
+  // same path `handleSelectSession` uses. The `hydratedSessionRef` guard keeps
+  // StrictMode's double-invoked mount effect from issuing a second identical
+  // request, and this branch only runs while `activeSessionId === null`, so an
+  // already-active session is never replaced.
   useEffect(() => {
     if (activeSessionId === null && sessions.length > 0 && isAuthenticated) {
-      setActiveSessionId(sessions[0].id);
+      const firstId = sessions[0].id;
+      setActiveSessionId(firstId);
+      if (hydratedSessionRef.current !== firstId) {
+        hydratedSessionRef.current = firstId;
+        loadMessages(firstId);
+      }
     }
-  }, [activeSessionId, sessions, isAuthenticated]);
+  }, [activeSessionId, sessions, isAuthenticated, loadMessages]);
 
   const handleSelectSession = (id: number) => {
     setActiveSessionId(id);
@@ -430,13 +475,33 @@ function App() {
     setMessages((prev) => [...prev, tempUserMsg]);
     if (!overrideText) setInput("");
 
+    // MP-3C3D3B: snapshot the currently-selected mode ONCE, synchronously,
+    // at send time. "auto" resolves to `undefined` so the request omits
+    // `mode` entirely; useStreaming's `submissionRef` then freezes this
+    // value for the whole logical send, including every reconnect/resume.
+    const modeSnapshot = chatMode === "auto" ? undefined : chatMode;
+
+    durableRunTerminalRef.current = false;
     startStream(activeSessionId, text, imageUrl, {
-      onStart: () => { setGenerationStopped(false); setPendingToolApproval(null); setPlanSteps([]); },
+      onStart: () => {
+        setGenerationStopped(false); setPendingToolApproval(null);
+        setDurableApproval(null); setPlanSteps([]);
+        setAgentProgress(null);
+      },
       onToken: () => {},
       onPlan: (steps) => setPlanSteps(steps),
+      onAgentProgress: setAgentProgress,
+      onRunId: () => {},
+      onApprovalRequired: (d) => {
+        // MP-3C3C durable, redacted — open the informative approval dialog
+        if (d.approvalId) setDurableApproval({ approvalId: d.approvalId, toolId: d.toolId });
+      },
       onComplete: (result) => {
+        setAgentProgress(null);
+        durableRunTerminalRef.current = true;
         setGenerationStopped(false);
         setPendingToolApproval(null);
+        setDurableApproval(null);
         if (result.sourcesUsed && result.messageId) {
           setSourcesUsedIds((prev) => new Set(prev).add(result.messageId));
         }
@@ -448,24 +513,33 @@ function App() {
         setSending(false);
       },
       onError: (error) => {
+        setAgentProgress(null);
+        durableRunTerminalRef.current = true;
         setChatError(error.detail || "Failed to send message");
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
-        setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message", image_url: imageUrl });
+        // do not offer a one-click retry for transient durable-availability errors
+        if (error.code !== "DURABLE_UNAVAILABLE" && error.code !== "RATE_LIMITED") {
+          setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message", image_url: imageUrl });
+        }
         setSending(false);
         setGenerationStopped(false);
         setPendingToolApproval(null);
+        setDurableApproval(null);
       },
       onCancelled: () => {
+        setAgentProgress(null);
+        durableRunTerminalRef.current = true;
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
         setSending(false);
         setGenerationStopped(true);
         setPendingToolApproval(null);
+        setDurableApproval(null);
         setTimeout(() => setGenerationStopped(false), 3000);
       },
       onToolApproval: (data) => {
         setPendingToolApproval(data);
       },
-    });
+    }, modeSnapshot);
   };
 
   const handleRetry = useCallback(() => {
@@ -485,6 +559,12 @@ function App() {
     setPendingToolApproval(null);
     handleSend(undefined, "no");
   }, [pendingToolApproval]);
+
+  // MP-3C3C — durable approval: the dialog already called the approve/deny API;
+  // here we just keep/reconnect the stream to receive the continuation/denial.
+  const handleDurableApproved = useCallback(() => { resumeAfterApproval(); }, [resumeAfterApproval]);
+  const handleDurableDenied = useCallback(() => { resumeAfterApproval(); }, [resumeAfterApproval]);
+  const handleDurableApprovalDismiss = useCallback(() => { setDurableApproval(null); }, []);
 
   // ═══════════════════════════════════════════════════════
   // Auth gate — after all hooks, before derived state & render
@@ -545,10 +625,12 @@ function App() {
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
         }}
         inputRef={inputRef}
+        chatMode={chatMode}
+        onChatModeChange={setChatMode}
         isStreaming={isStreaming}
         streamedContent={streamedContent}
         generationStopped={generationStopped}
-        onCancelStream={cancelStream}
+        onCancelStream={durableRunId ? cancelDurableRun : cancelStream}
         chatError={chatError}
         retryTarget={retryTarget}
         onRetry={handleRetry}
@@ -576,9 +658,33 @@ function App() {
         onApproveTool={handleToolApprove}
         onRejectTool={handleToolReject}
         planSteps={planSteps}
+        agentProgress={agentProgress}
         onPlanCancel={() => setPlanSteps([])}
         onExportError={(msg) => setChatError(msg)}
       />
+
+      {/* MP-3C3C — durable MCP approval dialog (only when a durable run parked) */}
+      <ApprovalDialog
+        approvalId={durableApproval?.approvalId ?? null}
+        phase={durablePhase}
+        runTerminal={durableRunTerminalRef.current}
+        onApprove={handleDurableApproved}
+        onDeny={handleDurableDenied}
+        onDismiss={handleDurableApprovalDismiss}
+      />
+
+      {/* MP-3C3C — non-blocking durable-run status (reconnect / resume / cancel) */}
+      {durableRunId && (durablePhase === "reconnecting" || durablePhase === "resuming" || durablePhase === "cancelling") && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-full border bg-background px-4 py-2 text-sm shadow-lg"
+        >
+          {durablePhase === "reconnecting" && "Reconnecting to the response…"}
+          {durablePhase === "resuming" && "Resuming…"}
+          {durablePhase === "cancelling" && "Cancelling…"}
+        </div>
+      )}
 
       {/* Document panel */}
       {showDocs && activeSession && (
@@ -640,7 +746,10 @@ function App() {
       )}
 
       {/* Settings modal */}
-      {showSettings && activeSession && (
+      {/* Settings must be usable BEFORE a session exists (provider configuration
+          lives here). `Settings` already accepts `activeSessionId: number | null`
+          and `sessions`, so the modal is NOT gated on an active session. */}
+      {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}
           sessions={sessions}
