@@ -1,0 +1,24 @@
+REPOSITORY                                TAG                      IMAGE ID
+thunder-executor                          mp4c                     704f501de438
+jobbeacon-argtest                         with                     4503935ce42f
+jobbeacon                                 latest                   d0c90c52b907
+nousresearch/hermes-agent                 latest                   12104744ae3b
+python                                    <none>                   44ff437bba87
+techscraper-api                           latest                   43d47d51c51c
+techscraper-dashboard                     latest                   c058cfe911f4
+personal-ai-research-assistant-backend    latest                   a069f3669c63
+personal-ai-research-assistant-frontend   latest                   6444ef10e4b4
+public.ecr.aws/supabase/logflare          1.50.2                   7f42582ddda6
+public.ecr.aws/supabase/realtime          v2.124.4                 446e4db4b088
+public.ecr.aws/supabase/postgres-meta     v0.97.0                  e7da2ab376a7
+public.ecr.aws/supabase/storage-api       v1.69.0                  28424184c9f6
+public.ecr.aws/supabase/studio            2026.08.10-sha-5b68af1   6cd7a570c983
+public.ecr.aws/supabase/gotrue            v2.195.0                 362659ca70ea
+public.ecr.aws/supabase/postgrest         v16.1                    5922bde07147
+public.ecr.aws/supabase/edge-runtime      v1.74.3                  c52405002a89
+public.ecr.aws/supabase/postgres          17.6.1.158               99b1729aeb0b
+public.ecr.aws/supabase/mailpit           v1.30.2                  37a38e48e933
+chromadb/chroma                           1.5.9                    1e0b73a187a2
+node                                      20-alpine                fb4cd12c85ee
+public.ecr.aws/supabase/vector            0.53.0-alpine            ca92d617e905
+public.ecr.aws/supabase/kong              2.8.1                    1b53405d8680

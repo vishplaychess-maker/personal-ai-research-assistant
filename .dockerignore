@@ -1,0 +1,22 @@
+# Build context for the root-context build (executor_service/Dockerfile).
+# The backend/frontend builds use their own subdirectory contexts and are not
+# affected by this file.
+.git
+.github
+.venv
+.tmp
+.pytest_cache
+.superpowers
+node_modules
+frontend
+# backend/ stays out of the executor context EXCEPT the shared contract.
+backend/*
+!backend/mp4c_contract
+evals
+docs
+secrets
+*.db
+test.db
+build_output.txt
+.env
+.env.*
