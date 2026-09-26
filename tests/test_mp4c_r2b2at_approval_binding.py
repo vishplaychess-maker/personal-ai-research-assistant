@@ -210,4 +210,3 @@ def test_6_signal_approval_id_substitution_blocks_execution(eng):
     # approval is NOT consumed by the valid decision path
     states = _q(eng, lambda db: {a.id: a.state for a in db.query(PendingApproval).all()})
     assert states[aid_b] == "requested", "the second approval must remain untouched"
-

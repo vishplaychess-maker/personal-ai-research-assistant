@@ -231,4 +231,3 @@ def test_broker_injection_is_still_not_the_authority(eng, monkeypatch):
     assert _started(eng) == 0
     run = r2a3._run(eng, rid)
     assert run.status == "failed" and run.status_reason == REASON, run.status_reason
-

@@ -392,4 +392,3 @@ def test_session_revocation_after_proposal_blocks_python_execution(eng, monkeypa
     snap = _snapshot(eng, rid)
     assert "started" not in snap["dispatch"], snap
     assert snap["assistants"] == 0, "no assistant success Message"
-

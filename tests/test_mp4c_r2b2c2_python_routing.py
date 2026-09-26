@@ -348,4 +348,3 @@ def test_j_tool_output_payload_opens_only_with_its_exact_binding(eng, monkeypatc
                     if c != "ciphertext")
     assert "TOOL-RESULT-OK" not in meta, meta
 
-
