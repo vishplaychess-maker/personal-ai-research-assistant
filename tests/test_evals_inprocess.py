@@ -27,7 +27,8 @@ FIXTURES = REPO / "evals" / "fixtures"
 
 # boundary-mock tasks: `execution_attempted` MUST be recorded and MUST be False
 # (the real code ran but never reached the external side effect).
-_MOCK_BOUNDARY_TASKS = {"T7", "T9", "T10", "T27", "T29", "T30", "T31", "T32"}
+_MOCK_BOUNDARY_TASKS = {"T7", "T9", "T10", "T27", "T29", "T30", "T31", "T32",
+                        "T41", "T42", "T43"}
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +37,8 @@ def report():
 
 
 def test_gate_b_has_verified_product_passes(report):
-    assert report.verified_pass_count >= 12, report.verified_pass_count
+    # 13 pre-1B.1 + 3 (T41-T43, 1B.1) + 1 (T45, 1B.2) = 17; must not decrease
+    assert report.verified_pass_count >= 17, report.verified_pass_count
     assert report.counts["fail"] == 0
     assert report.counts["error"] == 0
 

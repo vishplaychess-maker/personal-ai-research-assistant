@@ -79,6 +79,49 @@ def list_skills(
     return user_skill_service.list_skills_for_user(db, current_user.id)
 
 
+class BuiltinSkillResponse(BaseModel):
+    name: str
+    description: str
+    pinned: bool = False
+
+
+class BuiltinSkillCatalogResponse(BaseModel):
+    enabled: bool
+    skills: List[BuiltinSkillResponse]
+
+
+# NOTE: declared BEFORE the dynamic "/{skill_id}" route on purpose - FastAPI
+# matches in declaration order, so a later "/catalog" would be parsed as an
+# int path param and answered with 422.
+@router.get("/catalog", response_model=BuiltinSkillCatalogResponse)
+def list_builtin_skills(
+    current_user: User = Depends(get_current_user),
+):
+    """List the BUILT-IN (filesystem) skill catalog - read-only, for the UI.
+
+    The Settings > Skills tab used to render ONLY user-created skills
+    (GET /api/skills), so the bundled SKILL.md playbooks were invisible in the
+    UI even though they are injected into agent prompts. This exposes name +
+    description (+ pinned) only: never the L2 body and never a filesystem
+    path. When skills are disabled by configuration it answers
+    ``enabled=false`` with an empty list, so the UI can show a clear disabled
+    explanation instead of silently rendering nothing.
+    """
+    from app.config import settings as _settings
+    from app.skills.loader import discover_skills
+
+    if not _settings.thunder_skills_enabled:
+        return BuiltinSkillCatalogResponse(enabled=False, skills=[])
+    return BuiltinSkillCatalogResponse(
+        enabled=True,
+        skills=[
+            BuiltinSkillResponse(name=s.name, description=s.description or "",
+                                 pinned=bool(getattr(s, "pinned", False)))
+            for s in discover_skills()
+        ],
+    )
+
+
 @router.get("/{skill_id}", response_model=UserSkillDetailResponse)
 def get_skill(
     skill_id: int,

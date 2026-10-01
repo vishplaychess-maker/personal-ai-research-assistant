@@ -29,7 +29,7 @@ let backend: http.Server;
 let backendPort = 0;
 let vite: ViteDevServer;
 let vitePort = 0;
-const heldResponses = new Set<http.ServerResponse>();
+const heldResponses = new Set<http.IncomingMessage>();
 
 function sendJson(res: http.ServerResponse, code: number, body: unknown): void {
   const text = JSON.stringify(body);

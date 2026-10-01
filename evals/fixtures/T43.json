@@ -1,0 +1,32 @@
+{
+  "task_id": "T43",
+  "response_text": "tenant-A approval (user=7, session=3): presented as tenant-B -> GrantScopeError; as user=9 (same tenant) -> GrantScopeError; as session=99 -> GrantScopeError; with tenant dropped to null -> GrantScopeError. execution_attempted=False",
+  "citations": [],
+  "status_code": 200,
+  "response_json": {
+    "cross_boundary_rejected": true,
+    "tenant_a_vs_b_rejected": true
+  },
+  "execution_attempted": false,
+  "provenance": {
+    "fixture_kind": "synthetic_regression",
+    "evidence_level": "synthetic",
+    "source_commit_sha": "b2e67183d4791cbbaed9d3d98e8833983510f3ff",
+    "captured_at": "2026-09-07T00:00:00+00:00",
+    "capture_mode": "offline",
+    "application_path": "authored fixture (synthetic regression) - reflects the Phase 1B.1 approval-domain behaviour verified by tests/test_approval_domain.py; NOT a live capture. Gate B --inprocess runs the real app.approval code.",
+    "provider": null,
+    "model": null,
+    "model_revision": null,
+    "runtime": "authored",
+    "dataset_version": "1a-closure.1",
+    "prompt_version": "n/a-phase1a",
+    "evaluator_version": "1a-closure.2",
+    "grader_version": "none",
+    "working_tree_dirty": false,
+    "source_tree_or_diff_digest": null,
+    "from_product_code": false,
+    "tools_mocked": [],
+    "human_reviewed": false
+  }
+}

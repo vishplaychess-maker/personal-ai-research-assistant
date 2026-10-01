@@ -1,3 +1,8 @@
+---
+name: video-generation
+description: Generate short AI videos from a text prompt via Venice AI (primary), NexaAPI, or Agnes AI, with automatic provider fallback and async polling.
+pinned: false
+---
 # Video Generation
 
 **Description:** Generate short AI videos from a text prompt via Venice AI (primary), NexaAPI, or Agnes AI, with automatic provider fallback and async polling.

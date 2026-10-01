@@ -117,6 +117,10 @@ class TerminalApprovalResponse(BaseModel):
     type: str = "terminal_approval"  # Discriminator for frontend
     pending_command: str  # The command the agent wants to run
     approval_message: str  # Full message shown to the user
+    # MP-5: canonical PendingApproval identity when the parked work belongs to
+    # the canonical authority. Optional, so an older client that only knows the
+    # legacy parked shape keeps working unchanged.
+    approval_id: str | None = None
     session_id: int
 
 

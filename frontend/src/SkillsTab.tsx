@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { cn } from "./lib/utils";
-import type { UserSkill, UserSkillDetail } from "./types";
+import type { BuiltinSkill, UserSkill, UserSkillDetail } from "./types";
 
 const emptyForm = {
   name: "",
@@ -32,6 +32,8 @@ const emptyForm = {
 
 export function SkillsTab() {
   const [skills, setSkills] = useState<UserSkill[]>([]);
+  const [builtins, setBuiltins] = useState<BuiltinSkill[]>([]);
+  const [builtinsEnabled, setBuiltinsEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +57,16 @@ export function SkillsTab() {
       setError(err instanceof Error ? err.message : "Failed to load skills");
     } finally {
       setLoading(false);
+    }
+    // Built-in catalog is best-effort: a failure here must not hide the
+    // user own skills, and must not falsely claim the feature is disabled.
+    try {
+      const catalog = await API.listBuiltinSkills();
+      setBuiltins(catalog.skills);
+      setBuiltinsEnabled(catalog.enabled);
+    } catch {
+      setBuiltins([]);
+      setBuiltinsEnabled(true);
     }
   }, []);
 
@@ -153,6 +165,60 @@ export function SkillsTab() {
           Create Skill
         </Button>
       </div>
+
+      {!builtinsEnabled && (
+        <div
+          data-testid="builtin-skills-disabled"
+          className="mb-4 rounded-xl border border-dashed p-3 text-sm text-muted-foreground"
+        >
+          Built-in skills are disabled on this deployment (
+          <span className="font-mono text-xs">thunder_skills_enabled=false</span>),
+          so they are not offered to the agent. Your custom skills below still
+          work.
+        </div>
+      )}
+
+      {builtinsEnabled && builtins.length > 0 && (
+        <div data-testid="builtin-skills" className="mb-5">
+          <div className="mb-1 flex items-center gap-2">
+            <h3 className="text-sm font-medium">Built-in skills</h3>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {builtins.length} installed
+            </span>
+          </div>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Shipped with Thunder AI. They are listed in the agent available-skills
+            index, and their instructions load on demand when a task matches one.
+            Read-only here - they cannot be edited or disabled.
+          </p>
+          <div className="grid max-h-[30vh] gap-2 overflow-y-auto pr-1">
+            {builtins.map((b) => (
+              <div
+                key={b.name}
+                data-testid="builtin-skill"
+                className="flex items-start gap-3 rounded-xl border border-dashed p-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-mono text-sm font-medium">{b.name}</span>
+                    <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      Built-in
+                    </span>
+                    {b.pinned && (
+                      <span className="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                        Pinned
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{b.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <h3 className="mb-2 text-sm font-medium">Your skills</h3>
 
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 

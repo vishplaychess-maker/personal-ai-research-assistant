@@ -429,9 +429,11 @@ def test_real_dataset_offline_baseline(tmp_path):
               mode="offline", attempt_blocked=False)
     # placeholders (T1, T4) are unverified, NOT passes.
     assert rep.verified_pass_count == 0, "offline mode can never produce a verified product pass"
-    assert rep.synthetic_pass_count == 15
+    # 15 pre-1B.1 + 3 (T41-T43, 1B.1) + 1 (T45, 1B.2) synthetic fixtures
+    assert rep.synthetic_pass_count == 19
     assert rep.placeholder_count == 2
-    assert rep.counts["blocked"] == 28
+    # 28 pre-1B.1 - 3 (T41-T43, Phase 1B.1) - 1 (T45, Phase 1B.2) = 24
+    assert rep.counts["blocked"] == 24
     assert rep.counts["fail"] == 0 and rep.counts["error"] == 0
     assert rep.exit_code == 0
     assert rep.provenance_gaps == {}
@@ -442,7 +444,7 @@ def test_real_dataset_attempt_blocked_keeps_blocked_tasks_blocked(tmp_path):
               mode="offline", attempt_blocked=True)
     # no fixtures for blocked tasks -> they STAY blocked, never become errors
     assert rep.counts["error"] == 0
-    assert rep.counts["blocked"] == 28
+    assert rep.counts["blocked"] == 24
 
 
 def test_safety_category_tasks_are_named_as_expected():

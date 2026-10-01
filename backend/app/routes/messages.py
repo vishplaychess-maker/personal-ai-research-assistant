@@ -20,6 +20,7 @@ from app.schemas.documents import (
     TerminalApprovalResponse,
 )
 from app.services.langgraph_workflow import run_research_workflow
+from app.run_engine.context import AuthContext, get_auth_context
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.streaming_service import (
@@ -80,6 +81,119 @@ def _check_pending_approval(db: Session, session_id: int) -> Optional[dict]:
     return None
 
 
+def _active_canonical_run(db: Session, session_id: int, user_id: int):
+    # The session run parked on a CANONICAL PendingApproval, if any.
+    from app.models.models import Run
+    from app.run_engine.state_machine import WAITING_FOR_APPROVAL
+
+    return (db.query(Run)
+            .filter(Run.session_id == session_id, Run.user_id == user_id,
+                    Run.status == WAITING_FOR_APPROVAL)
+            .order_by(Run.created_at.desc()).first())
+
+
+def _parked_response(session_id: int, *, legacy: bool,
+                     approval_id: Optional[str] = None):
+    # Bounded actionable parked response. Starts NO run and writes NO marker.
+    # Reuses the LEGACY parked response model so an already-open or older client
+    # still shows a message, plus an optional canonical approval id.
+    if legacy:
+        text = ("This session has an unresolved approval from the earlier flow. "
+                "Answer that request with yes or no to decide it. No new "
+                "request was started.")
+    else:
+        text = ("An approval is waiting for your decision. Decide it in the "
+                "approvals panel (or POST /api/approvals/<id>/approve|deny). "
+                "No new request was started.")
+    return TerminalApprovalResponse(pending_command="", approval_message=text,
+                                    session_id=session_id,
+                                    approval_id=approval_id)
+
+
+def _nonstream_key(db: Session, session_id: int, message: str) -> str:
+    # Deterministic per-turn idempotency key: the same client message on the same
+    # session state replays the SAME Run.
+    import hashlib
+
+    from app.models.models import Message
+
+    last_id = 0
+    row = (db.query(Message).filter(Message.session_id == session_id)
+           .order_by(Message.id.desc()).first())
+    if row is not None:
+        last_id = row.id
+    digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:24]
+    return "ns:%d:%d:%s" % (session_id, last_id, digest)
+
+
+def _engine_cutover_gate(db: Session, session, *, payload, current_user, ctx,
+                         idempotency_key: Optional[str] = None):
+    # Authority gate for the REVERSIBLE canonical cutover. Returns a response the
+    # canonical side owns, or None when the message is a legacy-marker DECISION
+    # that the legacy branch must perform.
+    from app.config import settings as _settings
+    from app.run_engine import nonstream as _ns
+
+    legacy_pending = _check_pending_approval(db, session.id)
+
+    if legacy_pending is not None:
+        if _is_approval_response(payload.message) is not None:
+            return None          # legacy branch performs the decision (drain)
+        return _parked_response(session.id, legacy=True)
+
+    outcome = _ns.execute_chat_sync(
+        db, ctx, session=session, message=payload.message,
+        idempotency_key=(idempotency_key
+                         or _nonstream_key(db, session.id, payload.message)),
+        wait_deadline_s=float(_settings.messages_nonstream_wait_deadline_s))
+
+    if outcome.status == _ns.SUCCEEDED:
+        assistant = db.query(Message).filter(
+            Message.id == outcome.assistant_message_id).first()
+        if assistant is None:
+            raise HTTPException(status_code=500,
+                                detail="Canonical run produced no assistant message")
+        user_msg = (db.query(Message)
+                    .filter(Message.session_id == session.id,
+                            Message.role == MessageRole.user)
+                    .order_by(Message.id.desc()).first())
+        citations = []
+        try:
+            parsed = json.loads(assistant.citations) if assistant.citations else []
+            if isinstance(parsed, list):
+                citations = parsed
+        except (json.JSONDecodeError, TypeError):
+            citations = []
+        session.updated_at = __import__("datetime").datetime.utcnow()
+        db.commit()
+        return ChatResponse(
+            user_message=MessageResponse.model_validate(user_msg),
+            assistant_message=MessageResponse.model_validate(assistant),
+            citations=citations, sources_used=bool(citations),
+            memories_used=False, memory_extraction=None)
+
+    if outcome.status == _ns.PENDING_APPROVAL:
+        return _parked_response(session.id, legacy=False,
+                                approval_id=outcome.approval_id)
+
+    if outcome.status == _ns.PENDING:
+        raise HTTPException(
+            status_code=504,
+            detail="The run is still in progress; no answer was produced "
+                   "(run %s)." % (outcome.run_id or "-"))
+
+    if outcome.status == _ns.CANCELLED:
+        raise HTTPException(status_code=409, detail="The run was cancelled.")
+
+    if outcome.status == _ns.DENIED:
+        raise HTTPException(status_code=403,
+                            detail="The run was denied by approval.")
+
+    raise HTTPException(
+        status_code=502,
+        detail="The run did not succeed (%s)." % (outcome.reason or outcome.status))
+
+
 def _is_approval_response(message: str) -> Optional[bool]:
     """Check if a user message is an approval/denial response.
 
@@ -125,8 +239,10 @@ def list_messages(
 def create_message(
     session_id: int,
     payload: ChatRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: AuthContext = Depends(get_auth_context),
     _csrf: None = Depends(require_csrf),
 ):
     """
@@ -138,6 +254,24 @@ def create_message(
       - The workflow is resumed with the user's decision.
     """
     session = _get_session_or_404(db, session_id, current_user.id)
+
+    # Authority invariant, FLAG-INDEPENDENT: a session with an unresolved
+    # CANONICAL PendingApproval must not start another Run - not even through
+    # the legacy path, which could create a second pending approval of a
+    # different kind. This is why the check is NOT inside the flag branch.
+    parked = _active_canonical_run(db, session.id, current_user.id)
+    if parked is not None:
+        return _parked_response(session.id, legacy=False,
+                                approval_id=parked.pending_approval_id)
+
+    from app.config import settings as _settings
+
+    if _settings.messages_nonstream_engine_enabled:
+        gated = _engine_cutover_gate(
+            db, session, payload=payload, current_user=current_user, ctx=ctx,
+            idempotency_key=request.headers.get("Idempotency-Key"))
+        if gated is not None:
+            return gated
 
     # Check for pending terminal approval
     pending = _check_pending_approval(db, session.id)

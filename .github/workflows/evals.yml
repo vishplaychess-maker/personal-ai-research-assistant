@@ -39,6 +39,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r backend/requirements.txt
+      - name: Approval-domain + gateway + API + migration tests (Phase 1B.1/1B.2 — the --inprocess runner exercises app.approval)
+        run: PYTHONPATH=backend python -m pytest tests/test_approval_domain.py tests/test_approval_gateway.py tests/test_approvals_api.py tests/test_approval_migrations.py -q
       - name: Gate B integrity tests (boundary mocks prove no execution)
         run: PYTHONPATH=backend python -m pytest tests/test_evals_inprocess.py -q
       - name: In-process product adapter (real parser/router/validator/guard)

@@ -137,9 +137,27 @@ def remove_task_from_scheduler(task_id: int) -> None:
 
 def execute_scheduled_task(task_id: int) -> None:
     """
-    Execute a scheduled task by running the LangGraph workflow.
-    This runs in a separate database session.
+    Execute a scheduled task.
+
+    Flag OFF (default, byte-for-byte the legacy behaviour): run the LangGraph
+    workflow inline in a separate database session.
+
+    Flag ON (``run_scheduler_engine_enabled``): submit the SAME job through the
+    canonical RunEngine (``app.services.scheduler_engine``) and report the
+    truthful outcome. The legacy body below is untouched, and a task without a
+    captured session binding fails closed there - no bypass, no second approval
+    authority.
     """
+    from app.config import settings
+
+    if settings.run_scheduler_engine_enabled:
+        from app.services.scheduler_engine import execute_scheduled_task_via_engine
+
+        outcome = execute_scheduled_task_via_engine(task_id)
+        logger.info("Scheduled task %s (engine path): %s", task_id,
+                    outcome.get("status"))
+        return
+
     db = SessionLocal()
     try:
         task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
@@ -193,8 +211,29 @@ def execute_scheduled_task(task_id: int) -> None:
 def run_task_now(task_id: int) -> dict:
     """
     Run a scheduled task immediately (for testing/manual trigger).
-    Returns the result of the workflow execution.
+
+    Flag OFF (default): byte-for-byte the legacy behaviour - run the workflow
+    inline and return its result dict.
+
+    Flag ON: the SAME engine path the cron fire uses (trigger="manual" so a
+    manual run never consumes a future cron fire identity). The returned dict
+    keeps the documented "response" field (an honest, bounded status line -
+    the answer itself is in the session history) and adds status / run_id /
+    trigger, so the existing UI caller (a truthiness check on response plus a
+    task reload) stays coherent.
     """
+    from app.config import settings
+
+    if settings.run_scheduler_engine_enabled:
+        from app.services.scheduler_engine import (
+            MANUAL, execute_scheduled_task_via_engine,
+        )
+
+        outcome = execute_scheduled_task_via_engine(task_id, trigger=MANUAL)
+        logger.info("Scheduled task %s (engine path, manual): %s", task_id,
+                    outcome.get("status"))
+        return outcome
+
     db = SessionLocal()
     try:
         task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()

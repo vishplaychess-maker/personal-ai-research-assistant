@@ -94,6 +94,21 @@ def create_refresh_session(
     return raw_token
 
 
+def family_id_for_raw_token(db: Session, raw_token: str) -> Optional[str]:
+    """Return the ``family_id`` of the refresh session identified by
+    ``raw_token`` (matched by its SHA-256 hash), or ``None`` if no such row
+    exists. One indexed lookup — used by the login / refresh routes to bind
+    an access token to its refresh family (Phase 1B.2R D5, ``sid`` claim)
+    without changing any existing return signature.
+    """
+    row = (
+        db.query(RefreshSession.family_id)
+        .filter(RefreshSession.token_hash == hash_refresh_token(raw_token))
+        .first()
+    )
+    return row[0] if row else None
+
+
 def rotate_refresh_token(
     db: Session,
     old_raw_token: str,

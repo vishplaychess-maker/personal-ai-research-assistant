@@ -34,6 +34,7 @@ import type {
   ApprovalDetail,
   ApprovalDecision,
   RunCancelResult,
+  BuiltinSkillCatalog,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -339,6 +340,11 @@ export const API = {
   // ── User-Defined Skills (custom skill creator) ───────────
   listSkills() {
     return request<UserSkill[]>("/api/skills");
+  },
+
+  // Built-in (filesystem) skill catalog — read-only
+  listBuiltinSkills() {
+    return request<BuiltinSkillCatalog>("/api/skills/catalog");
   },
   getSkill(id: number) {
     return request<UserSkillDetail>(`/api/skills/${id}`);

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import ScheduledTask, ResearchSession, User
 from app.routes.auth import get_current_user
+from app.run_engine.context import AuthContext, get_auth_context
 from app.services.scheduler_service import (
     add_task_to_scheduler,
     remove_task_from_scheduler,
@@ -63,8 +64,16 @@ def create_scheduled_task(
     payload: ScheduledTaskCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Create a new scheduled task."""
+    """Create a new scheduled task.
+
+    The durable binding is captured here, while the owner is authenticated: the
+    refresh-session family (`sid` claim) and tenant are stored WITH the task so a
+    later scheduler-driven Run can be bound to a live family exactly like an HTTP
+    submission. A legacy token without a `sid` claim simply stores NULL (the
+    engine path then fails closed); the flag-off legacy path ignores both.
+    """
     # Verify session exists and belongs to user
     session = db.query(ResearchSession).filter(
         ResearchSession.id == payload.session_id,
@@ -87,6 +96,8 @@ def create_scheduled_task(
         prompt=payload.prompt,
         cron_expression=payload.cron_expression,
         is_active=True,
+        auth_session_ref=ctx.auth_session_ref,
+        tenant_id=ctx.tenant_id,
     )
     
     db.add(task)

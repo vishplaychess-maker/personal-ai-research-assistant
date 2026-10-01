@@ -1,3 +1,8 @@
+---
+name: image-generation
+description: Generate AI images from a text prompt via Venice AI (primary), NexaAPI, or Agnes AI, with automatic provider fallback.
+pinned: false
+---
 # Image Generation
 
 **Description:** Generate AI images from a text prompt via Venice AI (primary), NexaAPI, or Agnes AI, with automatic provider fallback.
