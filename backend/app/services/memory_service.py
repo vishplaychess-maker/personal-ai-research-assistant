@@ -577,12 +577,23 @@ def save_memory(
     content: str,
     category: str = "preference",
     session_id: Optional[int] = None,
+    *,
+    source_url: Optional[str] = None,
+    source_title: Optional[str] = None,
+    source_kind: Optional[str] = None,
+    source_meta: Optional[str] = None,
 ) -> Optional[Memory]:
     """Save a durable user memory (preference/fact/instruction).
 
     Deduplicates against existing memories (exact + near-match) and blocks
     sensitive content. Returns the saved/merged Memory row, or None if the
     content was rejected.
+
+    The ``source_*`` keyword arguments are ADDITIVE and OPTIONAL (YouTube
+    Knowledge Ingestion, Phase 1). Existing callers are unaffected: omitting
+    them leaves every new column NULL, which is the pre-existing behaviour.
+    ``content_hash`` is always stamped with the ONE shared digest so
+    fact-level duplicate suppression works across callers.
     """
     content = (content or "").strip()
     if not content or len(content) < 3:
@@ -593,7 +604,37 @@ def save_memory(
     valid_categories = {c.value for c in MemoryCategory}
     if category not in valid_categories:
         category = "fact"
-    return _save_memory_if_new(db, user_id, content, category, session_id)
+    row = _save_memory_if_new(db, user_id, content, category, session_id)
+    if row is None:
+        return None
+
+    # Fact-level identity (digest only) + source attribution. Stamped after the
+    # create/merge decision so a merged row also ends up carrying its source.
+    try:
+        row.content_hash = _fact_content_hash(content, category)
+    except Exception as exc:  # noqa: BLE001 - identity is never worth a failure
+        logger.warning("save_memory: content hash unavailable (%s)", type(exc).__name__)
+    touched = False
+    for column, value in (("source_url", source_url),
+                          ("source_title", source_title),
+                          ("source_kind", source_kind),
+                          ("source_meta", source_meta)):
+        if value and not getattr(row, column, None):
+            setattr(row, column, value)
+            touched = True
+    if touched or row.content_hash:
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def _fact_content_hash(content: str, category: str) -> str:
+    """sha256 hex DIGEST over the normalized (kind, content). Delegates to the
+    ONE shared implementation in ``app.run_engine.save_markers`` — no second
+    digest. Imported lazily to keep this module's import graph unchanged."""
+    from app.run_engine.save_markers import save_content_hash
+
+    return save_content_hash("memory", {"content": content, "category": category})
 
 
 def get_user_memories(

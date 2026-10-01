@@ -1099,6 +1099,42 @@ def _migrate_pending_approvals_content_hash():
             "ON pending_approvals (content_hash)"))
 
 
+def _migrate_memories_source_columns():
+    """YouTube Knowledge Ingestion (Phase 1) - nullable, additive source
+    attribution on ``memories``. Additive, idempotent, dialect-agnostic.
+
+    Stores the SOURCE identity only (url / kind / title / bounded non-secret
+    provenance). Transcript and extracted-fact CONTENT live in the existing
+    ``content`` column; nothing here duplicates or widens content storage."""
+    inspector = inspect(engine)
+    if "memories" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"] for c in inspector.get_columns("memories")}
+    with engine.begin() as conn:
+        if "source_url" not in cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN source_url TEXT"))
+        if "source_title" not in cols:
+            conn.execute(sa_text(
+                "ALTER TABLE memories ADD COLUMN source_title VARCHAR(500)"))
+        if "source_kind" not in cols:
+            conn.execute(sa_text(
+                "ALTER TABLE memories ADD COLUMN source_kind VARCHAR(50)"))
+        if "source_meta" not in cols:
+            conn.execute(sa_text("ALTER TABLE memories ADD COLUMN source_meta TEXT"))
+        if "content_hash" not in cols:
+            conn.execute(sa_text(
+                "ALTER TABLE memories ADD COLUMN content_hash VARCHAR(80)"))
+        conn.execute(sa_text(
+            "CREATE INDEX IF NOT EXISTS ix_memories_source_url "
+            "ON memories (source_url)"))
+        conn.execute(sa_text(
+            "CREATE INDEX IF NOT EXISTS ix_memories_source_kind "
+            "ON memories (source_kind)"))
+        conn.execute(sa_text(
+            "CREATE INDEX IF NOT EXISTS ix_memories_content_hash "
+            "ON memories (content_hash)"))
+
+
 def _migrate_database():
     """Add new columns to existing tables without losing data.
 
@@ -1125,6 +1161,9 @@ def _migrate_database():
 
     # MP-4C decision 2 follow-up: duplicate-marker suppression hash.
     _migrate_pending_approvals_content_hash()
+
+    # YouTube Knowledge Ingestion (Phase 1): nullable source attribution.
+    _migrate_memories_source_columns()
 
     # Durable run engine (Phase 1B.2R MP-0): dialect-agnostic, additive,
     # idempotent — 5 new tables only, no ALTER of any existing table.

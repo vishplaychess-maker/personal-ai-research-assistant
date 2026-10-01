@@ -239,6 +239,23 @@ class Memory(Base):
     # Phase 2 (memory decay / access metrics)
     last_accessed_at = Column(DateTime, nullable=True)
     access_count = Column(Integer, nullable=False, default=0)
+    # ── Source attribution (YouTube Knowledge Ingestion, Phase 1) ──
+    # ADDITIVE and NULLABLE: every pre-existing memory row keeps NULL here and
+    # behaves exactly as before. `source_kind` is a short bounded tag
+    # ("youtube_knowledge" for this phase); NULL means "typed/extracted
+    # directly, not derived from an external source".
+    source_url = Column(Text, nullable=True, index=True)
+    source_title = Column(String(500), nullable=True)
+    source_kind = Column(String(50), nullable=True, index=True)
+    # Extra bounded, non-secret provenance (channel / language / fetched_at),
+    # serialized as canonical JSON. NEVER raw transcript content.
+    source_meta = Column(Text, nullable=True)
+    # Stable fact-level identity: sha256 hex DIGEST over the normalized
+    # (kind, content) via app.run_engine.save_markers.save_content_hash — the
+    # ONE shared digest used for duplicate suppression. NULLABLE and additive:
+    # pre-existing rows keep NULL and are matched by their normalized content
+    # instead, so nothing needs backfilling. A DIGEST is stored, never content.
+    content_hash = Column(String(80), nullable=True, index=True)
 
     user = relationship("User", back_populates="memories")
 

@@ -33,19 +33,28 @@ MAX_TRANSCRIPT_CHARS = 4_000
 #   - https://youtu.be/VIDEO_ID
 #   - https://www.youtube.com/shorts/VIDEO_ID
 #   - https://www.youtube.com/embed/VIDEO_ID
-_YOUTUBE_HOST_RE = re.compile(r"(?:youtube\.com|youtu\.be)", re.IGNORECASE)
+#   - https://www.youtube.com/live/VIDEO_ID
+_YOUTUBE_HOST_RE = re.compile(
+    r"(?:https?://|//|\.)(?:[a-z0-9-]+\.)*youtu(?:be\.com|\.be)(?![a-z0-9-])"
+    r"(?=[/:?#]|$)",
+    re.IGNORECASE)
 _VIDEO_ID_RE = re.compile(
-    r"(?:v=|/shorts/|/embed/|youtu\.be/)([A-Za-z0-9_-]{11})",
+    r"(?:\bv=|/shorts/|/embed/|/live/|youtu\.be/)([A-Za-z0-9_-]{11})",
 )
 
 
 def extract_video_id(url: str) -> Optional[str]:
-    """Extract an 11-char YouTube video ID from *url*, or None if not found."""
+    """Extract an 11-char YouTube video ID from *url*, or None if not found.
+
+    The id is the LAST occurrence found, so a trailing URL decoration the
+    token-stripper could not remove (an unbalanced markdown bracket such as
+    "youtu.be/<id>)" whose opening "(" was consumed as part of a link label)
+    can never win over the real ``watch?v=`` id earlier in the same string."""
     if not url:
         return None
-    match = _VIDEO_ID_RE.search(url)
-    if match:
-        return match.group(1)
+    matches = _VIDEO_ID_RE.findall(url)
+    if matches:
+        return matches[-1]
     return None
 
 

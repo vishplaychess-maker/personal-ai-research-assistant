@@ -288,11 +288,43 @@ def _build_context_snapshot(db: Session, *, user_id: int, session_id: int,
         logger.warning("durable context: YouTube transcript resolution failed (non-fatal): %s",
                        type(exc).__name__)
 
+    # YouTube Knowledge Ingestion (Phase 1). Runs at the SAME already-
+    # established pre-staging point as retrieval and transcript resolution
+    # above: a fresh submission only, BEFORE create_chat_run opens its atomic
+    # staging area, because it performs bounded network I/O (transcript +
+    # oEmbed) and a model call. It is the ONLY writer here.
+    #
+    # CONSENT: a pasted link is an explicit user-initiated request, so the
+    # ingest writes DIRECTLY (the same basis the pre-existing explicit
+    # memory_service.save_memory path uses). It NEVER creates, decides or
+    # bypasses an approval, and it does not touch the model-initiated
+    # [SAVE_MEMORY]/[SAVE_DIRECTIVE] path, which stays approval-gated in
+    # app.run_engine.worker. Flag OFF -> ingest_message_youtube returns None
+    # before any fetch, so behaviour is byte-for-byte the legacy behaviour.
+    #
+    # Fail-closed: the service never raises - every failure is a bounded status
+    # + notice, and chat continues normally. The exception CLASS NAME only is
+    # logged, never a message that could quote transcript text.
+    youtube_ingest_notice = None
+    try:
+        from app.services.youtube_ingest_service import (
+            context_line, ingest_message_youtube,
+        )
+
+        ingest = ingest_message_youtube(
+            db, user_id=user_id, session_id=session_id, message=message)
+        if ingest is not None:
+            youtube_ingest_notice = context_line(ingest)
+    except Exception as exc:  # noqa: BLE001 - ingest must never block chat
+        logger.warning("durable context: YouTube ingest failed (non-fatal): %s",
+                       type(exc).__name__)
+
     return chat_stream.build_context_snapshot(
         rag_context_text=rag_context_text, citations=citations, sources_used=sources_used,
         memory_context_text=memory_context_text, memories_used=memories_used,
         transcript_context_text=transcript_context_text,
         transcript_status=transcript_status,
+        youtube_ingest_notice=youtube_ingest_notice,
     )
 
 

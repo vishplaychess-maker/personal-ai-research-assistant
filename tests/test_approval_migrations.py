@@ -175,6 +175,13 @@ def test_nonempty_legacy_session_grants_fails_fast_without_data_loss(eng):
 def test_orm_models_match_the_migrated_schema(eng):
     main._migrate_approval_domain()
     main._migrate_approval_domain_1b2()
+    # MP-4C decision 2 follow-up: `PendingApproval.content_hash` is added by its
+    # OWN additive migration (called from `_migrate_database`), NOT by the two
+    # approval-domain migrations above. `_migrate_approval_domain_1b2` creates the
+    # `pending_approvals` table, so this call must come AFTER it. Like its
+    # siblings it reads the module-level `engine` (monkeypatched by the `eng`
+    # fixture) and therefore takes no argument.
+    main._migrate_pending_approvals_content_hash()
 
     # create_all must agree with the raw DDL (no missing/extra table -> no-op)
     Base.metadata.create_all(eng)

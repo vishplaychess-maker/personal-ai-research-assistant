@@ -389,6 +389,34 @@ class Settings(BaseSettings):
     # sees the ENTIRE content that would be written. Validated as >= 1.
     run_engine_memory_write_max_chars: int = 2000
 
+    # ── YouTube Knowledge Ingestion — Phase 1 (MVP, backend-only) ──
+    # OFF by default. When False a pasted YouTube link is IGNORED entirely: no
+    # transcript fetch, no extraction call, no memory write, no notice — plain
+    # chat behaviour, byte-for-byte identical to before this feature.
+    # When True, a user-pasted supported YouTube URL in a chat message is
+    # ingested: transcript -> bounded chunks -> LLM fact extraction -> memory
+    # rows carrying source attribution (kind "youtube_knowledge").
+    # This is USER-INITIATED ingest: the pasted link is the explicit consent, so
+    # the write is direct and does NOT create an approval. MODEL-initiated saves
+    # ([SAVE_MEMORY]/[SAVE_DIRECTIVE]) remain approval-gated per MP-4C — the two
+    # paths stay separate and this flag never unlocks the model-initiated one.
+    youtube_ingest_enabled: bool = False
+    # Hard cap on the TRANSCRIPT characters accepted for ingestion. A longer
+    # transcript is truncated to this bound (with a bounded notice), never
+    # rejected outright. Validated as >= 1.
+    youtube_ingest_max_chars: int = 120000
+    # Transcript is split into chunks of at most this many characters, so one
+    # oversized transcript becomes several bounded extraction calls instead of
+    # one unbounded prompt. Validated as >= 1 and <= youtube_ingest_max_chars.
+    youtube_ingest_chunk_size: int = 3000
+    # Hard ceiling on the number of facts SAVED per video. Extraction stops
+    # once this many new facts have been persisted. Validated as >= 1.
+    youtube_ingest_max_facts_per_video: int = 20
+    # Wall-clock bound (seconds) for the YouTube oEmbed title/channel lookup.
+    # Metadata is BEST-EFFORT: a miss/timeout degrades to source_title=NULL and
+    # never fails the ingest. Validated as a finite number > 0.
+    youtube_ingest_oembed_timeout_s: float = 5.0
+
     # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
     # OFF by default. When on, POST /api/terminal/execute streams the output
     # of an allowlisted command (argv[0] must be in the list), run with
@@ -658,10 +686,36 @@ class Settings(BaseSettings):
             "multi_agent_max_assumptions",
             "multi_agent_max_uncertainties",
             "multi_agent_max_active_runs_per_user",
+            # YouTube Knowledge Ingestion (Phase 1) — integer bounds.
+            "youtube_ingest_max_chars",
+            "youtube_ingest_chunk_size",
+            "youtube_ingest_max_facts_per_video",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be an integer >= 1 (got {value!r})")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_youtube_ingest_limits(self) -> "Settings":
+        """Fail-fast on a nonsensical YouTube-ingest config (Phase 1). The
+        integer bounds are covered by `_validate_approval_limits`; the two
+        relationships between them, and the float oEmbed timeout, are not."""
+        import math
+
+        value = self.youtube_ingest_oembed_timeout_s
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or math.isnan(value) or math.isinf(value) or value <= 0):
+            raise ValueError(
+                f"youtube_ingest_oembed_timeout_s must be a finite number > 0 "
+                f"(got {value!r})"
+            )
+        if self.youtube_ingest_chunk_size > self.youtube_ingest_max_chars:
+            raise ValueError(
+                "youtube_ingest_chunk_size must not exceed "
+                "youtube_ingest_max_chars (a chunk larger than the whole "
+                "accepted transcript would make the chunk bound meaningless)"
+            )
         return self
 
     @model_validator(mode="after")
