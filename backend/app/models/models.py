@@ -296,6 +296,21 @@ class ScheduledTask(Base):
     )
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
+    # MP-5 scheduler-on-engine: the refresh-session family (and tenant) that
+    # CREATED the task, captured while the owner was authenticated. A
+    # scheduler-driven durable Run must be bound to a LIVE family exactly like
+    # an HTTP submission (`validate_session_binding`), and the worker later
+    # re-validates the run own binding from the run row. NULL means the task
+    # predates this slice or was created by a token without a `sid` claim -
+    # the engine path then fails closed and never submits.
+    auth_session_ref = Column(String(64), nullable=True)
+    tenant_id = Column(String(64), nullable=True)
+    # PERSISTED fire identity for the fire currently in flight. Set (and
+    # committed) BEFORE the Run is submitted, cleared when the fire finishes.
+    # A retry of that fire - including after a restart has advanced
+    # next_run_at - must reuse this identity rather than mint a new one, so one
+    # scheduled fire can never produce two Runs.
+    pending_fire_key = Column(String(80), nullable=True)
 
     user = relationship("User")
     session = relationship("ResearchSession")
@@ -570,6 +585,11 @@ class PendingApproval(Base):
     proposal_dedupe_key = Column(String(64), nullable=True)
     execution_turn_id = Column(String(36), nullable=True)
     tool_call_id = Column(String(36), nullable=True)
+    # MP-4C decision 2 follow-up - sha256 over the stably-normalized save args
+    # (kind + whitespace-normalized content + category). A DIGEST only: never
+    # the content. Used to suppress an unchanged duplicate marker. Nullable for
+    # every non-save proposal (and every pre-existing row).
+    content_hash = Column(String(80), nullable=True)
     # Canonical action-hash fields as JSON (no secrets, no `purpose`), so the
     # trusted server path can reconstruct + re-hash the EXACT approved envelope
     # with its ORIGINAL action_nonce at consume / grant time (1B.2). Nullable —
@@ -594,6 +614,8 @@ class PendingApproval(Base):
         Index("ix_pending_approvals_dedupe", "tenant_id", "proposal_dedupe_key"),
         Index("ix_pending_approvals_turn", "execution_turn_id"),
         Index("ix_pending_approvals_call", "tool_call_id"),
+        # Duplicate-marker suppression lookup (MP-4C decision 2 follow-up).
+        Index("ix_pending_approvals_content_hash", "content_hash"),
     )
 
     def __repr__(self):

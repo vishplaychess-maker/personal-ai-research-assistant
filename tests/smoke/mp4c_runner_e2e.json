@@ -1,0 +1,90 @@
+{
+ "aggregate_ok": true,
+ "artifact": "mp4c_runner_e2e.json",
+ "checks": [
+  {
+   "check": "executor_ready",
+   "pass": true,
+   "seen": "{\"ready\":true,\"reasons\":[],\"startup\":{\"ready\":true,\"timings_ms\":{\"daemon\":156,\"image\":140},\"probe\":{\"probe\":\"ok\",\"checks\":33,\"duration_ms\":102672,\"containerized\":false}},\"live\":{\"daemon_and_image\":\"ok",
+   "seen_missing": false
+  },
+  {
+   "check": "broker_client_wired",
+   "pass": true,
+   "seen": null,
+   "seen_missing": true
+  },
+  {
+   "check": "authority_true_with_live_executor",
+   "pass": true,
+   "seen": null,
+   "seen_missing": true
+  },
+  {
+   "check": "proposal_parked_for_approval",
+   "pass": true,
+   "seen": "waiting_for_approval",
+   "seen_missing": false
+  },
+  {
+   "check": "run_succeeded",
+   "pass": true,
+   "seen": "('succeeded', None)",
+   "seen_missing": false
+  },
+  {
+   "check": "exactly_one_executor_send",
+   "pass": true,
+   "seen": "1",
+   "seen_missing": false
+  },
+  {
+   "check": "exact_approved_code_was_sent",
+   "pass": true,
+   "seen": "print('MP4C-RUNNER-E2E-264ea2ef')",
+   "seen_missing": false
+  },
+  {
+   "check": "nonce_store_gained_exactly_one_row",
+   "pass": true,
+   "seen": "(0, 1)",
+   "seen_missing": false
+  },
+  {
+   "check": "exactly_one_completed_dispatch_ledger_row",
+   "pass": true,
+   "seen": "[('succeeded',)]",
+   "seen_missing": false
+  },
+  {
+   "check": "one_sealed_tool_output",
+   "pass": true,
+   "seen": "1",
+   "seen_missing": false
+  },
+  {
+   "check": "one_same_run_continuation",
+   "pass": true,
+   "seen": "1",
+   "seen_missing": false
+  },
+  {
+   "check": "no_duplicate_execution_after_reload",
+   "pass": true,
+   "seen": "(0, 1, 1, 1, 1, 1)",
+   "seen_missing": false
+  },
+  {
+   "check": "transport_never_used",
+   "pass": true,
+   "seen": "[]",
+   "seen_missing": false
+  }
+ ],
+ "code_marker": "MP4C-RUNNER-E2E-264ea2ef",
+ "containers_left": 0,
+ "crashed": null,
+ "executor_base_url": "http://127.0.0.1:8099",
+ "journey": "RunWorker -> real gateway -> real executor -> real container",
+ "owner_label": "mp4c-runner-562413a5"
+}

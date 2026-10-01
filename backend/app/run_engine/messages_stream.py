@@ -551,7 +551,39 @@ _FAIL_DETAIL = {
     "nonexec_marker_deferred": ("This conversation requires a feature the durable "
                                 "path does not support yet."),
     "context_snapshot_unreadable": "The response could not be completed.",
+    # MP-4C decision 2 - bounded save outcomes. Never carries the content.
+    "save_marker_malformed": "The response ended unexpectedly.",
+    "save_blocked_sensitive": ("That content was not saved because it looks "
+                               "sensitive."),
+    "save_content_too_large": "That content was not saved because it is too long.",
+    # MP-4C decision 2 follow-up - duplicate-marker suppression notices. Exact
+    # fixed templates; they never echo the content or the prior proposal.
+    "save_duplicate_approved": ("A proposal with this exact content was already "
+                                "approved and saved. No new action taken."),
+    "save_duplicate_denied": ("A proposal with this exact content was denied. "
+                              "Unchanged content will not be re-proposed."),
+    "save_duplicate_expired": ("A proposal with this exact content expired. "
+                               "Unchanged content will not be re-proposed."),
+    "save_duplicate_unresolved": ("A proposal for this content is unresolved or "
+                                  "previously failed. No new proposal created."),
+    "approval_expired": ("The approval request expired before it was decided; "
+                         "nothing was executed or saved."),
 }
+
+
+def _bound_approval_is_save(db: Session, run: Run) -> bool:
+    """True iff the RUN-BOUND approval names one of the save tools. Bounded,
+    non-disclosing: reads the server-owned tool id only, never the content."""
+    if run is None or not run.pending_approval_id:
+        return False
+    try:
+        from app.models.models import PendingApproval
+        from app.run_engine.save_approval_identity import SAVE_TOOL_IDS
+        row = (db.query(PendingApproval)
+               .filter(PendingApproval.id == run.pending_approval_id).first())
+        return row is not None and row.tool_id in SAVE_TOOL_IDS
+    except Exception:  # noqa: BLE001 - a lookup failure never changes the outcome
+        return False
 
 
 def _terminal_frame(db: Session, run: Run) -> Optional[str]:
@@ -565,8 +597,10 @@ def _terminal_frame(db: Session, run: Run) -> Optional[str]:
             "memories_used": fields["memories_used"],
         })
     if st == "denied":
-        return format_sse("error", {"code": "approval_denied",
-                                    "detail": "The requested tool call was denied."})
+        detail = ("The save was denied. Nothing was written."
+                  if _bound_approval_is_save(db, run)
+                  else "The requested tool call was denied.")
+        return format_sse("error", {"code": "approval_denied", "detail": detail})
     if st in ("cancelled", "cancelling"):
         return format_sse("cancelled", {"detail": "The run was cancelled."})
     if st == "timed_out":

@@ -97,6 +97,12 @@ ACTION_MARKERS = tuple(m for m in _REPO_MARKER_OPENS if m in _EXECUTION_OPENERS)
 # write delivery to an already-terminal run is a real worker-claiming-model
 # extension, not a "smallest adapter" change.
 _DEFERRED_OPENERS = ("[save_memory", "[save_directive", "[use_memory", "[plan", "[lesson")
+# MP-4C decision 2 — the subset of the deferred openers that are PERSISTENT
+# WRITES and therefore may become an approval PROPOSAL when the server-owned
+# write flag opts in. The remaining deferred openers are read-only / display-only
+# and stay permanently uncapturable.
+_SAVE_OPENERS = ("[save_memory", "[save_directive")
+_NON_WRITE_DEFERRED_OPENERS = ("[use_memory", "[plan", "[lesson")
 _deferred_absent = tuple(m for m in _DEFERRED_OPENERS if m not in _REPO_MARKER_OPENS)
 if _deferred_absent:  # the canonical list drifted — fail loud rather than silently under-detect
     raise RuntimeError(
@@ -173,7 +179,8 @@ class MarkerScanner:
 
     def __init__(self, markers: tuple[str, ...] = ACTION_MARKERS, *,
                  capture: bool = False, max_capture_bytes: int = 0,
-                 capture_python: bool = False) -> None:
+                 capture_python: bool = False,
+                 capture_save: bool = False) -> None:
         self._markers = tuple(m.lower() for m in markers)
         self._maxlen = max(len(m) for m in self._markers)
         self._pending = ""
@@ -190,6 +197,11 @@ class MarkerScanner:
         # MP-4C-R2A-1: opt-in Python capture. Default False keeps every existing
         # caller (including every MCP consumer) state-for-state unchanged.
         self._capture_python = bool(capture_python)
+        # MP-4C decision 2: opt-in capture of the two PERSISTENT-WRITE openers
+        # ([save_memory]/[save_directive]) so the worker can turn one into an
+        # owner-bound approval PROPOSAL. Default False keeps every existing
+        # caller byte-for-byte identical (both markers stay "deferred").
+        self._capture_save = bool(capture_save)
         # Which opener a successful capture came from: "mcp" | "python" | None.
         # Existing MCP consumers read `captured` only and are unaffected.
         self.captured_kind: Optional[str] = None
@@ -221,10 +233,20 @@ class MarkerScanner:
                     self.capture_status = "capturing"
                     self.captured_kind = "python"
                     self._absorb(buf[at:])
+                elif opener in _SAVE_OPENERS and self._capture_save:
+                    # MP-4C decision 2: the two PERSISTENT-WRITE openers are captured
+                    # with the SAME bounded buffer / one-line rule as MCP, ONLY when
+                    # the server-owned write flag opted in. The worker turns the
+                    # capture into an approval PROPOSAL; nothing is written here and
+                    # no bytes are returned as text. With the flag off this branch is
+                    # unreachable and both markers keep their historical fate.
+                    self.capture_status = "capturing"
+                    self.captured_kind = "save"
+                    self._absorb(buf[at:])
                 elif opener in _DEFERRED_OPENERS:
-                    # save_memory / save_directive / use_memory / plan / lesson (MP-3C3D2):
-                    # recognized but write-activation is deferred — no bytes captured,
-                    # same "stop cleanly, never leak" fate as an unsupported execution
+                    # use_memory / plan / lesson (and save_memory/save_directive with
+                    # the write flag off) — recognized but no bytes captured, same
+                    # "stop cleanly, never leak" fate as an unsupported execution
                     # marker, just a distinct bounded reason so operators can tell them apart.
                     self.capture_status = "deferred"
                 else:

@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 SAVE_MEMORY_PATTERN = re.compile(r"\[SAVE_MEMORY:\s*(.+?)\]", re.DOTALL)
 
+#: Bounded, user-visible notice emitted when a model marker wanted a durable
+#: write that now requires an approved, owner-bound proposal. Never contains the
+#: requested content.
+MEMORY_WRITE_REQUIRES_APPROVAL_NOTICE = (
+    "Memory was not saved: saving persistent memory requires an approved "
+    "proposal.")
+
 # Phase 4: explicit on-demand recall marker — [USE_MEMORY: <query>].
 USE_MEMORY_PATTERN = re.compile(r"\[USE_MEMORY:\s*(.+?)\]", re.DOTALL)
 
@@ -52,12 +59,21 @@ def process_memory_markers(
     Phase 1B.2R MP-4C: this legacy helper used to write each marker straight to
     the user's durable memory with NO approval. It now fails closed — markers
     are removed from the user-visible text (so raw marker text can never render
-    or be persisted) and ZERO memories are written. Approval-gated memory
-    writes are not implemented yet; until they are, model output can never
-    mutate durable memory. Always returns (cleaned_text, 0).
+    or be persisted) and ZERO memories are written. The approved durable write
+    path lives in the Run-bound engine (an owner-bound PendingApproval consumed
+    exactly once); this legacy helper never writes in ANY configuration.
+    Always returns (cleaned_text, 0).
+
+    Owner decision 2: a model-initiated persistent write requires an approved,
+    owner-bound PendingApproval. No canonical memory-proposal path exists yet,
+    so this fails closed AND tells the user with a bounded notice.
     """
+    had_marker = bool(SAVE_MEMORY_PATTERN.search(text or ""))
     cleaned = SAVE_MEMORY_PATTERN.sub("", text or "")
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if had_marker:
+        cleaned = (cleaned + chr(10) + chr(10)
+                   + MEMORY_WRITE_REQUIRES_APPROVAL_NOTICE).strip()
     return cleaned, 0
 
 

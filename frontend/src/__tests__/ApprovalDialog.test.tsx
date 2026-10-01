@@ -228,3 +228,65 @@ describe("ApprovalDialog — exact Python action preview", () => {
       expect(screen.getByRole("button", { name: /^approve$/i })).toBeEnabled());
   });
 });
+
+// ── MP-4C decision 2: the EXACT memory/directive content to be saved ──
+
+const SAVE_READY: ApprovalDetail = {
+  id: "ap_mem",
+  state: "requested",
+  tool_id: "memory_write",
+  risk_level: "medium",
+  purpose_redacted: "",
+  action_hash: "ACTIONHASH-M",
+  created_at: "2026-09-24T00:00:00Z",
+};
+
+const SAVE_CONTENT = "the user prefers bullet points";
+const SAVE_PREVIEW = {
+  approval_id: "ap_mem",
+  tool_id: "memory_write",
+  kind: "memory" as const,
+  content: SAVE_CONTENT,
+  content_chars: SAVE_CONTENT.length,
+  args_hash: "ARGSHASH-M",
+  action_hash: "ACTIONHASH-M",
+  purpose: "",
+  expires_at: null,
+};
+
+describe("ApprovalDialog — exact memory/directive save preview", () => {
+  beforeEach(() => {
+    getApprovalAction.mockReset().mockResolvedValue(SAVE_PREVIEW);
+  });
+
+  it("renders the exact content and enables Approve once it loads", async () => {
+    getApproval.mockResolvedValue(SAVE_READY);
+    const { onApprove } = setup({ approvalId: "ap_mem" });
+    expect(await screen.findByText(/exact memory shown below/i)).toBeInTheDocument();
+    const pre = await screen.findByLabelText(/exact content to be saved/i);
+    expect(pre.textContent).toContain(SAVE_CONTENT);
+    const approve = await screen.findByRole("button", { name: /^approve$/i });
+    await waitFor(() => expect(approve).toBeEnabled());
+    fireEvent.click(approve);
+    await waitFor(() => expect(onApprove).toHaveBeenCalledOnce());
+    expect(approveRun).toHaveBeenCalledWith("ap_mem");
+  });
+
+  it("keeps Approve disabled with a bounded error when the save preview fails", async () => {
+    getApproval.mockResolvedValue(SAVE_READY);
+    getApprovalAction.mockRejectedValue(new Error("gone"));
+    setup({ approvalId: "ap_mem" });
+    const approve = await screen.findByRole("button", { name: /^approve$/i });
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(await screen.findByText(/exact content could not be loaded/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeEnabled();
+  });
+
+  it("keeps Approve disabled when the save preview hash does not match", async () => {
+    getApproval.mockResolvedValue(SAVE_READY);
+    getApprovalAction.mockResolvedValue({ ...SAVE_PREVIEW, action_hash: "OTHER" });
+    setup({ approvalId: "ap_mem" });
+    const approve = await screen.findByRole("button", { name: /^approve$/i });
+    await waitFor(() => expect(approve).toBeDisabled());
+  });
+});

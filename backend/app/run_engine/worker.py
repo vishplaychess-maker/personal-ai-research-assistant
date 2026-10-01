@@ -61,6 +61,7 @@ from app.models.models import (
     DispatchRecord,
     Message,
     MessageRole,
+    PendingApproval,
     Run,
     RunEvent,
     RunSignal,
@@ -967,7 +968,7 @@ class RunWorker:
             return self._mcp_dispatch(db, gateway, mcp_flow, claimed, step, session_id)
 
     def _mcp_first_pass(self, db, gateway, mcp_flow, claimed, step, session_id,
-                        *, frm) -> RunOutcome:
+                        *, frm, proposal_content_hash=None) -> RunOutcome:
         try:
             self._mcp_session_check(db, claimed)
         except (SessionBindingRequired, SessionBindingMismatch, RunNotFound):
@@ -1018,6 +1019,19 @@ class RunWorker:
                        .values(pending_approval_id=res.approval_id))
             db.execute(update(RunStep).where(RunStep.id == step.id)
                        .values(approval_id=res.approval_id, status="waiting"))
+            # MP-4C decision 2 follow-up: persist the DIGEST (never content) on
+            # the proposal for duplicate-marker suppression. Save callers pass it
+            # explicitly; a crash-replay recovers it from the durable step ref.
+            if proposal_content_hash is None:
+                try:
+                    proposal_content_hash = json.loads(
+                        step.input_ref or "{}").get("content_hash")
+                except (ValueError, TypeError):
+                    proposal_content_hash = None
+            if proposal_content_hash:
+                db.execute(update(PendingApproval).where(
+                    PendingApproval.id == res.approval_id).values(
+                    content_hash=str(proposal_content_hash)[:80]))
             try:
                 self._apply_transition(db, claimed=claimed, frm=RUNNING,
                                        to=WAITING_FOR_APPROVAL)
@@ -1171,6 +1185,8 @@ class RunWorker:
     def _mcp_dispatch(self, db, gateway, mcp_flow, claimed, step, session_id) -> RunOutcome:
         """Run is ``running`` under our lease. At-most-once external dispatch via
         the gateway, gated by the ``dispatch_records`` crash ledger."""
+        from app.run_engine import chat_tools as _ct
+        from app.run_engine.save_approval_identity import SAVE_TOOL_IDS as _SAVE_TOOL_IDS
         db.expire_all()
         rec = (db.query(DispatchRecord)
                .filter(DispatchRecord.tool_call_id == step.tool_call_id).one_or_none())
@@ -1322,6 +1338,59 @@ class RunWorker:
                             % _ps.RESULT_EXECUTION_UNAVAILABLE, True)
                 outcome = self._python_executor(args["code"])
                 return (outcome.text, bool(outcome.is_error))
+        elif tool_id in _SAVE_TOOL_IDS:
+            # MP-4C decision 2: validate EVERYTHING server-side BEFORE the
+            # gateway, so a mismatch can never write a DispatchRecord.started.
+            from app.approval.hashing import args_hash as _save_args_hash
+            from app.models.models import ToolCall as _SaveToolCall
+            from app.run_engine import save_approval_identity as _sai
+            from app.services.memory_service import _is_sensitive as _save_sensitive
+
+            _save_kind = _sai.kind_for_tool_id(tool_id)
+
+            def _save_rejected():
+                db.execute(update(RunStep).where(RunStep.id == step.id).values(
+                    status="blocked", error_code="gateway_error",
+                    finished_at=self._now()))
+                return self._finalize_terminal(db, claimed, FAILED, "gateway_error",
+                                               frm=RUNNING)
+
+            if not (getattr(settings, "run_engine_memory_write_enabled", False)
+                    and _save_kind is not None
+                    and _ref.get("purpose") == (_save_kind + "_write")):
+                return _save_rejected()
+            if _save_kind == "memory":
+                if not isinstance(args, dict) or set(args) != {"content", "category"}:
+                    return _save_rejected()
+            elif not isinstance(args, dict) or set(args) != {"content"}:
+                return _save_rejected()
+            _save_content = args.get("content")
+            if not isinstance(_save_content, str) or not _save_content.strip():
+                return _save_rejected()
+            if _save_sensitive(_save_content):
+                return _save_rejected()
+            if len(_save_content) > _ct.save_content_max_chars():
+                return _save_rejected()
+            _save_a = _save_args_hash(args)
+            _save_tc = db.query(_SaveToolCall).filter(
+                _SaveToolCall.id == step.tool_call_id).first()
+            if (_save_a != _ref.get("args_hash") or _save_tc is None
+                    or _save_a != _save_tc.args_hash):
+                return _save_rejected()          # changed arguments -> zero writes
+
+            def _execute():
+                invoked["n"] += 1
+                from app.services import directive_service, memory_service
+                if _save_kind == "memory":
+                    row = memory_service.save_memory(
+                        db, int(claimed.user_id), _save_content,
+                        str(args.get("category") or "preference"), session_id)
+                    return (("memory saved", False) if row is not None
+                            else ("memory not saved", True))
+                row = directive_service.save_directive(
+                    db, int(claimed.user_id), _save_content)
+                return (("directive saved", False) if row is not None
+                        else ("directive not saved", True))
         else:
             def _execute():
                 invoked["n"] += 1
@@ -1898,6 +1967,182 @@ class RunWorker:
         return self._mcp_first_pass(db, gateway, mcp_flow, claimed, tool_step,
                                     session_id, frm=RUNNING)
 
+    def _chat_suspend_for_save(self, db, claimed: "ClaimedRun", gen_step,
+                               captured_marker: str, session_id,
+                               *, seg_text: str = "") -> "RunOutcome":
+        """MP-4C decision 2 - a generation segment produced a COMPLETE
+        [SAVE_MEMORY]/[SAVE_DIRECTIVE] marker and run_engine_memory_write_enabled
+        is ON.
+
+        Mirrors the proven Python ordering: parse with the ONE save grammar,
+        enforce the configured character ceiling and the sensitive-content gate
+        BEFORE any proposal exists, register the server-owned tool identity, seal
+        the normalized args, create ONE tool_dispatch step (one atomic commit),
+        then run the SAME gateway first pass used by MCP/Python and park the SAME
+        run at waiting_for_approval. ZERO content is written or logged here; the
+        write itself happens only after an owner-bound approval is consumed
+        exactly once through the gateway + DispatchRecord ledger.
+        """
+        from app.approval import gateway
+        from app.approval.hashing import args_hash
+        from app.approval.identity import open_tool_call, open_turn
+        from app.run_engine import chat_tools, mcp_flow
+        from app.run_engine import save_approval_identity as sai
+        from app.run_engine import save_markers
+        from app.services.memory_service import _is_sensitive
+
+        db.expire_all()
+        # 1 - strict parse with the ONE save grammar (never logs content)
+        try:
+            kind, args = chat_tools.parse_one_save_marker(captured_marker)
+        except chat_tools.ChatToolMarkerError as exc:
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code=exc.reason, finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, exc.reason, frm=RUNNING)
+
+        tool_id = sai.tool_id_for_kind(kind) or ""
+        if not tool_id:
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code="save_marker_malformed",
+                finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, "save_marker_malformed",
+                                           frm=RUNNING)
+
+        content = args.get("content") or ""
+        # 2 - character ceiling BEFORE a proposal: the approver must be able to
+        #     see the WHOLE content, never a truncated excerpt.
+        if len(content) > chat_tools.save_content_max_chars():
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code="save_content_too_large",
+                finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, "save_content_too_large",
+                                           frm=RUNNING)
+
+        # 3 - sensitive content is refused BEFORE a proposal is created: it is
+        #     never shown in a preview and never persisted. Bounded reason only.
+        if _is_sensitive(content):
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code="save_blocked_sensitive",
+                finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, "save_blocked_sensitive",
+                                           frm=RUNNING)
+
+        # 3b - the stable proposal DIGEST (kind + normalized content). Only this
+        #      hash and server-owned ids are ever logged - never the content.
+        content_hash = save_markers.save_content_hash(kind, args)
+
+        # 4 - durable per-run cycle ceiling (no in-memory counter), identical to MCP
+        cycles = (db.query(RunStep)
+                  .filter(RunStep.run_id == claimed.run_id,
+                          RunStep.kind == chat_tools.CHAT_TOOL_STEP_KIND).count())
+        active = (db.query(RunStep)
+                  .filter(RunStep.run_id == claimed.run_id,
+                          RunStep.kind == chat_tools.CHAT_TOOL_STEP_KIND,
+                          RunStep.status.in_(("pending", "running", "waiting"))).count())
+        if cycles >= chat_tools.max_tool_cycles() or active > 0:
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code="tool_cycle_limit", finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, "tool_cycle_limit", frm=RUNNING)
+
+        # 5 - cancel / session revoked BEFORE any proposal persistence -> fail closed
+        if self._live_cancel_id(db, claimed.run_id) is not None:
+            return self._consume_cancel(db, claimed, frm=RUNNING)
+        try:
+            self._mcp_session_check(db, claimed)
+        except (SessionBindingRequired, SessionBindingMismatch, RunNotFound):
+            return self._finalize_terminal(db, claimed, FAILED, "session_revoked", frm=RUNNING)
+
+        # 5b - duplicate-marker suppression (Task 7). An unchanged proposal in
+        #      this session already exists (approved/denied/expired/unresolved):
+        #      create NO second proposal and write nothing. Bounded notice only;
+        #      the log carries the hash + server ids, NEVER the content.
+        prior = (db.query(PendingApproval)
+                 .filter(PendingApproval.user_id == claimed.user_id,
+                         PendingApproval.session_id == session_id,
+                         PendingApproval.tool_id == tool_id,
+                         PendingApproval.content_hash == content_hash)
+                 .order_by(PendingApproval.created_at.desc()).first())
+        if prior is not None:
+            disposition = save_markers.prior_disposition(db, prior)
+            reason = save_markers.reason_for_disposition(disposition)
+            logger.info(
+                "duplicate_marker_suppressed hash=%s prior_approval_id=%s "
+                "prior_status=%s", content_hash, prior.id, prior.state or "unknown")
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="incomplete", error_code=reason, finished_at=self._now()))
+            return self._finalize_terminal(db, claimed, FAILED, reason, frm=RUNNING)
+
+        # 6 - the server-owned approval identity. A locked / drifted identity
+        #     leaves the row locked and the gateway then BLOCKS (never writes).
+        try:
+            sai.ensure_save_approval_identity(db, claimed.user_id, tool_id)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            return self._finalize_terminal(db, claimed, FAILED, "gateway_error", frm=RUNNING)
+
+        # 7 - server-owned execution / tool identity
+        run_row = db.query(Run).filter(Run.id == claimed.run_id).first()
+        try:
+            turn = open_turn(db, user_id=claimed.user_id, tenant_id=claimed.tenant_id,
+                             session_id=session_id, run_id=claimed.run_id, kind="reference")
+            a_hash = args_hash(args)
+            call = open_tool_call(db, turn=turn, call_index=0, tool_id=tool_id,
+                                  args_hash=a_hash)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            return self._finalize_terminal(db, claimed, OUTCOME_UNKNOWN,
+                                           "output_persist_failed", frm=RUNNING)
+
+        # 8 - ONE atomic commit: segment sealed + gen step succeeded + sealed save
+        #     args + tool_dispatch step pending. Content lives ONLY in the
+        #     encrypted payload; every plaintext field is a bounded reference.
+        try:
+            seg_pid = None
+            if seg_text:
+                seg_pid = seal_payload(
+                    db, tenant_id=run_row.tenant_id, user_id=run_row.user_id,
+                    run_id=run_row.id, step_id=gen_step.id,
+                    payload_type=chat_tools.SEGMENT_PAYLOAD_TYPE,
+                    plaintext=seg_text, commit=False,
+                ).id
+            db.execute(update(RunStep).where(RunStep.id == gen_step.id).values(
+                status="succeeded", output_payload_id=seg_pid, finished_at=self._now(),
+                output_ref=json.dumps({"segment_payload_id": seg_pid,
+                                       "output_len": len(seg_text)}, sort_keys=True)))
+            tool_step_id = str(uuid4())
+            pay = seal_payload(
+                db, tenant_id=claimed.tenant_id, user_id=claimed.user_id,
+                run_id=claimed.run_id, step_id=tool_step_id,
+                payload_type=chat_tools.TOOL_ARGS_PAYLOAD_TYPE,
+                plaintext=chat_tools.normalized_args_json(args), commit=False,
+            )
+            next_seq = int(db.execute(
+                select(func.coalesce(func.max(RunStep.seq), 0))
+                .where(RunStep.run_id == claimed.run_id)).scalar() or 0) + 1
+            db.add(RunStep(
+                id=tool_step_id, run_id=claimed.run_id, tenant_id=claimed.tenant_id,
+                user_id=claimed.user_id, session_id=session_id, seq=next_seq,
+                kind=chat_tools.CHAT_TOOL_STEP_KIND, engine="native", status="pending",
+                execution_turn_id=turn.id, tool_call_id=call.id, attempt=0,
+                input_payload_id=pay.id,
+                input_ref=json.dumps({"tool_id": tool_id, "args_hash": a_hash,
+                                      "args_payload_id": pay.id, "cycle": next_seq,
+                                      "purpose": kind + "_write",
+                                      "content_hash": content_hash},
+                                     sort_keys=True),
+            ))
+            db.flush()
+            db.commit()
+        except Exception:  # noqa: BLE001 - nothing durable landed; run stays running
+            db.rollback()
+            return self._finalize_terminal(db, claimed, OUTCOME_UNKNOWN,
+                                           "output_persist_failed", frm=RUNNING)
+
+        tool_step = db.query(RunStep).filter(RunStep.id == tool_step_id).first()
+        return self._mcp_first_pass(db, gateway, mcp_flow, claimed, tool_step,
+                                    session_id, frm=RUNNING,
+                                    proposal_content_hash=content_hash)
+
     def _chat_continue_after_tool(self, db, claimed: "ClaimedRun", tool_step) -> "RunOutcome":
         """The MCP call executed at-most-once and its result is sealed. Start a
         NEW durable continuation ``llm_generate`` step and resume generation with
@@ -1991,7 +2236,11 @@ class RunWorker:
             # flag off the scanner behaves exactly as before (Python ->
             # `unsupported` -> `tool_resume_required`). Shell and browser stay
             # unsupported in every configuration.
-            capture_python=bool(getattr(settings, "run_engine_sandbox", False)))
+            capture_python=bool(getattr(settings, "run_engine_sandbox", False)),
+            # MP-4C decision 2: save-marker capture is enabled ONLY by this
+            # server-owned setting. With it off the scanner returns "deferred"
+            # for both markers exactly as before (zero proposals, zero writes).
+            capture_save=bool(getattr(settings, "run_engine_memory_write_enabled", False)))
         state = {"abort": None, "marker": False, "tool": None, "tool_kind": None,
                  "reason": "tool_resume_required"}
         tick = max(1, int(settings.run_worker_lease_ttl_s) // 3)
@@ -2117,6 +2366,10 @@ class RunWorker:
                     else getattr(step, "session_id", None))
             if state.get("tool_kind") == "python":
                 return self._chat_suspend_for_python(
+                    db, claimed, step, state["tool"], _sid,
+                    seg_text="".join(clean_parts))
+            if state.get("tool_kind") == "save":
+                return self._chat_suspend_for_save(
                     db, claimed, step, state["tool"], _sid,
                     seg_text="".join(clean_parts))
             return self._chat_suspend_for_tool(

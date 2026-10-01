@@ -1,0 +1,131 @@
+{
+ "aggregate_ok": true,
+ "artifact": "mp4c_live_verdict.json",
+ "checks": [
+  {
+   "check": "up_exit_zero",
+   "pass": true,
+   "seen": "0",
+   "seen_missing": false
+  },
+  {
+   "check": "healthy_before",
+   "pass": true,
+   "seen": "healthy|running|0",
+   "seen_missing": false
+  },
+  {
+   "check": "no_grant_refused",
+   "pass": true,
+   "seen": "[400, '{\"ok\":false,\"status\":\"executor_grant_malformed\",\"output\":\"\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "malformed_refused",
+   "pass": true,
+   "seen": "[400, '{\"ok\":false,\"status\":\"executor_grant_malformed\",\"output\":\"\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "forged_refused",
+   "pass": true,
+   "seen": "[401, '{\"ok\":false,\"status\":\"executor_grant_bad_signature\",\"output\":\"\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "user_a_executed_exactly_once",
+   "pass": true,
+   "seen": "[200, '{\"ok\":true,\"status\":\"ok\",\"output\":\"MP4C_LIVE_A_d322f006beaf494aae4aec1f0ccb165a\\\\n\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "user_b_executed_exactly_once",
+   "pass": true,
+   "seen": "[200, '{\"ok\":true,\"status\":\"ok\",\"output\":\"MP4C_LIVE_B_a9e27e20e2284a0db7f57339d0524fe5\\\\n\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "users_are_distinct_actions",
+   "pass": true,
+   "seen": "{'ma_in_b': False, 'mb_in_a': False}",
+   "seen_missing": false
+  },
+  {
+   "check": "replay_refused",
+   "pass": true,
+   "seen": "[409, '{\"ok\":false,\"status\":\"executor_replay_rejected\",\"output\":\"\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "code_container_has_no_socket",
+   "pass": true,
+   "seen": "[200, '{\"ok\":true,\"status\":\"ok\",\"output\":\"SOCKET_PRESENT False\\\\n\",\"output_truncated\":false}']",
+   "seen_missing": false
+  },
+  {
+   "check": "no_published_port",
+   "pass": true,
+   "seen": "",
+   "seen_missing": false
+  },
+  {
+   "check": "key_absent_from_logs",
+   "pass": true,
+   "seen": "False",
+   "seen_missing": false
+  },
+  {
+   "check": "markers_absent_from_logs",
+   "pass": true,
+   "seen": "False",
+   "seen_missing": false
+  },
+  {
+   "check": "healthy_after_restart",
+   "pass": true,
+   "seen": "healthy|running|0",
+   "seen_missing": false
+  },
+  {
+   "check": "nonce_volume_present",
+   "pass": true,
+   "seen": "['mp4c-exec-test_executor_nonce_data']",
+   "seen_missing": false
+  },
+  {
+   "check": "nonce_rows_survive_restart",
+   "pass": true,
+   "seen": "{'after': 3, 'before': 0}",
+   "seen_missing": false
+  },
+  {
+   "check": "no_new_containers",
+   "pass": true,
+   "seen": "[]",
+   "seen_missing": false
+  },
+  {
+   "check": "no_owned_leftover",
+   "pass": true,
+   "seen": "[]",
+   "seen_missing": false
+  },
+  {
+   "check": "after_restart_payload_present",
+   "pass": true,
+   "seen": "True",
+   "seen_missing": false
+  },
+  {
+   "check": "replay_refused_after_restart",
+   "pass": true,
+   "seen": "[409, '{\"ok\":false,\"status\":\"executor_replay_rejected\",\"output\":\"\",\"output_truncated\":false}']",
+   "seen_missing": false
+  }
+ ],
+ "checks_passed": 20,
+ "checks_total": 20,
+ "failed_checks": [],
+ "harness": "tests/smoke/mp4c_compose_live.py",
+ "note": "bounded verdict only: status slugs, markers and counts. No code, no key, no token and no raw child output."
+}

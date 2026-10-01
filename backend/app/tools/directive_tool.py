@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 SAVE_DIRECTIVE_PATTERN = re.compile(r"\[SAVE_DIRECTIVE:\s*(.+?)\]", re.DOTALL)
 
+#: Bounded, user-visible notice emitted when a model marker wanted a durable
+#: write that now requires an approved, owner-bound proposal. Never contains the
+#: requested content.
+DIRECTIVE_WRITE_REQUIRES_APPROVAL_NOTICE = (
+    "Directive was not saved: saving a lesson requires an approved proposal.")
+
 # Directives shorter than this are too trivial to be worth persisting.
 _MIN_DIRECTIVE_LENGTH = 8
 
@@ -61,35 +67,23 @@ def process_directive_markers(
     db: DBSession,
     user_id: int,
 ) -> Tuple[str, int]:
-    """Save every [SAVE_DIRECTIVE: ...] marker and return (cleaned_text, saved_count).
+    """Strip every [SAVE_DIRECTIVE: ...] marker and persist NOTHING.
 
-    The cleaned text has all markers removed so the user never sees raw
-    tool markers in the response.
+    Owner decision 2 (MP-4C): a model-initiated persistent write requires an
+    approved, owner-bound PendingApproval. The canonical proposal authority is
+    Run-bound (it is built from a context carrying run_id, and the preview path
+    requires run_id plus tool_call_id and loads the Run and its RunStep), so a
+    legacy workflow that owns NO canonical Run cannot create or resume a
+    proposal. This path therefore fails closed: markers are removed from the
+    user-visible text, ZERO directives are written, the requested content is
+    never logged, and a bounded notice tells the user why. Explicit
+    user-initiated saves through the directives API are unaffected.
+    Always returns (cleaned_text, 0).
     """
-    markers = extract_directive_markers(text)
-    saved = 0
-    for content in markers:
-        if len(content) < _MIN_DIRECTIVE_LENGTH:
-            logger.info("save_directive skipped trivial directive: %.60s", content)
-            continue
-        try:
-            directive = AgentDirective(
-                user_id=user_id,
-                content=content,
-                is_active=True,
-            )
-            db.add(directive)
-            db.commit()
-            db.refresh(directive)
-            saved += 1
-            logger.info(
-                "save_directive saved directive id=%d: %.60s",
-                directive.id, directive.content,
-            )
-        except Exception as exc:  # noqa: BLE001 — persistence must never break chat
-            db.rollback()
-            logger.warning("save_directive failed (non-fatal): %s", exc)
-
-    cleaned = SAVE_DIRECTIVE_PATTERN.sub("", text)
+    had_marker = bool(SAVE_DIRECTIVE_PATTERN.search(text or ""))
+    cleaned = SAVE_DIRECTIVE_PATTERN.sub("", text or "")
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, saved
+    if had_marker:
+        cleaned = (cleaned + chr(10) + chr(10)
+                   + DIRECTIVE_WRITE_REQUIRES_APPROVAL_NOTICE).strip()
+    return cleaned, 0

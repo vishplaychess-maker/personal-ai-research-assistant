@@ -28,6 +28,17 @@ import {
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
+/** MP-4C decision 2 — the two server-owned save tool ids. */
+const SAVE_TOOL_IDS = ["memory_write", "directive_write"];
+
+function isSaveTool(toolId: string | undefined | null): boolean {
+  return !!toolId && SAVE_TOOL_IDS.includes(toolId);
+}
+
+function isPreviewTool(toolId: string | undefined | null): boolean {
+  return toolId === "python_sandbox" || isSaveTool(toolId);
+}
+
 type Local =
   | "loading"
   | "ready"
@@ -106,7 +117,7 @@ export function ApprovalDialog({
     setPreview(null);
     setPreviewFailed(false);
     if (!approvalId || !detail) return;
-    if (detail.tool_id !== "python_sandbox" || detail.state !== "requested") return;
+    if (!isPreviewTool(detail.tool_id) || detail.state !== "requested") return;
     let cancelled = false;
     API.getApprovalAction(approvalId)
       .then((p) => {
@@ -127,7 +138,7 @@ export function ApprovalDialog({
     };
   }, [approvalId, detail]);
 
-  const previewRequired = (detail?.tool_id || "") === "python_sandbox";
+  const previewRequired = isPreviewTool(detail?.tool_id);
   const approveReady =
     local === "ready" && (!previewRequired || (preview !== null && !previewFailed));
 
@@ -192,7 +203,9 @@ export function ApprovalDialog({
         <DialogHeader>
           <DialogTitle>Tool approval required</DialogTitle>
           <DialogDescription>
-            The assistant wants to run a tool. It will not run until you approve.
+            {isSaveTool(detail?.tool_id)
+              ? "The assistant wants to save something to your account. Nothing is written until you approve."
+              : "The assistant wants to run a tool. It will not run until you approve."}
           </DialogDescription>
         </DialogHeader>
 
@@ -226,7 +239,29 @@ export function ApprovalDialog({
             </div>
           )}
 
-          {preview && (
+          {preview && preview.kind && (
+            <div>
+              <div
+                role="note"
+                className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+              >
+                ⚠️ Approving saves the exact{" "}
+                {preview.kind === "memory" ? "memory" : "directive"} shown below.
+                Review it before approving.
+              </div>
+              <div className="mt-2 text-xs uppercase tracking-wide text-muted-foreground">
+                Exact {preview.kind === "memory" ? "memory" : "directive"} to be saved
+              </div>
+              <pre
+                aria-label="Exact content to be saved"
+                className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs"
+              >
+                {preview.content}
+              </pre>
+            </div>
+          )}
+
+          {preview && !preview.kind && (
             <div>
               <div
                 role="note"
@@ -249,8 +284,9 @@ export function ApprovalDialog({
 
           {previewRequired && previewFailed && (
             <p role="alert" className="text-xs text-destructive">
-              The exact code could not be loaded, so approval is disabled. You can
-              still deny.
+              {isSaveTool(detail?.tool_id)
+                ? "The exact content could not be loaded, so approval is disabled. You can still deny."
+                : "The exact code could not be loaded, so approval is disabled. You can still deny."}
             </p>
           )}
 

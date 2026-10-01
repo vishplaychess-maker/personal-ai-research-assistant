@@ -135,6 +135,18 @@ export interface AgentDirective {
 
 // ── User-Defined Skills (custom skill creator) ────────────
 
+// Built-in (filesystem SKILL.md) skills surfaced read-only in Settings > Skills
+export interface BuiltinSkill {
+  name: string;
+  description: string;
+  pinned?: boolean;
+}
+
+export interface BuiltinSkillCatalog {
+  enabled: boolean;
+  skills: BuiltinSkill[];
+}
+
 export interface UserSkill {
   id: number;
   name: string;
@@ -403,8 +415,15 @@ export interface ApprovalDetail {
 export interface ApprovalActionPreview {
   approval_id: string;
   tool_id: string;
-  code: string;
-  code_bytes: number;
+  /** python_sandbox only — the exact code that would run. */
+  code?: string;
+  code_bytes?: number;
+  /** MP-4C decision 2 — memory_write / directive_write only. The exact content
+   *  that would be persisted, shown in full (the server refuses rather than
+   *  truncating, so what is rendered is exactly what would be written). */
+  kind?: "memory" | "directive";
+  content?: string;
+  content_chars?: number;
   args_hash: string;
   action_hash: string;
   purpose?: string;

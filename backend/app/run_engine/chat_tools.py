@@ -28,6 +28,7 @@ this module never starts a worker, invokes a provider, or resumes a run itself.
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -59,6 +60,15 @@ CHAT_TOOL_STATUS_REASONS = frozenset({
     "tool_marker_incomplete",    # stream ended before the [MCP_CALL] line closed
     "tool_cycle_limit",          # per-run MCP cycle ceiling reached — no new proposal
     "tool_continuation_failed",  # post-tool continuation could not be resumed
+    # MP-4C decision 2: model [SAVE_MEMORY]/[SAVE_DIRECTIVE] proposal outcomes.
+    "save_marker_malformed",     # captured save marker did not parse to one action
+    "save_blocked_sensitive",    # content refused BEFORE any proposal (never shown)
+    "save_content_too_large",    # content exceeded run_engine_memory_write_max_chars
+    # MP-4C decision 2 follow-up: duplicate-marker suppression outcomes.
+    "save_duplicate_approved",   # an unchanged proposal was already approved+saved
+    "save_duplicate_denied",     # an unchanged proposal was denied
+    "save_duplicate_expired",    # an unchanged proposal expired
+    "save_duplicate_unresolved",  # an unchanged proposal is pending/failed/unknown
     # MP-4C policy: real Python execution refused — no host-isolated runtime.
     "python_host_isolation_unavailable",
     # MP-4C pre-dispatch reservation: a broker client is wired but not ready.
@@ -88,6 +98,13 @@ def marker_max_bytes() -> int:
 
 def max_tool_cycles() -> int:
     return max(1, int(settings.run_chat_max_tool_cycles))
+
+
+def save_content_max_chars() -> int:
+    """Configured character ceiling for ONE model save body. Enforced BEFORE a
+    proposal exists, so a proposal can never bind content the approver preview
+    would have to truncate."""
+    return max(1, int(settings.run_engine_memory_write_max_chars))
 
 
 def tool_result_max_bytes() -> int:
@@ -124,6 +141,38 @@ def parse_one_mcp_call(captured_marker: str) -> Tuple[str, dict]:
     if not isinstance(name, str) or not name.startswith("mcp__") or not isinstance(args, dict):
         raise ChatToolMarkerError("tool_marker_malformed")
     return name, args
+
+
+# The two PERSISTENT-WRITE openers (MP-4C decision 2). Anchored + DOTALL: the
+# captured slice is ONE line, exactly as MarkerScanner guarantees. Neither
+# pattern accepts a nested '[' so a second marker can never be smuggled in.
+_SAVE_MEMORY_RE = re.compile(r"^\s*\[save_memory:\s*(?P<content>.*?)\]\s*$",
+                             re.IGNORECASE | re.DOTALL)
+_SAVE_DIRECTIVE_RE = re.compile(r"^\s*\[save_directive:\s*(?P<content>.*?)\]\s*$",
+                                re.IGNORECASE | re.DOTALL)
+
+
+def parse_one_save_marker(captured_marker: str) -> Tuple[str, dict]:
+    """Parse a confidentially-captured [SAVE_MEMORY: ...] / [SAVE_DIRECTIVE: ...]
+    slice into ("memory"|"directive", args). Raises ChatToolMarkerError with the
+    bounded reason save_marker_malformed. Never logs or echoes the content."""
+    if not isinstance(captured_marker, str):
+        raise ChatToolMarkerError("save_marker_malformed")
+    text = captured_marker.strip()
+    for kind, rx in (("memory", _SAVE_MEMORY_RE),
+                     ("directive", _SAVE_DIRECTIVE_RE)):
+        m = rx.match(text)
+        if m is None:
+            continue
+        content = (m.group("content") or "").strip()
+        if not content or "[" in content:
+            raise ChatToolMarkerError("save_marker_malformed")
+        if kind == "memory":
+            # "preference" is the same default category the legacy explicit
+            # memory path used; the write handler re-validates the enum.
+            return kind, {"content": content, "category": "preference"}
+        return kind, {"content": content}
+    raise ChatToolMarkerError("save_marker_malformed")
 
 
 def normalized_args_json(args: dict) -> str:

@@ -34,6 +34,7 @@ from app.approval.canonical import canonicalize
 from app.config import settings
 from app.models.models import Message, MessageRole, Run, RunStep, User, _utcnow_aware
 from app.run_engine.context import AuthContext
+from app.run_engine import save_markers as _save_markers
 from app.run_engine.engine import _normalize_key, _select_by_idem_scope, submit_run, transition_run
 from app.run_engine.errors import RunEngineError
 from app.run_engine.events import _try_append_event, validate_event_data
@@ -239,6 +240,14 @@ def build_chat_submission(
         if not isinstance(k, str) or isinstance(v, (dict, list, tuple, set)):
             raise ValueError("options must be a flat dict of scalars")
         opts[k] = v
+    resolved_mode = resolve_mode(mode)
+    # MP-4C decision 2 follow-up (Task 8): the durable session system prompt
+    # carries the memory-marker grammar ONLY while the server-owned memory-write
+    # flag is on, and only for the normal chat mode (deep-research / multi-agent
+    # submissions keep their own prompts). Flag OFF -> nothing is injected.
+    effective_system_prompt = system_prompt
+    if resolved_mode == "chat":
+        effective_system_prompt = _save_markers.compose_durable_system_prompt(system_prompt)
     return ChatRunSubmission(
         contract_version=CONTRACT_VERSION,
         session_id=int(session_id),
@@ -246,9 +255,9 @@ def build_chat_submission(
         image_url=(image_url or None),
         resolved_provider=((provider or "").strip() or None),
         resolved_model=((model or "").strip() or None),
-        resolved_mode=resolve_mode(mode),
-        system_prompt_hmac=_system_prompt_hmac(system_prompt),
-        resolved_system_prompt=(system_prompt if system_prompt else None),
+        resolved_mode=resolved_mode,
+        system_prompt_hmac=_system_prompt_hmac(effective_system_prompt),
+        resolved_system_prompt=(effective_system_prompt if effective_system_prompt else None),
         options=dict(sorted(opts.items())),
     )
 

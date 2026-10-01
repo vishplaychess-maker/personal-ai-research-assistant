@@ -143,11 +143,19 @@ def get_approval_action(
     from app.approval.action_preview import (
         ActionPreviewError,
         build_python_action_preview,
+        build_save_action_preview,
     )
+    from app.run_engine.save_approval_identity import SAVE_TOOL_IDS
 
     row = _owned_approval(db, approval_id, user)      # 404 for a non-owner
     try:
-        payload = build_python_action_preview(db, row, actor_user_id=user.id)
+        # MP-4C decision 2: the same ONE owner-only preview endpoint serves the
+        # approved-write surfaces. Anything that is neither python_sandbox nor a
+        # save tool fails closed inside the chosen builder.
+        if row.tool_id in SAVE_TOOL_IDS:
+            payload = build_save_action_preview(db, row, actor_user_id=user.id)
+        else:
+            payload = build_python_action_preview(db, row, actor_user_id=user.id)
     except ActionPreviewError as exc:
         status = 404 if exc.reason == "not_found" else 409
         raise HTTPException(status_code=status,

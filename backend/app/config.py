@@ -224,6 +224,38 @@ class Settings(BaseSettings):
     # + run_public_api_enabled + a configured RUN_IDEMPOTENCY_HMAC_KEY, the
     # same shape as run_deep_research_enabled's own prerequisite chain.
     run_multi_agent_enabled: bool = False
+    # Phase 1B.2R MP-5 (scheduler-on-engine, first slice) - OFF by default.
+    # When ON, the cron execution path submits through the canonical RunEngine
+    # (build_chat_submission -> create_chat_run) instead of running the legacy
+    # LangGraph workflow inline, then observes the run to a truthful outcome:
+    # succeeded / failed / timed_out / cancelled / denied, or pending_approval
+    # when the run parks awaiting a REAL user decision (never auto-approved),
+    # or pending when it is still queued/running after the wait deadline.
+    # Prerequisites: the durable flags above (run_engine_enabled,
+    # run_worker_enabled, run_chat_stream_enabled, run_public_api_enabled), a
+    # valid RUN_IDEMPOTENCY_HMAC_KEY, a running worker, AND a task row carrying
+    # auth_session_ref (captured at creation) - without it the job fails closed
+    # with reason scheduler_no_session_binding and creates no Run.
+    # This does NOT cut over /messages, delete legacy helpers, or add an
+    # approval authority: approvals stay with the MP-2 gateway/dispatch path.
+    run_scheduler_engine_enabled: bool = False
+    # Bounded wait for a scheduled run to reach a terminal state. A non-terminal
+    # observation (still running, or parked for approval) is reported truthfully,
+    # never as success.
+    run_scheduler_engine_wait_deadline_s: float = 180.0
+    # Phase 1B.2R MP-5 - REVERSIBLE non-streaming /messages cutover. OFF by
+    # default. When ON, a non-streaming chat submission whose session has NO
+    # unresolved approval is submitted through the canonical RunEngine (the
+    # nonstream adapter) and answered from the persisted assistant Message.
+    # Authority rule: while ANY approval is unresolved in the session (legacy
+    # citations marker OR canonical PendingApproval) NO new Run is started - a
+    # bounded, actionable parked response is returned instead, and the existing
+    # approval stays decidable ONLY through its own authority. Flag OFF is
+    # byte-for-byte the legacy behaviour.
+    messages_nonstream_engine_enabled: bool = False
+    # Bounded wait for the canonical non-streaming turn. A non-terminal
+    # observation is reported as still-running - never as an answer.
+    messages_nonstream_wait_deadline_s: float = 30.0
     # Fail-fast consistency guards, not deployer tuning knobs: the durable
     # multi-agent role graph is a FIXED 3-role, 3-provider-call sequence
     # (app.run_engine.multi_agent_orchestration.ROLE_ORDER /
@@ -324,6 +356,38 @@ class Settings(BaseSettings):
     run_engine_sandbox_timeout_s: int = 10
     # Captured stdout/stderr is truncated to this many bytes before sealing.
     run_engine_sandbox_max_output_bytes: int = 4000
+
+    # -- Phase 1B.2R MP-4C -- approval-gated model memory/directive writes --
+    # OFF by default. This flag authorizes ONLY the creation of a server-owned
+    # PROPOSAL for a model-emitted [SAVE_MEMORY]/[SAVE_DIRECTIVE] marker in the
+    # durable chat engine, plus the exact-once approved write through the
+    # existing approval gateway + DispatchRecord ledger. It NEVER authorizes a
+    # write without a consumed, owner-bound approval: with the flag off both
+    # markers keep their historical fail-closed behaviour (zero proposals, zero
+    # writes, bounded notice). Legacy marker processors stay fail-closed in
+    # EVERY configuration. Validated as >= 1.
+    run_engine_memory_write_enabled: bool = False
+    # Maximum UTF-8 CHARACTER length of ONE captured save body. A larger body
+    # fails closed (save_content_too_large) with NO proposal created, and the
+    # approver preview refuses rather than truncating, so an approver always
+    # sees the ENTIRE content that would be written. Validated as >= 1.
+    run_engine_memory_write_max_chars: int = 2000
+
+    # -- Phase 1B.2R MP-4C -- approval-gated model memory/directive writes --
+    # OFF by default. This flag authorizes ONLY the creation of a server-owned
+    # PROPOSAL for a model-emitted [SAVE_MEMORY]/[SAVE_DIRECTIVE] marker in the
+    # durable chat engine, plus the exact-once approved write through the
+    # existing approval gateway + DispatchRecord ledger. It NEVER authorizes a
+    # write without a consumed, owner-bound approval: with the flag off both
+    # markers keep their historical fail-closed behaviour (zero proposals, zero
+    # writes, bounded notice). Legacy marker processors stay fail-closed in
+    # EVERY configuration. Validated as >= 1.
+    run_engine_memory_write_enabled: bool = False
+    # Maximum UTF-8 CHARACTER length of ONE captured save body. A larger body
+    # fails closed (save_content_too_large) with NO proposal created, and the
+    # approver preview refuses rather than truncating, so an approver always
+    # sees the ENTIRE content that would be written. Validated as >= 1.
+    run_engine_memory_write_max_chars: int = 2000
 
     # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
     # OFF by default. When on, POST /api/terminal/execute streams the output
@@ -566,6 +630,8 @@ class Settings(BaseSettings):
             "run_engine_sandbox_max_code_bytes",
             "run_engine_sandbox_timeout_s",
             "run_engine_sandbox_max_output_bytes",
+            # Phase 1B.2R MP-4C -- approval-gated memory/directive write bound.
+            "run_engine_memory_write_max_chars",
             "run_worker_web_concurrency",
             "run_worker_shutdown_grace_s",
             "run_worker_backoff_min_s",

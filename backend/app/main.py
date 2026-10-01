@@ -1056,6 +1056,49 @@ def _verify_run_engine_schema():
     logger.info("run-engine schema verified (Phase 1B.2R MP-0)")
 
 
+def _migrate_scheduled_tasks_mp5():
+    """MP-5 scheduler-on-engine: bind a scheduled task to the login family that
+    created it. Additive, idempotent, dialect-agnostic (no data rewrite).
+
+    Nullable on purpose: rows created before this slice keep NULL and the engine
+    path FAILS CLOSED for them instead of inventing a binding. Guarded ALTER
+    mirrors ``_migrate_approval_domain_1b2``.
+    """
+    inspector = inspect(engine)
+    if "scheduled_tasks" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"] for c in inspector.get_columns("scheduled_tasks")}
+    with engine.begin() as conn:
+        for col, ddl in (
+            ("auth_session_ref",
+             "ALTER TABLE scheduled_tasks ADD COLUMN auth_session_ref VARCHAR(64)"),
+            ("tenant_id",
+             "ALTER TABLE scheduled_tasks ADD COLUMN tenant_id VARCHAR(64)"),
+            ("pending_fire_key",
+             "ALTER TABLE scheduled_tasks ADD COLUMN pending_fire_key VARCHAR(80)"),
+        ):
+            if col not in cols:
+                conn.execute(sa_text(ddl))
+
+
+def _migrate_pending_approvals_content_hash():
+    """MP-4C decision 2 follow-up - nullable, indexed content hash on
+    ``pending_approvals`` for duplicate-marker suppression. Additive,
+    idempotent, dialect-agnostic. Stores a sha256 hex DIGEST only (never the
+    marker content)."""
+    inspector = inspect(engine)
+    if "pending_approvals" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"] for c in inspector.get_columns("pending_approvals")}
+    with engine.begin() as conn:
+        if "content_hash" not in cols:
+            conn.execute(sa_text(
+                "ALTER TABLE pending_approvals ADD COLUMN content_hash VARCHAR(80)"))
+        conn.execute(sa_text(
+            "CREATE INDEX IF NOT EXISTS ix_pending_approvals_content_hash "
+            "ON pending_approvals (content_hash)"))
+
+
 def _migrate_database():
     """Add new columns to existing tables without losing data.
 
@@ -1080,10 +1123,17 @@ def _migrate_database():
     # Approval gateway (Phase 1B.2): dialect-agnostic, additive, idempotent.
     _migrate_approval_domain_1b2()
 
+    # MP-4C decision 2 follow-up: duplicate-marker suppression hash.
+    _migrate_pending_approvals_content_hash()
+
     # Durable run engine (Phase 1B.2R MP-0): dialect-agnostic, additive,
     # idempotent — 5 new tables only, no ALTER of any existing table.
     _migrate_run_engine()
     _verify_run_engine_schema()
+
+    # MP-5 scheduler-on-engine (first slice): nullable binding columns on
+    # scheduled_tasks. Additive, idempotent, dialect-agnostic.
+    _migrate_scheduled_tasks_mp5()
 
     if engine.dialect.name != "sqlite":
         logger.info(
