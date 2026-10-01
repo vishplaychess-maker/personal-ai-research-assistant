@@ -115,6 +115,13 @@ DUPLICATE_NOTICE_TEMPLATE = "Already saved knowledge from %s - skipped re-ingest
 TRUNCATION_NOTICE = ("The transcript was longer than the configured limit and "
                      "was truncated before extraction.")
 SAVED_NOTICE_TEMPLATE = "Saved %d facts from %s."
+#: The ONE notice shown to the user when an attempt produced NO saved knowledge
+#: and was not merely a duplicate. Fixed template: it never echoes transcript
+#: text, the upstream error, or a reason code — the specific status slug stays on
+#: the result object / logs for operators. Surfaced so a pasted link that could
+#: not be processed is never a SILENT no-op the user has to guess about.
+INGEST_FAILED_NOTICE = ("I could not process the knowledge from that video. "
+                        "The chat will continue normally.")
 
 _TRANSCRIPT_UNAVAILABLE = {
     "no_transcript": NO_TRANSCRIPT_NOTICE,
@@ -527,16 +534,37 @@ def _load_transcript(url: str, video_id: str, fetch: Optional[Callable]):
 
 
 def context_line(result: YouTubeIngestResult) -> Optional[str]:
-    """The bounded system-context line prepended for the SAME turn, so the model
-    can reference what was just saved. Returns None when nothing was saved.
+    """The bounded system-context line prepended for the SAME turn.
 
-    Contains the notice (counts + public title/url) and NEVER transcript text.
+    Returns ``None`` ONLY when there is genuinely nothing to say: no ingest was
+    attempted at all (``result is None`` — the flag is off, or the message held
+    no supported YouTube URL). In that case the caller must behave exactly as
+    before this feature: no context line, no notice.
+
+    Every OTHER outcome yields a bounded line, so a pasted link is never a
+    silent no-op:
+
+      * facts saved        -> the saved confirmation (+ any truncation note)
+      * duplicate source   -> the "already saved" notice
+      * anything else      -> ``INGEST_FAILED_NOTICE`` (transcript unavailable,
+                              extraction failed/quota, or nothing persistable)
+
+    The line contains counts and the video's own PUBLIC title/url only — never
+    transcript text, chunk text, extracted facts, or an upstream error message.
     """
-    if result is None or not result.saved:
+    if result is None:
         return None
-    return ("[youtube_ingest] " + result.notice +
-            " Treat the saved knowledge as background facts about the linked "
-            "video; do not claim to have watched it.")
+    body = result.notice if result.saved or result.status == STATUS_DUPLICATE \
+        else INGEST_FAILED_NOTICE
+    if not body:
+        # A result that carries no notice at all still must not be silent.
+        body = INGEST_FAILED_NOTICE
+    if result.saved:
+        return ("[youtube_ingest] " + body +
+                " Treat the saved knowledge as background facts about the linked "
+                "video; do not claim to have watched it.")
+    return ("[youtube_ingest] " + body +
+            " Tell the user this plainly and answer their message normally.")
 
 
 __all__ = [
@@ -546,7 +574,8 @@ __all__ = [
     "MAX_FACTS_PER_CHUNK", "MAX_SEGMENTS", "EXTRACTION_SYSTEM_PROMPT",
     "NO_TRANSCRIPT_NOTICE", "FETCH_FAILED_NOTICE", "EXTRACTION_FAILED_NOTICE",
     "NO_FACTS_NOTICE", "DUPLICATE_NOTICE_TEMPLATE", "TRUNCATION_NOTICE",
-    "SAVED_NOTICE_TEMPLATE", "YouTubeIngestResult", "ingest_enabled",
+    "SAVED_NOTICE_TEMPLATE", "INGEST_FAILED_NOTICE", "YouTubeIngestResult",
+    "ingest_enabled",
     "detect_youtube_url", "apply_char_limit", "chunk_text", "parse_facts",
     "build_notice", "fetch_oembed_metadata", "ingest_message_youtube",
     "context_line",

@@ -542,14 +542,68 @@ def test_exception_messages_are_never_logged(db, monkeypatch, caplog):
     assert VID in blob
 
 
-def test_context_line_is_absent_unless_facts_were_saved():
-    unavailable = yt.YouTubeIngestResult(status=yt.STATUS_TRANSCRIPT_UNAVAILABLE,
-                                         notice=yt.NO_TRANSCRIPT_NOTICE)
-    assert yt.context_line(unavailable) is None
+def test_context_line_is_none_only_when_no_ingest_was_attempted():
+    """`None` means "nothing to say" — the flag was off or there was no link.
+
+    EVERY attempted-but-unsuccessful ingest must produce a line instead, so a
+    pasted link is never a silent no-op."""
+    assert yt.context_line(None) is None
+
     saved = yt.YouTubeIngestResult(status=yt.STATUS_SAVED, facts_saved=2,
                                    notice="Saved 2 facts from X.")
     line = yt.context_line(saved)
     assert line and "Saved 2 facts from X." in line
+
+    duplicate = yt.YouTubeIngestResult(
+        status=yt.STATUS_DUPLICATE, notice="Already saved knowledge from X.")
+    assert "Already saved knowledge from X." in yt.context_line(duplicate)
+
+
+@pytest.mark.parametrize("status,notice", [
+    (yt.STATUS_TRANSCRIPT_UNAVAILABLE, yt.FETCH_FAILED_NOTICE),
+    (yt.STATUS_TRANSCRIPT_UNAVAILABLE, yt.NO_TRANSCRIPT_NOTICE),
+    (yt.STATUS_EXTRACTION_FAILED, yt.EXTRACTION_FAILED_NOTICE),
+    (yt.STATUS_EXTRACTION_FAILED, yt.NO_FACTS_NOTICE),
+    (yt.STATUS_SAVE_FAILED, ""),
+])
+def test_failed_ingest_yields_the_exact_bounded_notice(status, notice):
+    """The UX gap: a failed ingest must NOT be silent. The user-facing notice is
+    the ONE fixed template — it never echoes a reason code or upstream text."""
+    result = yt.YouTubeIngestResult(status=status, notice=notice, url=URL,
+                                    video_id=VID)
+    assert result.saved is False
+    line = yt.context_line(result)
+    assert line is not None, "a failed ingest must not be silent"
+    assert ("I could not process the knowledge from that video. "
+            "The chat will continue normally.") in line
+    # ...and it carries no reason code, transcript text, or exception text.
+    for leak in ("fetch_failed", "no_transcript", "extraction_failed", "save_failed",
+                 "ProviderRateLimited", "neuron", "784"):
+        assert leak not in line
+
+
+def test_fetch_error_surfaces_the_notice_through_the_durable_path(eng, db, monkeypatch):
+    """End to end through the real submission path: a transcript FETCH error must
+    land the bounded notice in the sealed context snapshot and the rendered
+    envelope — not vanish."""
+    _patch_no_retrieval(monkeypatch)
+    _patch_transcript_fetch(monkeypatch, error=RuntimeError("private video"))
+    monkeypatch.setattr(settings, "youtube_ingest_enabled", True)
+
+    ctx = make_ctx(db, user_id=7)
+    run, _created = ms.resolve_and_submit(
+        db, ctx, session_id=1, message="summarise %s" % URL,
+        idempotency_key=uuid.uuid4().hex)
+
+    assert db.query(Memory).count() == 0, "a fetch error must save nothing"
+    snapshot = chat_stream.read_context_snapshot(db, run, _first_step(db, run.id))
+    notice = snapshot["youtube_ingest_notice"]
+    assert notice is not None, "the failure notice must reach the snapshot"
+    assert yt.INGEST_FAILED_NOTICE in notice
+    assert "private video" not in notice
+
+    envelope = chat_stream.render_context_envelope(snapshot)
+    assert yt.INGEST_FAILED_NOTICE in envelope
 
 
 # ── durable-path wiring ───────────────────────────────────────────────
