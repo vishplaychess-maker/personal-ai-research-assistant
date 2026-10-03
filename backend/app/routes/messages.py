@@ -47,38 +47,7 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchS
     return session
 
 
-# ── Terminal approval helpers ─────────────────────────────
-
-
-def _check_pending_approval(db: Session, session_id: int) -> Optional[dict]:
-    """Check if there's a pending terminal approval for this session.
-
-    Looks at the most recent assistant message for the approval marker
-    stored in the citations JSON field.
-    """
-    if not settings.enable_terminal_tool:
-        return None
-
-    last_assistant = (
-        db.query(Message)
-        .filter(
-            Message.session_id == session_id,
-            Message.role == MessageRole.assistant,
-        )
-        .order_by(Message.created_at.desc())
-        .first()
-    )
-    if not last_assistant or not last_assistant.citations:
-        return None
-
-    try:
-        meta = json.loads(last_assistant.citations)
-        if isinstance(meta, dict) and meta.get("pending_approval"):
-            return meta
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    return None
+# ── Approval parking helpers ──────────────────────────────
 
 
 def _active_canonical_run(db: Session, session_id: int, user_id: int):
@@ -92,19 +61,14 @@ def _active_canonical_run(db: Session, session_id: int, user_id: int):
             .order_by(Run.created_at.desc()).first())
 
 
-def _parked_response(session_id: int, *, legacy: bool,
+def _parked_response(session_id: int, *,
                      approval_id: Optional[str] = None):
     # Bounded actionable parked response. Starts NO run and writes NO marker.
-    # Reuses the LEGACY parked response model so an already-open or older client
-    # still shows a message, plus an optional canonical approval id.
-    if legacy:
-        text = ("This session has an unresolved approval from the earlier flow. "
-                "Answer that request with yes or no to decide it. No new "
-                "request was started.")
-    else:
-        text = ("An approval is waiting for your decision. Decide it in the "
-                "approvals panel (or POST /api/approvals/<id>/approve|deny). "
-                "No new request was started.")
+    # Reuses the response model an already-open or older client understands,
+    # plus the ONE canonical approval id.
+    text = ("An approval is waiting for your decision. Decide it in the "
+            "approvals panel (or POST /api/approvals/<id>/approve|deny). "
+            "No new request was started.")
     return TerminalApprovalResponse(pending_command="", approval_message=text,
                                     session_id=session_id,
                                     approval_id=approval_id)
@@ -128,18 +92,11 @@ def _nonstream_key(db: Session, session_id: int, message: str) -> str:
 
 def _engine_cutover_gate(db: Session, session, *, payload, current_user, ctx,
                          idempotency_key: Optional[str] = None):
-    # Authority gate for the REVERSIBLE canonical cutover. Returns a response the
-    # canonical side owns, or None when the message is a legacy-marker DECISION
-    # that the legacy branch must perform.
+    # Authority gate for the REVERSIBLE canonical cutover. Returns the response
+    # the canonical side owns. The legacy citations-marker approval encoding has
+    # been RETIRED, so there is no longer a legacy decision to drain.
     from app.config import settings as _settings
     from app.run_engine import nonstream as _ns
-
-    legacy_pending = _check_pending_approval(db, session.id)
-
-    if legacy_pending is not None:
-        if _is_approval_response(payload.message) is not None:
-            return None          # legacy branch performs the decision (drain)
-        return _parked_response(session.id, legacy=True)
 
     outcome = _ns.execute_chat_sync(
         db, ctx, session=session, message=payload.message,
@@ -173,8 +130,7 @@ def _engine_cutover_gate(db: Session, session, *, payload, current_user, ctx,
             memories_used=False, memory_extraction=None)
 
     if outcome.status == _ns.PENDING_APPROVAL:
-        return _parked_response(session.id, legacy=False,
-                                approval_id=outcome.approval_id)
+        return _parked_response(session.id, approval_id=outcome.approval_id)
 
     if outcome.status == _ns.PENDING:
         raise HTTPException(
@@ -192,19 +148,6 @@ def _engine_cutover_gate(db: Session, session, *, payload, current_user, ctx,
     raise HTTPException(
         status_code=502,
         detail="The run did not succeed (%s)." % (outcome.reason or outcome.status))
-
-
-def _is_approval_response(message: str) -> Optional[bool]:
-    """Check if a user message is an approval/denial response.
-
-    Returns True for approval, False for denial, None if not recognized.
-    """
-    normalized = message.strip().lower()
-    if normalized in ("yes", "y", "approve", "approved", "ok"):
-        return True
-    if normalized in ("no", "n", "deny", "denied", "cancel"):
-        return False
-    return None
 
 
 # ── List messages ─────────────────────────────────────────
@@ -248,10 +191,9 @@ def create_message(
     """
     Send a user message and get an AI response via the LangGraph workflow.
 
-    Supports terminal command approval flow:
-      - If a previous assistant message has a pending approval, the user's
-        message is treated as an approval/denial response.
-      - The workflow is resumed with the user's decision.
+    Approvals are owned by the canonical path (Persisted PendingApproval rows
+    + the approvals API): this endpoint decides no approval itself, and the
+    legacy citations-marker approval encoding has been RETIRED.
     """
     session = _get_session_or_404(db, session_id, current_user.id)
 
@@ -261,7 +203,7 @@ def create_message(
     # different kind. This is why the check is NOT inside the flag branch.
     parked = _active_canonical_run(db, session.id, current_user.id)
     if parked is not None:
-        return _parked_response(session.id, legacy=False,
+        return _parked_response(session.id,
                                 approval_id=parked.pending_approval_id)
 
     from app.config import settings as _settings
@@ -273,112 +215,24 @@ def create_message(
         if gated is not None:
             return gated
 
-    # Check for pending terminal approval
-    pending = _check_pending_approval(db, session.id)
-    approval_decision = _is_approval_response(payload.message) if pending else None
+    # ── Normal message flow ───────────────────────────────
+    user_msg = Message(
+        session_id=session.id,
+        role=MessageRole.user,
+        content=payload.message,
+        image_url=payload.image_url,
+    )
+    db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
 
-    user_msg = None  # Will be set for normal (non-approval) messages
-
-    if pending and approval_decision is not None:
-        # ── Resume workflow with approval/denial ────────────
-        original_user_input = pending.get("original_user_input", payload.message)
-        resume_value = "yes" if approval_decision else "no"
-
-        logger.info(
-            "Resuming workflow for session %d with approval=%s",
-            session.id, resume_value,
-        )
-
-        result = run_research_workflow(
-            session_id=session.id,
-            user_input=original_user_input,
-            db=db,
-            user_id=current_user.id,
-            resume_from=resume_value,
-        )
-
-        # Save the user's approval/denial message
-        user_msg = Message(
-            session_id=session.id,
-            role=MessageRole.user,
-            content=payload.message,
-        )
-        db.add(user_msg)
-        db.commit()
-        db.refresh(user_msg)
-
-    elif pending and approval_decision is None:
-        # ── Non-approval message while approval pending ──────
-        # Treat as denial
-        original_user_input = pending.get("original_user_input", payload.message)
-        logger.info(
-            "Non-approval message in session %d, treating as denial",
-            session.id,
-        )
-
-        user_msg = Message(
-            session_id=session.id,
-            role=MessageRole.user,
-            content=payload.message,
-        )
-        db.add(user_msg)
-        db.commit()
-        db.refresh(user_msg)
-
-        result = run_research_workflow(
-            session_id=session.id,
-            user_input=original_user_input,
-            db=db,
-            user_id=current_user.id,
-            resume_from="no",
-        )
-
-    else:
-        # ── Normal message flow ────────────────────────────
-        user_msg = Message(
-            session_id=session.id,
-            role=MessageRole.user,
-            content=payload.message,
-            image_url=payload.image_url,
-        )
-        db.add(user_msg)
-        db.commit()
-        db.refresh(user_msg)
-
-        result = run_research_workflow(
-            session_id=session.id,
-            user_input=payload.message,
-            db=db,
-            user_id=current_user.id,
-            image_url=payload.image_url,
-        )
-
-    # ── Handle approval response ──────────────────────────
-    if result.get("pending_approval"):
-        # The graph interrupted for terminal approval.
-        # The assistant message with the LLM's explanation was already saved
-        # inside generate_answer. Now update its citations with approval
-        # metadata so the next request can detect and resume it.
-        assistant_msg_id = result.get("assistant_message_id")
-        if assistant_msg_id:
-            assistant_msg = db.query(Message).filter(
-                Message.id == assistant_msg_id
-            ).first()
-            if assistant_msg:
-                approval_meta = json.dumps({
-                    "pending_approval": True,
-                    "pending_command": result.get("pending_command", ""),
-                    "original_user_input": payload.message,
-                })
-                assistant_msg.citations = approval_meta
-                db.commit()
-                db.refresh(assistant_msg)
-
-        return TerminalApprovalResponse(
-            pending_command=result.get("pending_command", ""),
-            approval_message=result.get("pending_approval", ""),
-            session_id=session.id,
-        )
+    result = run_research_workflow(
+        session_id=session.id,
+        user_input=payload.message,
+        db=db,
+        user_id=current_user.id,
+        image_url=payload.image_url,
+    )
 
     # ── Handle errors ─────────────────────────────────────
     if result.get("error"):

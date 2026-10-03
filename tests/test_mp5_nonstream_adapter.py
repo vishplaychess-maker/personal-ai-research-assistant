@@ -232,9 +232,9 @@ def test_route_uses_the_adapter_only_under_the_flag_gate():
     assert src.count("_ns.execute_chat_sync(") == 1
 
 
-def test_flag_off_retains_the_legacy_path():
-    """The declared default is OFF, and the legacy marker decision/flow is still
-    present and reachable after the (skipped) flag branch."""
+def test_flag_off_keeps_the_legacy_normal_flow_without_the_retired_encoding():
+    """The declared default is OFF; the flag-OFF route still uses the legacy
+    normal flow, and the RETIRED citations-marker approval encoding is gone."""
     from app.config import Settings
 
     assert Settings.model_fields["messages_nonstream_engine_enabled"].default is False
@@ -242,22 +242,21 @@ def test_flag_off_retains_the_legacy_path():
     from app.routes import messages as messages_route
 
     endpoint = inspect.getsource(messages_route.create_message)
-    assert "_check_pending_approval(db, session.id)" in endpoint
     assert "run_research_workflow(" in endpoint
-    assert "resume_from=" in endpoint
+    for retired in ("_check_pending_approval", "_is_approval_response", "resume_from="):
+        assert retired not in endpoint, retired
 
 
 def test_unresolved_canonical_approval_keeps_one_authority():
     """The canonical parked-run guard is FLAG-INDEPENDENT: it precedes the flag
-    branch and the legacy pending-approval check, returns the ONE canonical
-    approval id, and the route decides no approval itself."""
+    branch, returns the ONE canonical approval id, and the route decides no
+    approval itself. The legacy citations-marker encoding has been retired."""
     from app.routes import messages as messages_route
 
     endpoint = inspect.getsource(messages_route.create_message)
     canon_at = endpoint.index("_active_canonical_run(")
     flag_at = endpoint.index("messages_nonstream_engine_enabled")
-    legacy_at = endpoint.index("_check_pending_approval(db, session.id)")
-    assert canon_at < flag_at < legacy_at, "canonical guard must be hoisted, flag-independent"
+    assert canon_at < flag_at, "canonical guard must be hoisted, flag-independent"
 
     guard = inspect.getsource(messages_route._active_canonical_run)
     assert "WAITING_FOR_APPROVAL" in guard
@@ -265,7 +264,8 @@ def test_unresolved_canonical_approval_keeps_one_authority():
     assert "TerminalApprovalResponse(" in parked
 
     src = inspect.getsource(messages_route)
-    for banned in ("record_decision", "mirror_decision_signal", "consume_approval"):
+    for banned in ("record_decision", "mirror_decision_signal", "consume_approval",
+                   "_check_pending_approval", "_is_approval_response"):
         assert banned not in src, banned
     import app.routes.messages as _m
 

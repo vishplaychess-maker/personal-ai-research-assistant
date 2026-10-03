@@ -1,16 +1,15 @@
 """MP-5 reversible /messages cutover - authority rules.
 
-Authority rule under test: while ANY approval is unresolved in a session (legacy
-citations marker OR canonical PendingApproval) NO new Run is started; the
-existing approval stays decidable only through its own authority. Flag OFF is the
-legacy path. The canonical parked state here is CONSTRUCTED (a real
-PendingApproval row + a real approve/deny decision is covered by the MP-4C
-deny/approve suites); no claim is made that this file proves a real row.
+Authority rule under test: while a canonical PendingApproval is unresolved in a
+session NO new Run is started, and the approval stays decidable only through the
+approvals API. Flag OFF is the legacy normal path. The canonical parked state
+here is CONSTRUCTED (a real PendingApproval row + a real approve/deny decision is
+covered by the MP-4C deny/approve suites); no claim is made that this file proves
+a real row.
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -379,46 +378,3 @@ def test_flag_on_canonical_parked_blocks_new_runs_and_reports_the_approval(monke
         finally:
             db.close()
 
-
-def test_flag_on_legacy_marker_blocks_new_runs_but_keeps_its_decision(monkeypatch):
-    monkeypatch.setattr(settings, "messages_nonstream_engine_enabled", True)
-    from fastapi.testclient import TestClient
-    from app.main import app
-    import app.routes.messages as msg
-
-    calls = _bomb(monkeypatch)
-    with TestClient(app) as c:
-        uid, h = _login(c)
-        sid = _session(c, h)
-        db = SessionLocal()
-        try:
-            db.add(Message(session_id=sid, role=MessageRole.assistant,
-                           content="approve the command?",
-                           citations=json.dumps({"pending_approval": True,
-                                                 "original_user_input": "run x"})))
-            db.commit()
-        finally:
-            db.close()
-
-        blocked = c.post("/api/sessions/%d/messages" % sid, headers=h,
-                         json={"message": "what is the weather"})
-        assert blocked.status_code == 200, blocked.text[:300]
-        assert "unresolved approval" in blocked.json()["approval_message"]
-        assert blocked.json().get("approval_id") is None
-        assert calls == []
-
-        legacy = []
-        monkeypatch.setattr(msg, "run_research_workflow",
-                            lambda **kw: legacy.append(kw) or {"assistant_message_id": None})
-        decided = c.post("/api/sessions/%d/messages" % sid, headers=h,
-                         json={"message": "yes"})
-        assert decided.status_code in (200, 500), decided.text[:200]
-        assert len(legacy) == 1
-        assert legacy[0].get("resume_from") == "yes"     # its own authority
-        db = SessionLocal()
-        try:
-            # test.db is SHARED: scope by THIS user, not by session id alone
-            assert db.query(Run).filter(Run.session_id == sid,
-                                        Run.user_id == uid).count() == 0
-        finally:
-            db.close()
