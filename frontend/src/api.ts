@@ -239,6 +239,19 @@ export const API = {
       { method: "POST", body: form }
     );
   },
+  // Local Vision (ZERO API cost) — describe an image with a LOCAL Ollama model.
+  // Returns the bounded VisionResult: { status, description, notice, context }.
+  describeImage(file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{
+      status: string;
+      description: string | null;
+      notice: string;
+      context: string | null;
+    }>("/api/vision/describe", { method: "POST", body: form });
+  },
+
   deleteDocument(id: number) {
     return request<void>(`/api/documents/${id}`, { method: "DELETE" });
   },

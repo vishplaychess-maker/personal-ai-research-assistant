@@ -561,6 +561,34 @@ function App() {
     }, modeSnapshot);
   };
 
+  // Local Vision (ZERO API cost) — describe an attached image with the local
+  // Ollama model and surface the result via the shared transient notice.
+  // Fail-closed: a vision failure NEVER blocks attach/send.
+  const handleImageAttached = useCallback(async (file: File) => {
+    try {
+      const res = await API.describeImage(file);
+      if (res && res.status === "ok" && res.description) {
+        const text = res.description.length > 280
+          ? res.description.slice(0, 280).trimEnd() + "\u2026"
+          : res.description;
+        setAppNotice({ kind: "info", message: text, timeoutMs: 8000 });
+      } else {
+        setAppNotice({
+          kind: "warning",
+          message: (res && res.notice)
+            || "I could not analyze the image. The chat will continue normally.",
+          timeoutMs: 6000,
+        });
+      }
+    } catch {
+      setAppNotice({
+        kind: "warning",
+        message: "I could not analyze the image. The chat will continue normally.",
+        timeoutMs: 6000,
+      });
+    }
+  }, []);
+
   const handleRetry = useCallback(() => {
     if (!retryTarget || !activeSessionId || isStreaming) return;
     handleSend(retryTarget.image_url, retryTarget.message);
@@ -673,6 +701,7 @@ function App() {
         uploadError={uploadError}
         onDocumentUpload={handleDocumentUpload}
         onDeleteDocument={handleDeleteDocument}
+        onImageAttached={handleImageAttached}
         pendingToolApproval={pendingToolApproval}
         onApproveTool={handleToolApprove}
         onRejectTool={handleToolReject}

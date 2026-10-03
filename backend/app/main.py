@@ -79,6 +79,7 @@ from app.routes.terminal import router as terminal_router
 from app.routes.media import router as media_router
 from app.routes.approvals import router as approvals_router
 from app.routes.runs import router as runs_router
+from app.routes.vision import router as vision_router
 
 
 def _migrate_provider_encryption():
@@ -1515,6 +1516,7 @@ app.include_router(terminal_router)
 app.include_router(media_router)
 app.include_router(approvals_router)
 app.include_router(runs_router)  # Phase 1B.2R MP-3A — gated by run_public_api_enabled (404 when off)
+app.include_router(vision_router)  # Local Vision (ZERO API cost) — POST /api/vision/describe
 
 
 @app.get("/api/health")

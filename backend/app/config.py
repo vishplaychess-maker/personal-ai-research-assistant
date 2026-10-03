@@ -417,6 +417,26 @@ class Settings(BaseSettings):
     # never fails the ingest. Validated as a finite number > 0.
     youtube_ingest_oembed_timeout_s: float = 5.0
 
+    # ── Local Vision (ZERO API cost) — moondream via Ollama ─────────────
+    # OFF by default. When False an attached image is IGNORED by the local
+    # vision path entirely: no Ollama call, no context injection, no notice —
+    # plain chat behaviour, byte-for-byte identical to before this feature.
+    # When True, an attached image (JPEG / PNG / WebP, <= local_vision_max_bytes)
+    # is described by a LOCAL Ollama vision model. NO paid API is ever called.
+    # Fail-closed: every failure is a bounded notice; the chat never breaks.
+    local_vision_enabled: bool = False
+    # The local Ollama model used for image description. "moondream" is a small
+    # (~1.8B) CPU-friendly vision model that fits a 16GB RAM host with no GPU.
+    local_vision_model: str = "moondream"
+    # Hard cap on the raw image bytes accepted for a single description. A
+    # larger image fails closed (bounded notice), never truncated silently.
+    # Validated as >= 1.
+    local_vision_max_bytes: int = 5242880
+    # Wall-clock bound (seconds) for ONE local description call. A CPU-only
+    # moondream run can take tens of seconds; a timeout fails closed with a
+    # bounded notice. Validated as a finite number > 0.
+    local_vision_timeout_s: float = 60.0
+
     # ── In-app Terminal panel (dev tool, separate from agent HITL) ─
     # OFF by default. When on, POST /api/terminal/execute streams the output
     # of an allowlisted command (argv[0] must be in the list), run with
@@ -690,6 +710,8 @@ class Settings(BaseSettings):
             "youtube_ingest_max_chars",
             "youtube_ingest_chunk_size",
             "youtube_ingest_max_facts_per_video",
+            # Local Vision (ZERO API cost) — image byte cap.
+            "local_vision_max_bytes",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or value < 1:
@@ -715,6 +737,22 @@ class Settings(BaseSettings):
                 "youtube_ingest_chunk_size must not exceed "
                 "youtube_ingest_max_chars (a chunk larger than the whole "
                 "accepted transcript would make the chunk bound meaningless)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_local_vision_timeout(self) -> "Settings":
+        """Fail-fast on a nonsensical local-vision timeout (Local Vision,
+        ZERO API cost). The byte cap is covered by `_validate_approval_limits`;
+        the float timeout is not."""
+        import math
+
+        value = self.local_vision_timeout_s
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or math.isnan(value) or math.isinf(value) or value <= 0):
+            raise ValueError(
+                f"local_vision_timeout_s must be a finite number > 0 "
+                f"(got {value!r})"
             )
         return self
 

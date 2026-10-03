@@ -166,6 +166,10 @@ interface ChatAreaProps {
   onDocumentUpload?: (file: File) => void;
   onDeleteDocument?: (id: number) => void;
 
+  // Local Vision (ZERO API cost) — the raw File is handed up so the app can
+  // describe it via the local vision route (bounded notice on failure).
+  onImageAttached?: (file: File) => void;
+
   // Tool approval (MCP / terminal)
   pendingToolApproval?: { tool: string; args: any; server?: string } | null;
   onApproveTool?: () => void;
@@ -220,6 +224,7 @@ export function ChatArea({
   uploadError = null,
   onDocumentUpload,
   onDeleteDocument,
+  onImageAttached,
   pendingToolApproval = null,
   onApproveTool,
   onRejectTool,
@@ -330,6 +335,16 @@ export function ChatArea({
       return;
     }
     onDocumentUpload(file);
+  };
+
+  // Local Vision (ZERO API cost): preview the image and hand the raw File up.
+  const handleImageFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachedImage(reader.result as string);
+      onImageAttached?.(file);
+    };
+    reader.readAsDataURL(file);
   };
 
   // ── Drag and Drop ───────────────────────────
@@ -606,11 +621,7 @@ export function ChatArea({
                         id="image-upload-centered"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
-                          if (file) {
-                            const reader = new FileReader();
-                            reader.onload = () => setAttachedImage(reader.result as string);
-                            reader.readAsDataURL(file);
-                          }
+                          if (file) handleImageFile(file);
                           e.target.value = "";
                         }}
                         disabled={isStreaming || !!attachedImage}
@@ -975,11 +986,7 @@ export function ChatArea({
                     id="image-upload"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => setAttachedImage(reader.result as string);
-                        reader.readAsDataURL(file);
-                      }
+                      if (file) handleImageFile(file);
                       // Reset input so same file can be selected again
                       e.target.value = "";
                     }}

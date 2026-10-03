@@ -379,6 +379,32 @@ def prepare_chat_context(
         except Exception as exc:
             logger.warning("Deep research failed (non-fatal): %s", exc)
 
+    # 6c. Local Vision (ZERO API cost) — the SAME pre-model context pattern the
+    # YouTube ingest uses: describe an attached image with a LOCAL Ollama vision
+    # model and inject the result as UNTRUSTED context. Flag OFF (default) =>
+    # byte-for-byte unchanged. Fail-closed: any failure appends a bounded notice
+    # line instead, and nothing here can raise into the chat.
+    #
+    # The DURABLE /messages/stream path rejects image attachments with a bounded
+    # 422 before persistence (messages_stream.unsupported_mode_code), so a
+    # durable hook would be unreachable for an image message. The legacy path
+    # (the DEFAULT — run_messages_stream_durable_enabled=False) is the one that
+    # actually carries attachments, so the hook lives here.
+    if image_url and getattr(settings, "local_vision_enabled", False):
+        try:
+            from app.services.local_vision_service import (
+                context_line, decode_image_data_url, describe_image, notice_line,
+            )
+
+            raw = decode_image_data_url(image_url)
+            if raw is not None:
+                vision = describe_image(raw)
+                vision_context = context_line(vision) or notice_line(vision)
+                if vision_context:
+                    system_parts.append(vision_context)
+        except Exception as exc:  # noqa: BLE001 - vision must never break chat
+            logger.warning("Local vision failed (non-fatal): %s", type(exc).__name__)
+
     system_prompt = "\n\n".join(system_parts)
 
     # Per-user LLM provider settings (override global .env when set)
