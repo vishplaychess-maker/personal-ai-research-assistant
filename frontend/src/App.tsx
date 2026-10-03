@@ -65,8 +65,11 @@ function App() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showMediaGeneration, setShowMediaGeneration] = useState(false);
 
-  // Shareable Agent Card feedback (transient "copied" notice)
-  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  // Transient bottom-center notice — the project's existing toast idiom,
+  // first introduced for the Shareable Agent Card. ONE state (and one
+  // auto-dismiss effect) now drives every transient notice, including the
+  // first-class YouTube ingest toast.
+  const [appNotice, setAppNotice] = useState<{ kind: "info" | "warning"; message: string; timeoutMs: number } | null>(null);
 
   // Memory state
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -101,6 +104,14 @@ function App() {
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionListRequestRef = useRef(0);
+
+  // Auto-dismiss every transient notice. Centralised here so the Share Card
+  // feedback and the YouTube ingest toast share one mechanism.
+  useEffect(() => {
+    if (!appNotice) return;
+    const t = setTimeout(() => setAppNotice(null), appNotice.timeoutMs);
+    return () => clearTimeout(t);
+  }, [appNotice]);
 
   // ── Health polling ─────────────────────────────────────
 
@@ -233,13 +244,11 @@ function App() {
       const url = result.share_url || `${window.location.origin}/share/agents/${result.share_id}`;
       try {
         await navigator.clipboard.writeText(url);
-        setShareNotice("Share link copied to clipboard");
+        setAppNotice({ kind: "info", message: "Share link copied to clipboard", timeoutMs: 3500 });
       } catch {
-        setShareNotice("Share link created");
+        setAppNotice({ kind: "info", message: "Share link created", timeoutMs: 3500 });
       }
       setChatError(null);
-      // Auto-dismiss the notice after a short delay.
-      setTimeout(() => setShareNotice(null), 3500);
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "Share failed");
     }
@@ -491,6 +500,16 @@ function App() {
       onToken: () => {},
       onPlan: (steps) => setPlanSteps(steps),
       onAgentProgress: setAgentProgress,
+      onYoutubeIngest: (d) => {
+        // First-class ingest UX: info on success, warning otherwise, with the
+        // server's exact bounded notice (fixed template + public title).
+        // Auto-dismiss is handled by the shared appNotice effect.
+        setAppNotice({
+          kind: d.status === "success" ? "info" : "warning",
+          message: d.notice,
+          timeoutMs: d.status === "success" ? 4500 : 6000,
+        });
+      },
       onRunId: () => {},
       onApprovalRequired: (d) => {
         // MP-3C3C durable, redacted — open the informative approval dialog
@@ -733,10 +752,17 @@ function App() {
         <CitationPopup citation={selectedCitation} onClose={() => setSelectedCitation(null)} />
       )}
 
-      {/* Share notice */}
-      {shareNotice && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-full border border-white/10 bg-background/90 px-4 py-2 text-sm text-foreground shadow-lg backdrop-blur">
-          {shareNotice}
+      {/* Transient notice (Share Card feedback + YouTube ingest toast) */}
+      {appNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={"fixed bottom-6 left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-4 py-2 text-sm shadow-lg backdrop-blur " +
+            (appNotice.kind === "warning"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+              : "border-white/10 bg-background/90 text-foreground")}
+        >
+          {appNotice.message}
         </div>
       )}
 

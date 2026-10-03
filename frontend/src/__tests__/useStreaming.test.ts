@@ -132,6 +132,48 @@ describe("useStreaming", () => {
     expect(onStart).toHaveBeenCalledOnce();
   });
 
+  it("surfaces the bounded youtube_ingest event via onYoutubeIngest", async () => {
+    const mockResponse = createMockSSEResponse([
+      'event: start\ndata: {"session_id":1}\n\n',
+      'event: youtube_ingest\ndata: {"status":"success","notice":"Saved 1 facts from River Documentary.","source_title":"River Documentary","facts_saved":1}\n\n',
+      'event: complete\ndata: {"message_id":42,"citations":[]}\n\n',
+    ]);
+    vi.mocked(fetch).mockResolvedValue(mockResponse);
+
+    const { result } = renderHook(() => useStreaming());
+    const onYoutubeIngest = vi.fn();
+
+    await act(async () => {
+      result.current.startStream(mockSessionId, mockMessage, { onYoutubeIngest });
+    });
+
+    expect(onYoutubeIngest).toHaveBeenCalledOnce();
+    expect(onYoutubeIngest).toHaveBeenCalledWith({
+      status: "success",
+      notice: "Saved 1 facts from River Documentary.",
+      sourceTitle: "River Documentary",
+      factsSaved: 1,
+    });
+  });
+
+  it("ignores a youtube_ingest event with an unknown status", async () => {
+    const mockResponse = createMockSSEResponse([
+      'event: start\ndata: {"session_id":1}\n\n',
+      'event: youtube_ingest\ndata: {"status":"bogus","notice":"x","source_title":null,"facts_saved":0}\n\n',
+      'event: complete\ndata: {"message_id":42,"citations":[]}\n\n',
+    ]);
+    vi.mocked(fetch).mockResolvedValue(mockResponse);
+
+    const { result } = renderHook(() => useStreaming());
+    const onYoutubeIngest = vi.fn();
+
+    await act(async () => {
+      result.current.startStream(mockSessionId, mockMessage, { onYoutubeIngest });
+    });
+
+    expect(onYoutubeIngest).not.toHaveBeenCalled();
+  });
+
   it("accumulates tokens in correct order", async () => {
     const mockResponse = createMockSSEResponse([
       "event: start\ndata: {\"session_id\":1}\n\n",

@@ -567,6 +567,72 @@ def context_line(result: YouTubeIngestResult) -> Optional[str]:
             " Tell the user this plainly and answer their message normally.")
 
 
+# ── bounded SSE event projection (first-class frontend toast) ────────
+#
+# The ONE mapping from a truthful ingest outcome to the bounded wire payload
+# the frontend consumes. status is a closed set; notice is a fixed template
+# (the same bounded string context_line/build_notice already use);
+# source_title is the video's own PUBLIC title. NEVER transcript text,
+# chunk text, extracted fact content, an upstream error message, or a reason
+# code. Returns None when there is nothing to say (flag off / no URL / an
+# unknown outcome), so the caller emits no event at all.
+SSE_STATUS_SUCCESS = "success"
+SSE_STATUS_SKIPPED_DUPLICATE = "skipped_duplicate"
+SSE_STATUS_FAILED = "failed"
+
+#: Owner-approved status mapping (PRE-APPROVED): saved -> success,
+#: duplicate -> skipped_duplicate, every unavailable/unsuccessful outcome ->
+#: failed. disabled/no_url are absent on purpose: the flag being off or the
+#: message carrying no link must emit NOTHING.
+_SSE_EVENT_STATUS = {
+    STATUS_SAVED: SSE_STATUS_SUCCESS,
+    STATUS_DUPLICATE: SSE_STATUS_SKIPPED_DUPLICATE,
+    STATUS_TRANSCRIPT_UNAVAILABLE: SSE_STATUS_FAILED,
+    STATUS_EXTRACTION_FAILED: SSE_STATUS_FAILED,
+    STATUS_SAVE_FAILED: SSE_STATUS_FAILED,
+}
+
+#: Defensive cap on the public title echoed on the wire (oEmbed metadata is
+#: external input, however public it is).
+SSE_SOURCE_TITLE_MAX = 200
+
+
+def sse_event(result: Optional[YouTubeIngestResult]) -> Optional[dict]:
+    """Project a :class:`YouTubeIngestResult` into the bounded
+    youtube_ingest SSE payload, or None when nothing should be shown.
+
+    The notice is the ALREADY-bounded fixed-template string from
+    :func:`build_notice` (the same one :func:`context_line` uses), with the
+    failed-ingest template as the only fallback. Nothing here ever reads,
+    copies or re-derives transcript / chunk / fact content."""
+    if result is None:
+        return None
+    status = _SSE_EVENT_STATUS.get(result.status)
+    if status is None:
+        return None
+    if result.saved or result.status == STATUS_DUPLICATE:
+        notice = result.notice
+    else:
+        notice = INGEST_FAILED_NOTICE
+    if not isinstance(notice, str) or not notice:
+        notice = INGEST_FAILED_NOTICE
+    title = result.source_title
+    if not isinstance(title, str) or not title.strip():
+        title = None
+    else:
+        title = title.strip()[:SSE_SOURCE_TITLE_MAX]
+    try:
+        facts_saved = max(0, int(result.facts_saved))
+    except (TypeError, ValueError):
+        facts_saved = 0
+    return {
+        "status": status,
+        "notice": notice,
+        "source_title": title,
+        "facts_saved": facts_saved,
+    }
+
+
 __all__ = [
     "STATUS_DISABLED", "STATUS_NO_URL", "STATUS_TRANSCRIPT_UNAVAILABLE",
     "STATUS_EXTRACTION_FAILED", "STATUS_SAVED", "STATUS_DUPLICATE",
@@ -578,5 +644,7 @@ __all__ = [
     "ingest_enabled",
     "detect_youtube_url", "apply_char_limit", "chunk_text", "parse_facts",
     "build_notice", "fetch_oembed_metadata", "ingest_message_youtube",
-    "context_line",
+    "context_line", "sse_event",
+    "SSE_STATUS_SUCCESS", "SSE_STATUS_SKIPPED_DUPLICATE", "SSE_STATUS_FAILED",
+    "SSE_SOURCE_TITLE_MAX",
 ]

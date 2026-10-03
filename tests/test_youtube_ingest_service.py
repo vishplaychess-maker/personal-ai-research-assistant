@@ -18,6 +18,7 @@ Invariants pinned here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -31,7 +32,7 @@ from app.run_engine import chat_stream
 from app.run_engine import messages_stream as ms
 from app.services import youtube_ingest_service as yt
 from app.tools.youtube_transcript_context import STATUS_FETCH_FAILED, STATUS_NO_TRANSCRIPT
-from tests.run_engine_helpers import ensure_user, make_ctx, mk_engine, mk_session
+from tests.run_engine_helpers import ensure_user, make_ctx, mk_engine, mk_factory, mk_session
 
 _HMAC = "youtube-ingest-unit-test-hmac-key-0123456789"
 
@@ -762,3 +763,174 @@ def test_youtube_transcript_api_is_pinned_in_requirements():
     assert lines, "youtube-transcript-api must be declared"
     assert any(ln.startswith("youtube-transcript-api==") for ln in lines), \
         "the dependency must be pinned: %r" % lines
+
+# ── first-class youtube_ingest SSE frame (UX polish) ──────────────────
+
+
+class _StreamReq:
+    """Minimal request for the durable wire adapter (never disconnects)."""
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+def _wire_events(frames):
+    """[(event_name, data_dict), ...] parsed from legacy-wire frames."""
+    out = []
+    for frame in frames:
+        name = None
+        data = {}
+        for line in frame.split("\n"):
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: "):
+                try:
+                    data = json.loads(line[6:])
+                except (ValueError, TypeError):
+                    data = {}
+        if name:
+            out.append((name, data))
+    return out
+
+
+async def _drain_frames(gen, *, limit=3, timeout_s=2.0):
+    """Pull up to `limit` frames, never blocking longer than `timeout_s`."""
+    frames = []
+    try:
+        while len(frames) < limit:
+            try:
+                frames.append(await asyncio.wait_for(gen.__anext__(), timeout=timeout_s))
+            except (asyncio.TimeoutError, StopAsyncIteration):
+                break
+    finally:
+        await gen.aclose()
+    return frames
+
+
+@pytest.mark.parametrize("status,expected", [
+    (yt.STATUS_SAVED, yt.SSE_STATUS_SUCCESS),
+    (yt.STATUS_DUPLICATE, yt.SSE_STATUS_SKIPPED_DUPLICATE),
+    (yt.STATUS_TRANSCRIPT_UNAVAILABLE, yt.SSE_STATUS_FAILED),
+    (yt.STATUS_EXTRACTION_FAILED, yt.SSE_STATUS_FAILED),
+    (yt.STATUS_SAVE_FAILED, yt.SSE_STATUS_FAILED),
+])
+def test_sse_event_status_mapping_is_the_approved_closed_set(status, expected):
+    result = yt.YouTubeIngestResult(
+        status=status, source_title="River Documentary",
+        facts_saved=2 if status == yt.STATUS_SAVED else 0,
+        notice="Saved 2 facts from River Documentary." if status == yt.STATUS_SAVED else "")
+    ev = yt.sse_event(result)
+    assert ev is not None
+    assert ev["status"] == expected
+    assert set(ev) == {"status", "notice", "source_title", "facts_saved"}
+
+
+def test_sse_event_is_none_when_nothing_was_attempted():
+    """Flag off / no URL must emit NO event at all - never an empty toast."""
+    assert yt.sse_event(None) is None
+    assert yt.sse_event(yt.YouTubeIngestResult(status=yt.STATUS_DISABLED)) is None
+    assert yt.sse_event(yt.YouTubeIngestResult(status=yt.STATUS_NO_URL)) is None
+
+
+def test_sse_event_failure_notice_never_leaks_reason_or_upstream():
+    result = yt.YouTubeIngestResult(
+        status=yt.STATUS_TRANSCRIPT_UNAVAILABLE, url=URL, video_id=VID,
+        transcript_status="fetch_failed", notice="")
+    ev = yt.sse_event(result)
+    assert ev["status"] == yt.SSE_STATUS_FAILED
+    assert ev["notice"] == yt.INGEST_FAILED_NOTICE
+    assert ev["facts_saved"] == 0
+    assert ev["source_title"] is None
+    blob = json.dumps(ev)
+    for leak in ("fetch_failed", "no_transcript", "extraction_failed",
+                 "save_failed", "private video"):
+        assert leak not in blob
+
+
+def test_stream_yields_youtube_ingest_frame_on_success(eng, db, monkeypatch):
+    """The frame the success toast is built from: exact bounded payload."""
+    _patch_no_retrieval(monkeypatch)
+    fact_text = SECOND_FACT
+    _patch_transcript_fetch(monkeypatch, segments=_segments("unrelated narration text"))
+    monkeypatch.setattr(settings, "youtube_ingest_enabled", True)
+    monkeypatch.setattr(yt, "fetch_oembed_metadata",
+                        lambda url, **k: {"title": "River Documentary", "channel": "Geo",
+                                          "language": "en"})
+    monkeypatch.setattr(yt, "_default_generate_json",
+                        lambda messages, system_prompt: _fact_json(fact_text))
+
+    ctx = make_ctx(db, user_id=7)
+    run, _created = ms.resolve_and_submit(
+        db, ctx, session_id=1, message="what is this about %s" % URL,
+        idempotency_key=uuid.uuid4().hex)
+
+    frames = asyncio.run(_drain_frames(
+        ms.stream_legacy_wire(_StreamReq(), mk_factory(eng), ctx, run.id, after_seq=0),
+        limit=2))
+    names = [n for n, _ in _wire_events(frames)]
+    assert names[:2] == ["start", "youtube_ingest"]
+    payload = [d for n, d in _wire_events(frames) if n == "youtube_ingest"][0]
+    assert payload == {
+        "status": "success",
+        "notice": "Saved 1 facts from River Documentary.",
+        "source_title": "River Documentary",
+        "facts_saved": 1,
+    }
+    assert fact_text not in json.dumps(payload)
+
+
+def test_stream_yields_youtube_ingest_frame_on_failure(eng, db, monkeypatch):
+    """A failed ingest is a WARNING toast, never a silent no-op."""
+    _patch_no_retrieval(monkeypatch)
+    _patch_transcript_fetch(monkeypatch, error=RuntimeError("private video"))
+    monkeypatch.setattr(settings, "youtube_ingest_enabled", True)
+
+    ctx = make_ctx(db, user_id=7)
+    run, _created = ms.resolve_and_submit(
+        db, ctx, session_id=1, message="summarise %s" % URL,
+        idempotency_key=uuid.uuid4().hex)
+
+    frames = asyncio.run(_drain_frames(
+        ms.stream_legacy_wire(_StreamReq(), mk_factory(eng), ctx, run.id, after_seq=0),
+        limit=2))
+    payload = [d for n, d in _wire_events(frames) if n == "youtube_ingest"][0]
+    assert payload == {
+        "status": "failed",
+        "notice": yt.INGEST_FAILED_NOTICE,
+        "source_title": None,
+        "facts_saved": 0,
+    }
+    assert "private video" not in json.dumps(payload)
+
+
+def test_stream_emits_no_youtube_ingest_frame_when_flag_is_off(eng, db, monkeypatch):
+    """INVARIANT: flag OFF -> the frame is never emitted."""
+    _patch_no_retrieval(monkeypatch)
+    _patch_transcript_fetch(monkeypatch)
+    monkeypatch.setattr(settings, "youtube_ingest_enabled", False)
+
+    ctx = make_ctx(db, user_id=7)
+    run, _created = ms.resolve_and_submit(
+        db, ctx, session_id=1, message="summarise %s" % URL,
+        idempotency_key=uuid.uuid4().hex)
+
+    snapshot = chat_stream.read_context_snapshot(db, run, _first_step(db, run.id))
+    assert snapshot.get("youtube_ingest") is None
+    assert ms._youtube_ingest_frame(db, run) is None
+
+    frames = asyncio.run(_drain_frames(
+        ms.stream_legacy_wire(_StreamReq(), mk_factory(eng), ctx, run.id, after_seq=0),
+        limit=2, timeout_s=2.0))
+    assert "youtube_ingest" not in [n for n, _ in _wire_events(frames)]
+
+
+def test_sanitizer_drops_a_malformed_youtube_event():
+    """The final gate: only the bounded shape is ever sealed/emitted."""
+    assert chat_stream.sanitize_youtube_ingest_event(None) is None
+    assert chat_stream.sanitize_youtube_ingest_event({"status": "nope"}) is None
+    good = {"status": "success", "notice": "Saved 1 facts from X.", "source_title": "X",
+            "facts_saved": 1}
+    assert chat_stream.sanitize_youtube_ingest_event(good) == good
+    assert chat_stream.build_context_snapshot(
+        youtube_ingest_event={"status": "bogus"})["youtube_ingest"] is None
+

@@ -77,6 +77,13 @@ export interface StreamCallbacks {
    *  citation. Omit to ignore — an unrecognized/older build already safely
    *  ignores this SSE event by name. Unknown/malformed codes are ignored. */
   onAgentProgress?: (code: string) => void;
+  /** MP-YouTube UX — the bounded outcome of ingesting a pasted YouTube link
+   *  this turn. `status` is the server-owned closed set ("success" |
+   *  "skipped_duplicate" | "failed"); `notice` is a FIXED-template string and
+   *  `sourceTitle` is the video's own PUBLIC title — never transcript, chunk,
+   *  fact, or model text. Unknown/malformed events are ignored, and an
+   *  unrecognized older build already ignores this SSE event by name. */
+  onYoutubeIngest?: (data: { status: string; notice: string; sourceTitle: string | null; factsSaved: number }) => void;
 }
 
 // ── reconnect bounds (durable only) ───────────────────────
@@ -91,6 +98,9 @@ const AGENT_PROGRESS_CODES = new Set([
   "agent_researching", "agent_research_complete", "agent_solving",
   "agent_solution_complete", "agent_reviewing", "agent_finalizing",
 ]);
+// Server-owned closed set for the first-class YouTube ingest outcome. An
+// unknown status is ignored (an older/newer server never toasts garbage).
+const YOUTUBE_INGEST_STATUSES = new Set(["success", "skipped_duplicate", "failed"]);
 
 function newIdempotencyKey(): string {
   const c: Crypto | undefined = typeof crypto !== "undefined" ? crypto : undefined;
@@ -423,6 +433,25 @@ export function useStreaming() {
           if (fresh) {
             const code = data.code as string;
             if (typeof code === "string" && AGENT_PROGRESS_CODES.has(code)) cb.onAgentProgress?.(code);
+          }
+          return false;
+        }
+        case "youtube_ingest": {
+          // First-class ingest outcome for a pasted link. Bounded by
+          // construction: a fixed-template notice + the public title. A
+          // malformed frame is ignored, never toasted.
+          if (fresh) {
+            const status = data.status as string;
+            const notice = data.notice as string;
+            if (typeof status === "string" && YOUTUBE_INGEST_STATUSES.has(status)
+              && typeof notice === "string" && notice) {
+              cb.onYoutubeIngest?.({
+                status,
+                notice,
+                sourceTitle: typeof data.source_title === "string" ? data.source_title : null,
+                factsSaved: typeof data.facts_saved === "number" ? data.facts_saved : 0,
+              });
+            }
           }
           return false;
         }

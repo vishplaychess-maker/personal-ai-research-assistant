@@ -306,15 +306,21 @@ def _build_context_snapshot(db: Session, *, user_id: int, session_id: int,
     # + notice, and chat continues normally. The exception CLASS NAME only is
     # logged, never a message that could quote transcript text.
     youtube_ingest_notice = None
+    youtube_ingest_event = None
     try:
         from app.services.youtube_ingest_service import (
-            context_line, ingest_message_youtube,
+            context_line, ingest_message_youtube, sse_event,
         )
 
         ingest = ingest_message_youtube(
             db, user_id=user_id, session_id=session_id, message=message)
         if ingest is not None:
             youtube_ingest_notice = context_line(ingest)
+            # MP-YouTube UX - the first-class event behind the frontend toast,
+            # tapped from the SAME already-computed result. Bounded fixed
+            # templates + the video's public title only (sse_event never reads
+            # transcript / chunk / fact content). None -> no event emitted.
+            youtube_ingest_event = sse_event(ingest)
     except Exception as exc:  # noqa: BLE001 - ingest must never block chat
         logger.warning("durable context: YouTube ingest failed (non-fatal): %s",
                        type(exc).__name__)
@@ -325,6 +331,7 @@ def _build_context_snapshot(db: Session, *, user_id: int, session_id: int,
         transcript_context_text=transcript_context_text,
         transcript_status=transcript_status,
         youtube_ingest_notice=youtube_ingest_notice,
+        youtube_ingest_event=youtube_ingest_event,
     )
 
 
@@ -714,6 +721,35 @@ def _map_event(db: Session, run: Optional[Run], ev) -> tuple[Optional[str], bool
     return (None, False)
 
 
+def _youtube_ingest_frame(db: Session, run: Optional[Run]) -> Optional[str]:
+    """The one-shot ``youtube_ingest`` frame for this turn's pasted-link
+    ingest, or ``None`` when there is nothing to show (feature flag off, no
+    link, or no ingest was attempted).
+
+    Reads the ALREADY-SEALED event from the run's context snapshot - the DB
+    is the source of truth, so a replay returns the identical frame. The
+    sealed event was already tightly bounded before sealing; this only
+    re-shapes it for the wire. Never raises into the stream: the caller wraps
+    this in its own try/except."""
+    if not bool(getattr(settings, "youtube_ingest_enabled", False)):
+        return None
+    if run is None:
+        return None
+    step = (db.query(RunStep).filter(RunStep.run_id == run.id)
+            .order_by(RunStep.seq.asc()).first())
+    if step is None:
+        return None
+    event = chat_stream.read_context_snapshot(db, run, step).get("youtube_ingest")
+    if not isinstance(event, dict):
+        return None
+    return format_sse("youtube_ingest", {
+        "status": event.get("status"),
+        "notice": event.get("notice"),
+        "source_title": event.get("source_title"),
+        "facts_saved": event.get("facts_saved"),
+    })
+
+
 async def stream_legacy_wire(
     request, session_factory: Callable[[], Session], ctx: AuthContext, run_id: str,
     *, after_seq: int = 0, now_fn: Optional[Callable[[], datetime]] = None,
@@ -735,6 +771,19 @@ async def stream_legacy_wire(
     try:
         if cursor == 0:
             yield format_sse("start", {"run_id": run_id})
+            # MP-YouTube UX - surface this turn's pasted-link ingest outcome
+            # as its own first-class frame, exactly once on a fresh stream.
+            # Best effort ONLY: reading the sealed context snapshot or
+            # formatting the frame must NEVER abort the stream (fail-closed =
+            # the chat still works). Logs a fixed message, never any content.
+            try:
+                with _sess_cm(session_factory) as db:
+                    run0 = db.query(Run).filter(Run.id == run_id).first()
+                    yt_frame = _youtube_ingest_frame(db, run0)
+                if yt_frame:
+                    yield yt_frame
+            except Exception:  # noqa: BLE001 - a UX frame must never break chat
+                logger.warning("durable stream: youtube_ingest frame suppressed")
         while True:
             if await request.is_disconnected():
                 return

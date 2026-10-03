@@ -382,13 +382,60 @@ class ContextSnapshotError(Exception):
     not an error. Callers must fail closed on this, never default to {}."""
 
 
+# ── YouTube ingest SSE projection (additive, OPTIONAL) ────────────────
+#
+# The bounded event the durable stream surfaces once per fresh turn when a
+# pasted link was ingested — the first-class `youtube_ingest` SSE frame
+# behind the frontend toast. Additive/optional like the transcript fields
+# above, hence no version bump. Strictly bounded: a closed status set, a
+# fixed-template notice, the video's own public title, and a non-negative
+# count. Anything malformed is dropped at build time and fails closed at
+# read time; the stream never emits a partially-formed event.
+_YOUTUBE_INGEST_STATUSES = frozenset({"success", "skipped_duplicate", "failed"})
+_YOUTUBE_INGEST_EVENT_KEYS = frozenset(
+    {"status", "notice", "source_title", "facts_saved"})
+_YOUTUBE_INGEST_NOTICE_MAX = 500
+_YOUTUBE_INGEST_TITLE_MAX = 200
+
+
+def sanitize_youtube_ingest_event(event: Optional[dict]) -> Optional[dict]:
+    """Canonical, tightly bounded copy of a YouTube ingest SSE event, or
+    None when it is absent/malformed. The final gate before sealing: only
+    the closed status set, a bounded notice string, an optional bounded
+    public title, and a non-negative integer survive — nothing else."""
+    if not isinstance(event, dict):
+        return None
+    if set(event.keys()) != _YOUTUBE_INGEST_EVENT_KEYS:
+        return None
+    status = event.get("status")
+    notice = event.get("notice")
+    title = event.get("source_title")
+    facts_saved = event.get("facts_saved")
+    if status not in _YOUTUBE_INGEST_STATUSES:
+        return None
+    if not isinstance(notice, str) or not notice or len(notice) > _YOUTUBE_INGEST_NOTICE_MAX:
+        return None
+    if title is not None:
+        if not isinstance(title, str) or not title or len(title) > _YOUTUBE_INGEST_TITLE_MAX:
+            return None
+    if isinstance(facts_saved, bool) or not isinstance(facts_saved, int) or facts_saved < 0:
+        return None
+    return {
+        "status": status,
+        "notice": notice,
+        "source_title": title,
+        "facts_saved": facts_saved,
+    }
+
+
 def build_context_snapshot(*, rag_context_text: Optional[str] = None,
                            citations: Optional[list] = None, sources_used: bool = False,
                            memory_context_text: Optional[str] = None,
                            memories_used: bool = False,
                            transcript_context_text: Optional[str] = None,
                            transcript_status: Optional[str] = None,
-                           youtube_ingest_notice: Optional[str] = None) -> dict:
+                           youtube_ingest_notice: Optional[str] = None,
+                           youtube_ingest_event: Optional[dict] = None) -> dict:
     """The ONE authoritative constructor for a versioned context-enrichment
     snapshot — called with no arguments this returns the canonical empty
     snapshot (a direct Run API submission with no retrieval, or a turn with
@@ -426,6 +473,9 @@ def build_context_snapshot(*, rag_context_text: Optional[str] = None,
         "transcript_used": bool(has_tr),
         "transcript_status": tr_status,
         "youtube_ingest_notice": yt_notice,
+        # The bounded first-class event behind the frontend toast (additive /
+        # optional). None when the flag was off / no link was ingested.
+        "youtube_ingest": sanitize_youtube_ingest_event(youtube_ingest_event),
     }
 
 
@@ -477,6 +527,14 @@ def read_context_snapshot(db: Session, run: Run, step: RunStep) -> dict:
     yt_notice = ctx.get("youtube_ingest_notice")
     if yt_notice is not None and not isinstance(yt_notice, str):
         raise ContextSnapshotError("youtube_ingest_notice must be a string or null")
+    # Same additive/optional treatment for the bounded YouTube ingest SSE
+    # projection that drives the frontend toast. Absent is honest backward
+    # compatibility for every snapshot sealed before this slice;
+    # present-but-malformed fails closed.
+    yt_event = ctx.get("youtube_ingest")
+    if yt_event is not None and sanitize_youtube_ingest_event(yt_event) is None:
+        raise ContextSnapshotError(
+            "youtube_ingest must be a bounded event object or null")
     return ctx
 
 
