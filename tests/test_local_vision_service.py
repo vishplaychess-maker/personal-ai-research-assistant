@@ -65,6 +65,8 @@ def _env(monkeypatch):
     monkeypatch.setattr(settings, "run_chat_stream_enabled", True)
     monkeypatch.setattr(settings, "run_public_api_enabled", True)
     monkeypatch.setattr(settings, "enable_deep_research", False)
+    # Deterministic provider: the moondream tests must never depend on .env.
+    monkeypatch.setattr(settings, "llm_provider", "ollama")
     # The flag under test starts OFF in every test; individual tests turn it on.
     monkeypatch.setattr(settings, "local_vision_enabled", False)
     lv.clear_cache()
@@ -432,3 +434,121 @@ def test_route_ollama_error_returns_the_bounded_notice(monkeypatch):
     body = resp.json()
     assert body["status"] == lv.STATUS_FAILED
     assert body["notice"] == lv.FAILED_NOTICE
+
+# ── Gemini vision dispatcher (Gemini migration) ───────────────────────
+
+
+def test_describe_image_routes_to_gemini_when_provider_is_gemini(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    monkeypatch.setattr(settings, "llm_provider", "gemini")
+    calls: list = []
+    monkeypatch.setattr(lv, "_gemini_describe",
+                        lambda raw: calls.append("gemini") or lv.VisionResult(
+                            status=lv.STATUS_OK, description="A cat.", notice=""))
+    monkeypatch.setattr(lv, "_post_ollama",
+                        lambda b64: calls.append("ollama") or (True, "A dog."))
+
+    result = lv.describe_image(_png())
+
+    assert result.status == lv.STATUS_OK and result.description == "A cat."
+    assert calls == ["gemini"]
+
+
+def test_describe_image_routes_to_moondream_when_provider_is_not_gemini(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    monkeypatch.setattr(settings, "llm_provider", "ollama")
+    calls: list = []
+    monkeypatch.setattr(lv, "_gemini_describe",
+                        lambda raw: calls.append("gemini") or None)
+    monkeypatch.setattr(lv, "_post_ollama",
+                        lambda b64: calls.append("ollama") or (True, "A dog."))
+
+    result = lv.describe_image(_png())
+
+    assert result.description == "A dog."
+    assert calls == ["ollama"]
+
+
+def test_describe_image_gemini_success_uses_the_service(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    from app.services.gemini_service import GeminiService
+
+    seen: list = []
+
+    def _fake(self, image_bytes, prompt=None):
+        seen.append((len(image_bytes), prompt))
+        return "A red square on a white background."
+
+    monkeypatch.setattr(GeminiService, "vision_describe", _fake)
+
+    raw = _png()
+    result = lv.describe_image_gemini(raw)
+
+    assert result.status == lv.STATUS_OK
+    assert result.description == "A red square on a white background."
+    assert result.notice == ""
+    assert seen and seen[0][0] == len(raw) and seen[0][1]
+    assert lv.context_line(result) == (
+        "[Image description (untrusted)]: A red square on a white background.")
+
+
+def test_describe_image_gemini_failure_is_bounded(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    from app.services.gemini_service import GeminiAPIError, GeminiService
+
+    def _boom(self, image_bytes, prompt=None):
+        raise GeminiAPIError("gemini_error")
+
+    monkeypatch.setattr(GeminiService, "vision_describe", _boom)
+
+    result = lv.describe_image_gemini(_png())
+    assert result.status == lv.STATUS_FAILED
+    assert result.description is None
+    assert result.notice == lv.FAILED_NOTICE
+    # A failure is never cached, so a retry re-attempts.
+    assert lv.describe_image_gemini(_png()).status == lv.STATUS_FAILED
+
+
+def test_describe_image_gemini_validates_before_any_api_call(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    monkeypatch.setattr(settings, "local_vision_max_bytes", 1024)
+    from app.services.gemini_service import GeminiService
+
+    calls: list = []
+    monkeypatch.setattr(GeminiService, "vision_describe",
+                        lambda self, b, prompt=None: calls.append(b) or "x")
+
+    assert lv.describe_image_gemini(b"GIF89a" + b"\x00" * 16).status == lv.STATUS_UNSUPPORTED_TYPE
+    assert lv.describe_image_gemini(_png(b"\x00" * 4096)).status == lv.STATUS_TOO_LARGE
+    assert calls == []
+
+
+def test_describe_image_gemini_flag_off_is_disabled_without_api_call(monkeypatch):
+    monkeypatch.setattr(settings, "local_vision_enabled", False)
+    from app.services.gemini_service import GeminiService
+
+    calls: list = []
+    monkeypatch.setattr(GeminiService, "vision_describe",
+                        lambda self, b, prompt=None: calls.append(b) or "x")
+
+    result = lv.describe_image_gemini(_png())
+    assert result.status == lv.STATUS_DISABLED
+    assert calls == []
+
+
+def test_describe_image_gemini_logs_hash_and_size_only(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "local_vision_enabled", True)
+    from app.services.gemini_service import GeminiService
+
+    monkeypatch.setattr(GeminiService, "vision_describe",
+                        lambda self, b, prompt=None: "CANARY-GEMINI-DESCRIPTION")
+
+    raw = _png()
+    digest = hashlib.sha256(raw).hexdigest()
+    with caplog.at_level(logging.INFO, logger="app.services.local_vision_service"):
+        result = lv.describe_image_gemini(raw)
+
+    assert result.description == "CANARY-GEMINI-DESCRIPTION"
+    assert digest[:12] in caplog.text
+    assert "bytes=%d" % len(raw) in caplog.text
+    assert "CANARY-GEMINI-DESCRIPTION" not in caplog.text

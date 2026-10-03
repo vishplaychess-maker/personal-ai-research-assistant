@@ -542,9 +542,12 @@ class Settings(BaseSettings):
     thunder_skills_max_indexed: int = 20
 
     # ── Model / LLM provider settings ───────────────────
-    # Provider: "glm" | "ollama" | "openrouter" | "nvidia" | "huggingface" | "google" | "modelslab"
-    #           "groq" | "together" | "mistral" | "cohere"
-    llm_provider: str = "glm"
+    # Provider: "gemini" | "glm" | "ollama" | "openrouter" | "nvidia" |
+    #           "huggingface" | "google" | "modelslab" | "groq" | "together"
+    #           | "mistral" | "cohere"
+    # Default is Gemini API (fast, generous free tier). Ollama remains a
+    # fully supported local fallback (see the ollama_* keys below).
+    llm_provider: str = "gemini"
     default_model: str = "glm-5.3-flash"
     ollama_tags_timeout: int = 5
 
@@ -592,6 +595,17 @@ class Settings(BaseSettings):
     google_model: str = "gemini-2.0-flash"
     google_max_tokens: int = 2048
     google_temperature: float = 0.7
+    # ── Gemini API — primary chat + vision (native SDK) ─────────
+    # Distinct from the OpenAI-compatible `google_*` provider above: this
+    # uses the native google-generativeai SDK, and backs BOTH chat
+    # completions and vision/image analysis when `llm_provider == "gemini"`.
+    # Set GEMINI_API_KEY in .env (never committed). Empty key => the provider
+    # fails closed with a bounded error; the chat/vision paths never break.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-1.5-flash"
+    gemini_vision_model: str = "gemini-1.5-flash"
+    gemini_timeout_s: float = 30.0
+    gemini_max_tokens: int = 2048
 
     # ModelsLab (OpenAI-compatible API - assumed)
     modelslab_api_key: str = ""
@@ -712,6 +726,8 @@ class Settings(BaseSettings):
             "youtube_ingest_max_facts_per_video",
             # Local Vision (ZERO API cost) — image byte cap.
             "local_vision_max_bytes",
+            # Gemini API — chat completion token cap.
+            "gemini_max_tokens",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or value < 1:
@@ -753,6 +769,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"local_vision_timeout_s must be a finite number > 0 "
                 f"(got {value!r})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_gemini_timeout(self) -> "Settings":
+        """Fail-fast on a nonsensical Gemini timeout (Gemini migration). The
+        token cap is covered by `_validate_approval_limits`; the float timeout
+        is not."""
+        import math
+
+        value = self.gemini_timeout_s
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or math.isnan(value) or math.isinf(value) or value <= 0):
+            raise ValueError(
+                f"gemini_timeout_s must be a finite number > 0 (got {value!r})"
             )
         return self
 

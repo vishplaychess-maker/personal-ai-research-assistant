@@ -247,31 +247,33 @@ def _post_ollama(image_b64: str) -> Tuple[bool, Optional[str]]:
     return True, text.strip()
 
 
-def describe_image(raw_bytes: bytes) -> VisionResult:
-    """Describe one image entirely on-box. NEVER raises and NEVER blocks the
-    caller with anything other than a bounded (optionally timed-out) call.
+def _provider_is_gemini() -> bool:
+    """True when the deployment chat provider is the Gemini API."""
+    return str(getattr(settings, "llm_provider", "") or "").strip().lower() == "gemini"
 
-    Ordering is deliberate: flag -> type -> size -> cache -> model. An
-    oversize / unsupported image therefore makes NO Ollama call at all."""
-    if not enabled():
-        return VisionResult(status=STATUS_DISABLED, notice=DISABLED_NOTICE)
+
+def _validate(raw_bytes: bytes):
+    """Shared flag-independent type/size validation.
+
+    Returns (early_result, raw, digest): early_result is not None when the
+    caller must return it immediately; otherwise raw + digest are populated.
+    An unsupported / oversize image therefore makes NO model call at all."""
     if not isinstance(raw_bytes, (bytes, bytearray)) or not raw_bytes:
-        return VisionResult(status=STATUS_UNSUPPORTED_TYPE,
-                            notice=UNSUPPORTED_TYPE_NOTICE)
+        return (VisionResult(status=STATUS_UNSUPPORTED_TYPE,
+                             notice=UNSUPPORTED_TYPE_NOTICE), None, None)
     raw = bytes(raw_bytes)
     if sniff_image_type(raw) not in ALLOWED_TYPES:
-        return VisionResult(status=STATUS_UNSUPPORTED_TYPE,
-                            notice=UNSUPPORTED_TYPE_NOTICE)
+        return (VisionResult(status=STATUS_UNSUPPORTED_TYPE,
+                             notice=UNSUPPORTED_TYPE_NOTICE), None, None)
     if len(raw) > _max_bytes():
-        return VisionResult(status=STATUS_TOO_LARGE, notice=TOO_LARGE_NOTICE)
+        return (VisionResult(status=STATUS_TOO_LARGE,
+                             notice=TOO_LARGE_NOTICE), None, None)
+    return (None, raw, hashlib.sha256(raw).hexdigest())
 
-    digest = hashlib.sha256(raw).hexdigest()
-    cached = _cache_get(digest)
-    if cached is not None:
-        return cached
 
-    # Only the hash and the byte count ever reach the log.
-    logger.info("local_vision: analyzing bytes=%d sha256=%s", len(raw), digest[:12])
+def _moondream_describe(raw: bytes) -> VisionResult:
+    """The local Ollama (moondream) path. Isolated so the dispatcher can
+    pick it per provider without duplicating the fail-closed handling."""
     image_b64 = base64.b64encode(raw).decode("ascii")
     try:
         ok, description = _post_ollama(image_b64)
@@ -281,9 +283,74 @@ def describe_image(raw_bytes: bytes) -> VisionResult:
     if not ok or not description:
         logger.warning("local_vision: ollama returned no usable description")
         return VisionResult(status=STATUS_FAILED, notice=FAILED_NOTICE)
+    return VisionResult(status=STATUS_OK, description=description, notice="")
 
-    result = VisionResult(status=STATUS_OK, description=description, notice="")
-    _cache_put(digest, result)
+
+def _gemini_describe(raw: bytes) -> VisionResult:
+    """Gemini API vision path. Fail-closed: every failure is a bounded
+    notice, and no API text / image content is ever logged."""
+    try:
+        from app.services.gemini_service import GeminiAPIError, GeminiService
+
+        service = GeminiService(
+            api_key=getattr(settings, "gemini_api_key", ""),
+            model=getattr(settings, "gemini_model", "gemini-1.5-flash"),
+            vision_model=getattr(settings, "gemini_vision_model", "gemini-1.5-flash"),
+            timeout=getattr(settings, "gemini_timeout_s", 30.0),
+            max_tokens=getattr(settings, "gemini_max_tokens", 2048),
+        )
+        description = service.vision_describe(raw, prompt=PROMPT)
+    except GeminiAPIError as exc:
+        logger.warning("local_vision: gemini vision failed (%s)", exc.code)
+        return VisionResult(status=STATUS_FAILED, notice=FAILED_NOTICE)
+    except Exception as exc:  # noqa: BLE001 - vision must never break chat
+        logger.warning("local_vision: gemini vision failed (%s)", type(exc).__name__)
+        return VisionResult(status=STATUS_FAILED, notice=FAILED_NOTICE)
+    if not description:
+        return VisionResult(status=STATUS_FAILED, notice=FAILED_NOTICE)
+    return VisionResult(status=STATUS_OK, description=description, notice="")
+
+
+def describe_image_gemini(raw_bytes: bytes) -> VisionResult:
+    """Describe one image with the Gemini API. Validates type/size, uses the
+    SAME bounded TTL cache and privacy invariants as the moondream path, and
+    NEVER raises."""
+    if not enabled():
+        return VisionResult(status=STATUS_DISABLED, notice=DISABLED_NOTICE)
+    early, raw, digest = _validate(raw_bytes)
+    if early is not None:
+        return early
+    cached = _cache_get(digest)
+    if cached is not None:
+        return cached
+    # Only the hash and the byte count ever reach the log.
+    logger.info("local_vision: analyzing bytes=%d sha256=%s", len(raw), digest[:12])
+    result = _gemini_describe(raw)
+    if result.status == STATUS_OK:
+        _cache_put(digest, result)
+    return result
+
+
+def describe_image(raw_bytes: bytes) -> VisionResult:
+    """Describe one image, dispatching on the deployment provider.
+
+    llm_provider == "gemini" -> the Gemini API vision model; otherwise the
+    existing local moondream/Ollama path (unchanged). NEVER raises and NEVER
+    blocks the caller with anything other than a bounded (optionally
+    timed-out) call. Ordering: flag -> type -> size -> cache -> provider."""
+    if not enabled():
+        return VisionResult(status=STATUS_DISABLED, notice=DISABLED_NOTICE)
+    early, raw, digest = _validate(raw_bytes)
+    if early is not None:
+        return early
+    cached = _cache_get(digest)
+    if cached is not None:
+        return cached
+    # Only the hash and the byte count ever reach the log.
+    logger.info("local_vision: analyzing bytes=%d sha256=%s", len(raw), digest[:12])
+    result = _gemini_describe(raw) if _provider_is_gemini() else _moondream_describe(raw)
+    if result.status == STATUS_OK:
+        _cache_put(digest, result)
     return result
 
 
@@ -315,6 +382,6 @@ __all__ = [
     "DISABLED_NOTICE", "UNSUPPORTED_TYPE_NOTICE", "TOO_LARGE_NOTICE",
     "FAILED_NOTICE", "CONTEXT_PREFIX", "NOTICE_PREFIX", "PROMPT", "ALLOWED_TYPES",
     "enabled", "sniff_image_type", "decode_image_data_url", "describe_image",
-    "_ollama_base",
+    "describe_image_gemini", "_ollama_base",
     "context_line", "notice_line", "clear_cache",
 ]

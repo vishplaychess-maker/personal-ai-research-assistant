@@ -41,6 +41,9 @@ def _build_provider(
     if provider_name == "local":
         from app.services.llm_providers.local_provider import LocalProvider
         return LocalProvider(api_key=api_key, model=model)
+    if provider_name == "gemini":
+        from app.services.llm_providers.gemini_provider import GeminiProvider
+        return GeminiProvider(api_key=api_key, model=model)
     if provider_name == "ollama":
         from app.services.llm_providers.ollama_provider import OllamaProvider
         return OllamaProvider(model=model)
@@ -107,6 +110,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
         alias_map = {
             "glm": "glm",
             "local": "local",
+            "gemini": "gemini",
             "ollama": "ollama",
             "openrouter": "openrouter",
             "nvidia": "nvidia nim",

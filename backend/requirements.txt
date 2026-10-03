@@ -53,3 +53,7 @@ apscheduler==3.10.4
 duckduckgo-search
 # ── Knowledge Graph — in-memory graph traversal (pure Python, no compiled deps) ──
 networkx==3.4.2
+# ── Gemini API — primary chat + vision (native SDK) ──
+# Used by app/services/gemini_service.py when LLM_PROVIDER=gemini. The SDK
+# is imported lazily so the app runs without it (Ollama fallback).
+google-generativeai>=0.8.0
