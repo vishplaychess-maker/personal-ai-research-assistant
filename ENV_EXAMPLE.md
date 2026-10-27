@@ -13,6 +13,19 @@ Legend: **Prod** = required or strongly recommended for cloud deployment.
 | Variable | Default | Prod | Example / Notes |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:////data/app.db` | **Yes** | `postgresql://user:pass@host:5432/db` (managed Postgres) |
+
+### Tests never use this database
+
+`tests/conftest.py` points `DATABASE_URL` at `THUNDER_TEST_DB_DIR/thunder-test.db`
+(system temp dir by default) before any `app` import, seeds the schema and the
+`default` user there, and deletes the file at session end. A run that would
+resolve to the repo's `data/thunder.db` is refused at session start.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDER_TEST_DB_DIR` | system temp dir | Directory for the throwaway test database; point it at a fast local disk (e.g. `D:/tmp/thunder-tests`) |
+| `DATABASE_URL` (in the test process) | the throwaway file | An operator-set value that is not the repo database is honoured (e.g. Postgres in CI); a value pointing at `data/thunder.db` is redirected |
+
 | `CHROMADB_HOST` | `localhost` | No | `chromadb` (Docker service name) |
 | `CHROMADB_PORT` | `8000` | No | — |
 | `OLLAMA_HOST` | `localhost` | No | `host.docker.internal` locally |
