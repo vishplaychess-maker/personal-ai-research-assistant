@@ -40,6 +40,21 @@ function formatDate(iso: string) {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+/** Bucket a session into the reference's date groups (newest first). */
+function sessionGroupLabel(iso: string | undefined | null): string {
+  if (!iso) return "Earlier";
+  const created = new Date(iso);
+  if (Number.isNaN(created.getTime())) return "Earlier";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfToday.getDate() - 1);
+  if (created >= startOfToday) return "Today";
+  if (created >= startOfYesterday) return "Yesterday";
+  if (created >= new Date(startOfToday.getTime() - 6 * 86_400_000)) return "Previous 7 days";
+  return "Earlier";
+}
+
 interface SidebarProps {
   sessions: Session[];
   activeSessionId: number | null;
@@ -57,6 +72,8 @@ interface SidebarProps {
   onOpenGraph?: () => void;
   onOpenTerminal?: () => void;
   onOpenMediaGeneration?: () => void;
+  /** Signed-in user's display name (from AuthContext). */
+  userName?: string;
 }
 
 export function Sidebar({
@@ -76,6 +93,7 @@ export function Sidebar({
   onOpenGraph,
   onOpenTerminal,
   onOpenMediaGeneration,
+  userName,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -284,12 +302,20 @@ export function Sidebar({
               <p className="mt-1 text-xs text-muted">Click + to start a new conversation</p>
             </div>
           ) : (
-            sessions.map((session) => {
+            sessions.map((session, index) => {
               const isActive = session.id === activeSessionId;
+              const groupLabel = sessionGroupLabel(session.created_at);
+              const prevLabel =
+                index > 0 ? sessionGroupLabel(sessions[index - 1].created_at) : "";
               return (
-                <div
-                  key={session.id}
-                  className={cn(
+                <div key={session.id}>
+                  {groupLabel !== prevLabel ? (
+                    <div className="px-3 pb-1 pt-3 text-[11px] font-medium text-secondary">
+                      {groupLabel}
+                    </div>
+                  ) : null}
+                  <div
+                    className={cn(
                     "group mb-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors duration-150",
                     isActive ? "bg-white/5 text-foreground" : "hover:bg-white/5"
                   )}
@@ -360,6 +386,7 @@ export function Sidebar({
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -370,6 +397,22 @@ export function Sidebar({
 
       {/* Footer - Minimal */}
       <footer className="border-t border-white/10 px-3 py-3">
+        {userName ? (
+          <div className="mb-3 flex items-center gap-2.5 rounded-lg px-1 py-1">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-medium text-foreground">
+              {userName.slice(0, 2).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-medium leading-none text-foreground">
+                {userName}
+              </div>
+              <div className="mt-1 truncate text-[11px] leading-none text-secondary">
+                Signed in
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Health Status - Readable */}
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-secondary">
           <span className="flex items-center gap-1">
@@ -410,10 +453,10 @@ export function Sidebar({
             size="icon"
             variant="ghost"
             onClick={toggleTheme}
-            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            title={theme === "paper" ? "Switch to a dark theme" : "Switch to paper"}
             className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
           >
-            {theme === "dark" ? <Sun className="h-4 w-4 icon-secondary" /> : <Moon className="h-4 w-4 icon-secondary" />}
+            {theme === "paper" ? <Moon className="h-4 w-4 icon-secondary" /> : <Sun className="h-4 w-4 icon-secondary" />}
           </Button>
           {onOpenGraph && (
             <Button

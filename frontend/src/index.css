@@ -320,3 +320,96 @@ button, a, input, textarea, select, [role="button"] {
 .icon-muted { color: #71717A !important; }                       /* Muted icons */
 .border-visible { border-color: hsl(var(--border)) !important; } /* Visible borders */
 .bg-hover { background-color: hsl(var(--secondary)) !important; } /* Hover backgrounds */
+
+/* ==========================================================================
+   3-Themes (Matte / Obsidian / Paper)
+   The reference design's exact hex colours, expressed as HSL so the existing
+   semantic tokens (hsl(var(--x))) pick them up across every component.
+   Deliberately last in the file: same specificity as `.dark`, later wins.
+   ========================================================================== */
+
+:root[data-theme="matte"] {
+  --background: 0 0% 13%;          /* #212121 */
+  --foreground: 0 0% 93%;          /* #ececec */
+  --card: 0 0% 17%;                /* #2a2a2a */
+  --card-foreground: 0 0% 93%;
+  --popover: 0 0% 18%;             /* #2f2f2f */
+  --popover-foreground: 0 0% 93%;
+  --primary: 0 0% 96%;             /* white action button */
+  --primary-foreground: 0 0% 4%;
+  --secondary: 0 0% 18%;
+  --secondary-foreground: 0 0% 93%;
+  --muted: 0 0% 18%;
+  --muted-foreground: 0 0% 71%;    /* #b4b4b4 */
+  --accent: 0 0% 18%;
+  --accent-foreground: 0 0% 93%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 20%;              /* #333333 */
+  --input: 0 0% 20%;
+  --ring: 0 0% 60%;
+  color-scheme: dark;
+}
+
+:root[data-theme="obsidian"] {
+  --background: 0 0% 4%;           /* #0a0a0a */
+  --foreground: 0 0% 98%;          /* #fafafa */
+  --card: 0 0% 7%;                 /* #111111 */
+  --card-foreground: 0 0% 98%;
+  --popover: 0 0% 7%;              /* #121212 */
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 0 0% 4%;
+  --secondary: 0 0% 10%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 10%;
+  --muted-foreground: 240 4% 65%;  /* #a1a1aa */
+  --accent: 0 0% 10%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 13%;              /* #222222 */
+  --input: 0 0% 13%;
+  --ring: 0 0% 60%;
+  color-scheme: dark;
+}
+
+:root[data-theme="paper"] {
+  --background: 0 0% 100%;         /* #ffffff */
+  --foreground: 0 0% 5%;           /* #0d0d0d */
+  --card: 210 11% 98%;             /* #f8f9fa */
+  --card-foreground: 0 0% 5%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 5%;
+  --primary: 0 0% 5%;              /* black action button */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 94%;           /* #efefef */
+  --secondary-foreground: 0 0% 5%;
+  --muted: 0 0% 94%;
+  --muted-foreground: 0 0% 37%;    /* #5d5d5d */
+  --accent: 0 0% 92%;
+  --accent-foreground: 0 0% 5%;
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 90%;              /* #e5e5e5 */
+  --input: 0 0% 90%;
+  --ring: 0 0% 20%;
+  color-scheme: light;
+}
+
+/* Paper needs bridges: several existing utilities hard-code a dark backdrop
+   (white overlays, fixed greys). Scoped to paper so the dark themes are
+   untouched; the rest of the app follows the tokens above. */
+[data-theme="paper"] .bg-white\/5 { background-color: rgba(0, 0, 0, 0.04); }
+[data-theme="paper"] .bg-white\/10 { background-color: rgba(0, 0, 0, 0.07); }
+[data-theme="paper"] .border-white\/10 { border-color: rgba(0, 0, 0, 0.10); }
+[data-theme="paper"] .border-white\/5 { border-color: rgba(0, 0, 0, 0.06); }
+[data-theme="paper"] .hover\:bg-white\/5:hover { background-color: rgba(0, 0, 0, 0.05); }
+[data-theme="paper"] .hover\:bg-white\/10:hover { background-color: rgba(0, 0, 0, 0.08); }
+[data-theme="paper"] .input-glass { background: #ffffff; }
+
+[data-theme="paper"] .text-secondary,
+[data-theme="paper"] .text-placeholder { color: #5d5d5d !important; }
+[data-theme="paper"] .icon-primary { color: #212121 !important; }
+[data-theme="paper"] .icon-secondary { color: #5d5d5d !important; }
+[data-theme="paper"] .icon-muted { color: #8e8e8e !important; }

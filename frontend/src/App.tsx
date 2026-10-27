@@ -5,6 +5,9 @@ import { AuthScreen } from "./AuthScreen";
 import { SystemPromptEditor } from "./SystemPromptEditor";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
+import { AppShell } from "./shell/AppShell";
+import { Header } from "./shell/Header";
+import { Inspector } from "./shell/Inspector";
 import { ChatArea } from "./ChatArea";
 import { ApprovalDialog } from "./components/ApprovalDialog";
 import { CitationPopup } from "./CitationPopup";
@@ -61,6 +64,8 @@ function App() {
   // Model & system prompt state
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showMediaGeneration, setShowMediaGeneration] = useState(false);
@@ -101,6 +106,10 @@ function App() {
   const durableRunTerminalRef = useRef(false);
   const [planSteps, setPlanSteps] = useState<Array<Record<string, unknown>>>([]);
   const [agentProgress, setAgentProgress] = useState<string | null>(null);
+  // Real per-turn trace for the Thought accordion. Frames are not persisted,
+  // so this resets on every send and is empty after a reload.
+  const [agentEvents, setAgentEvents] = useState<Array<{ agent: string; message: string; at: number }>>([]);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionListRequestRef = useRef(0);
@@ -496,10 +505,16 @@ function App() {
         setGenerationStopped(false); setPendingToolApproval(null);
         setDurableApproval(null); setPlanSteps([]);
         setAgentProgress(null);
+        setAgentEvents([]); setTurnStartedAt(Date.now());
       },
       onToken: () => {},
       onPlan: (steps) => setPlanSteps(steps),
       onAgentProgress: setAgentProgress,
+      onAgentStatus: (event) =>
+        setAgentEvents((prev) => [
+          ...prev,
+          { agent: event.agent, message: event.message, at: Date.now() },
+        ]),
       onYoutubeIngest: (d) => {
         // First-class ingest UX: info on success, warning otherwise, with the
         // server's exact bounded notice (fixed template + public title).
@@ -639,7 +654,39 @@ function App() {
   // ── Render ─────────────────────────────────────────────
 
   return (
-    <div className="app min-h-screen bg-background text-foreground transition-colors duration-300">
+    <>
+      <AppShell
+        sidebarOpen={sidebarOpen}
+        inspectorOpen={inspectorOpen}
+        onCloseSidebar={() => setSidebarOpen(false)}
+        onCloseInspector={() => setInspectorOpen(false)}
+        header={
+          <Header
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((v) => !v)}
+            onNewChat={handleCreateSession}
+            inspectorOpen={inspectorOpen}
+            onToggleInspector={() => setInspectorOpen((v) => !v)}
+            sessionId={activeSessionId}
+            currentModel={activeSession?.model ?? null}
+            onModelChange={(model) => {
+              if (activeSession) handleModelChange(activeSession.id, model);
+            }}
+            onShare={() => {
+              if (activeSession) handleShareSession(activeSession.id);
+            }}
+            shareDisabled={!activeSession}
+          />
+        }
+        inspector={
+          <Inspector
+            open={inspectorOpen}
+            onClose={() => setInspectorOpen(false)}
+            turnMeta={{ startedAt: turnStartedAt, agentEvents, planSteps }}
+            sessionId={activeSessionId}
+          />
+        }
+        sidebar={
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -657,7 +704,10 @@ function App() {
         onOpenTerminal={() => setShowTerminal(true)}
         onOpenMediaGeneration={() => setShowMediaGeneration(true)}
         onLogout={logout}
+        userName={user?.username}
       />
+        }
+      >
 
       <ChatArea
         activeSession={activeSession}
@@ -706,10 +756,14 @@ function App() {
         onApproveTool={handleToolApprove}
         onRejectTool={handleToolReject}
         planSteps={planSteps}
+        turnMeta={{ startedAt: turnStartedAt, agentEvents, planSteps }}
+        onOpenInspector={() => setInspectorOpen(true)}
         agentProgress={agentProgress}
         onPlanCancel={() => setPlanSteps([])}
         onExportError={(msg) => setChatError(msg)}
+        showModelSelector={false}
       />
+      </AppShell>
 
       {/* MP-3C3C — durable MCP approval dialog (only when a durable run parked) */}
       <ApprovalDialog
@@ -843,7 +897,7 @@ function App() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

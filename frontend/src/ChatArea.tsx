@@ -34,6 +34,8 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PlanCard } from "./PlanCard";
 import { ConfidenceBadge } from "./ConfidenceBadge";
 import { ModelSelector } from "./ModelSelector";
+import { MessageList } from "./shell/MessageList";
+import type { TurnMeta } from "./shell/Message";
 import { ModeSelector } from "./ModeSelector";
 import { ProviderSwitcher } from "./ProviderSwitcher";
 import { Button } from "./components/ui/button";
@@ -144,6 +146,11 @@ interface ChatAreaProps {
   onRetry: () => void;
 
   sessionModel: string | null;
+  /** The shell header hosts the selector in phase 1; hide the in-chat one. */
+  showModelSelector?: boolean;
+  /** Real frames for this turn (agent_status / plan); absent after a reload. */
+  turnMeta?: TurnMeta;
+  onOpenInspector?: () => void;
   onModelChange: (model: string | null) => void;
   onOpenSystemPrompt: () => void;
 
@@ -207,6 +214,9 @@ export function ChatArea({
   retryTarget,
   onRetry,
   sessionModel,
+  showModelSelector = true,
+  turnMeta,
+  onOpenInspector,
   onModelChange,
   onOpenSystemPrompt,
   showDocs,
@@ -436,13 +446,15 @@ export function ChatArea({
           />
 
           {/* Model Selector */}
-          <ModelSelector
-            key={activeSession.id}
-            sessionId={activeSession.id}
-            currentModel={sessionModel}
-            onModelChange={onModelChange}
-            refreshKey={providerRefreshKey}
-          />
+          {showModelSelector ? (
+            <ModelSelector
+              key={activeSession.id}
+              sessionId={activeSession.id}
+              currentModel={sessionModel}
+              onModelChange={onModelChange}
+              refreshKey={providerRefreshKey}
+            />
+          ) : null}
 
           {/* System Prompt */}
           <Button
@@ -544,7 +556,7 @@ export function ChatArea({
                 <div className="w-full max-w-xl animate-fade-in-up">
                   <h1 className="mb-6 text-center text-2xl font-medium text-foreground">Ask Thunder AI anything</h1>
                   {/* Centered Input Box - Grok Style */}
-                  <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+                  <div className="input-glass rounded-3xl px-2 pb-1.5 pt-2 shadow-2xl">
                     {/* Document Status Pill */}
                     {(uploading || activeDoc) && (
                       <div className="relative mb-2 flex items-center gap-2 px-1">
@@ -695,115 +707,18 @@ export function ChatArea({
             {/* Active Chat - Messages with bottom input */}
             {hasMessages && (
               <>
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={cn(
-                      "animate-message-in",
-                      msg.role === "user" ? "flex justify-end" : "flex justify-start"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[85%] text-sm leading-relaxed",
-                        msg.role === "user"
-                          ? "rounded-2xl rounded-tr-md bg-white/5 px-4 py-2.5 text-foreground"
-                          : "w-full px-1 text-white"
-                      )}
-                    >
-                      {renderContent(msg, onCitationClick)}
-<div
-                      className={cn(
-                        "mt-1.5 flex items-center gap-1.5 text-[10px]",
-                        msg.role === "user"
-                          ? "justify-end text-secondary"
-                          : "text-secondary"
-                      )}
-                    >
-                      <time dateTime={msg.created_at} className="text-secondary">{formatTime(msg.created_at)}</time>
-                      {msg.role === "assistant" && indicators.hasSources && sourcesUsedIds.has(msg.id) && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                          <FileText className="h-3 w-3" />
-                          RAG
-                        </span>
-                      )}
-                      {msg.role === "assistant" && indicators.hasMemories && memoriesUsedIds.has(msg.id) && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                          <Brain className="h-3 w-3" />
-                          Memory
-                        </span>
-                      )}
-                      {msg.role === "assistant" && (
-                        <ConfidenceBadge
-                          confidence={msg.confidence}
-                          reason={msg.confidence_reason}
-                        />
-                      )}
-                      {msg.role === "assistant" && (
-                        <button
-                          className={cn(
-                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 transition-colors hover:text-primary",
-                            tts.speakingId === msg.id ? "text-primary" : "text-secondary hover:text-primary"
-                          )}
-                          onClick={() => tts.speak(msg.id, toPlainText(msg.content))}
-                          title={tts.speakingId === msg.id ? "Stop reading" : "Read aloud"}
-                        >
-                          {tts.speakingId === msg.id ? (
-                            <>
-                              <VolumeX className="h-3 w-3" />
-                              <span className="hidden sm:inline">Stop</span>
-                            </>
-                          ) : (
-                            <>
-                              <Volume2 className="h-3 w-3" />
-                              <span className="hidden sm:inline">Read</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* F6 Capability 1 — Plan preview card */}
-                {isStreaming && planSteps.length > 0 && onPlanCancel && (
-                  <div className="flex justify-start">
-                    <PlanCard
-                      steps={planSteps}
-                      onRun={() => {}}
-                      onCancel={onPlanCancel}
-                    />
-                  </div>
-                )}
-
-                {/* Streaming Message */}
-                {isStreaming && (
-                  <div className="animate-message-in flex justify-start">
-                    <div className="w-full max-w-[85%] px-1 py-1 text-sm leading-relaxed text-white">
-                      {streamedContent ? (
-                        <div className="whitespace-pre-wrap">
-                          {streamedContent}
-                          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-text-bottom" />
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 py-2">
-                          <span className="typing-dot" />
-                          <span className="typing-dot" />
-                          <span className="typing-dot" />
-                        </div>
-                      )}
-                      <div role="status" className="mt-1 text-[10px] text-secondary">{({
-                        agent_researching: "Researching…",
-                        agent_research_complete: "Research complete",
-                        agent_solving: "Developing solution…",
-                        agent_solution_complete: "Solution complete",
-                        agent_reviewing: "Reviewing…",
-                        agent_finalizing: "Finalizing…",
-                      } as Record<string, string>)[agentProgress ?? ""] ?? "Generating…"}</div>
-                    </div>
-                  </div>
-                )}
+                <MessageList
+                  messages={messages}
+                  streamedContent={streamedContent}
+                  isStreaming={isStreaming}
+                  agentProgress={agentProgress}
+                  onCitationClick={onCitationClick}
+                  onCancel={onCancelStream}
+                  turnMeta={turnMeta}
+                  onOpenInspector={onOpenInspector}
+                  sourcesUsedIds={sourcesUsedIds}
+                  memoriesUsedIds={memoriesUsedIds}
+                />
 
                 {/* Generation Stopped */}
                 {generationStopped && (
@@ -885,7 +800,7 @@ export function ChatArea({
         {hasMessages && (
           <div className="relative z-10 px-4 pb-6">
             <div className="mx-auto max-w-3xl">
-              <div className="input-glass rounded-2xl p-1.5 shadow-2xl">
+              <div className="input-glass rounded-3xl px-2 pb-1.5 pt-2 shadow-2xl">
                 {/* Document Status Pill */}
                 {(uploading || activeDoc) && (
                   <div className="relative mb-2 flex items-center gap-2 px-1">
