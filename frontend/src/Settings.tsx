@@ -24,6 +24,7 @@ import { ScheduledTasks } from "./ScheduledTasks";
 import { MCPTab } from "./MCPTab";
 import { AgentDirectives } from "./AgentDirectives";
 import { SkillsTab } from "./SkillsTab";
+import { SkillsPanel } from "./components/Skills/SkillsPanel";
 import { GrokOAuthCard } from "./GrokOAuth";
 import { DesktopAutomation } from "./DesktopAutomation";
 
@@ -377,15 +378,16 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
             <AgentDirectives />
           </TabsContent>
 
-          {/* ── User-Defined Skills Tab ── */}
+          {/* ── Skills Tab ── */}
           <TabsContent value="skills">
             <DialogHeader>
               <DialogTitle>Skills</DialogTitle>
               <DialogDescription>
-                Create and manage your own skills — instruction playbooks the
+                Enable built-in capabilities, and create instruction playbooks the
                 agent can activate when a task matches.
               </DialogDescription>
             </DialogHeader>
+            <SkillsPanel />
             <SkillsTab />
           </TabsContent>
         </Tabs>
