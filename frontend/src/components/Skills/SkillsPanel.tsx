@@ -56,21 +56,22 @@ const PERMISSION_LEVELS: {
     value: "ask_every_time",
     label: "Ask every time",
     short: "Ask",
-    description: "Always confirm before executing",
+    description: "Always confirm before executing any command or file access.",
     icon: Shield,
   },
   {
     value: "auto_approve",
     label: "Auto approve",
     short: "Auto",
-    description: "Only ask for risky operations",
+    description:
+      "Automatically allow safe operations; ask only for risky/destructive actions.",
     icon: Zap,
   },
   {
     value: "full_access",
     label: "Full access",
     short: "Full",
-    description: "No confirmations (use with caution)",
+    description: "No confirmations. Execute all sandboxed operations immediately.",
     icon: Unlock,
   },
 ];
@@ -355,7 +356,8 @@ export function SkillsPanel() {
                             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                             <div className="min-w-0">
                               <p className="text-xs font-medium text-destructive">
-                                Full access removes confirmation prompts
+                                Full access allows the AI to modify files in the
+                                workspace without confirmation. Use with caution.
                               </p>
                               <p className="mt-1 text-[11px] text-muted-foreground">
                                 Workspace limits and the blocked-command list still
@@ -402,8 +404,9 @@ export function SkillsPanel() {
                             <span className="font-medium text-destructive">
                               Full access is on.
                             </span>{" "}
-                            Sandboxed actions run without confirmation; workspace
-                            limits still apply.
+                            The AI can modify files in the workspace without
+                            confirmation. Use with caution; workspace limits still
+                            apply.
                           </p>
                         </div>
                       ) : null}

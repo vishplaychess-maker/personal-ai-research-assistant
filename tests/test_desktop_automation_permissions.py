@@ -124,10 +124,14 @@ def test_non_ask_levels_allow_sandboxed_operations(make_service, level):
 def test_destructive_and_system_commands_stay_blocked(make_service, level):
     service = make_service(level)
 
-    with pytest.raises(da.CommandBlockedError):
-        service.run_command("rm", ["-rf", "."])
-    with pytest.raises(da.CommandBlockedError):
-        service.run_command("format", ["C:"])
+    for command, args in (
+        ("rm", ["-rf", "."]),
+        ("del", ["a.txt"]),
+        ("format", ["C:"]),
+        ("shutdown", ["/s"]),
+    ):
+        with pytest.raises(da.CommandBlockedError):
+            service.run_command(command, args)
 
 
 @pytest.mark.parametrize(
@@ -202,6 +206,27 @@ def test_stored_ask_level_blocks_then_auto_allows(signed_in, enabled):
 
     status = client.get("/api/desktop/status", headers=headers).json()
     assert status["permission_level"] == "auto_approve"
+
+
+def test_full_access_allows_sandboxed_commands_only(signed_in, enabled):
+    client, headers = signed_in
+
+    assert _set_level(client, headers, "full_access").status_code == 200
+
+    ran = client.post(
+        "/api/desktop/run", headers=headers, json={"command": "echo", "args": ["test"]}
+    )
+    assert ran.status_code == 200, ran.text[:300]
+    assert ran.json()["stdout"] == "test"
+
+    # The sandbox still wins over the permission level.
+    blocked = client.post(
+        "/api/desktop/run", headers=headers, json={"command": "rm", "args": ["-rf", "."]}
+    )
+    assert blocked.status_code == 403
+
+    status = client.get("/api/desktop/status", headers=headers).json()
+    assert status["permission_level"] == "full_access"
 
 
 def test_capabilities_api_defaults_and_round_trips_the_level(signed_in):
