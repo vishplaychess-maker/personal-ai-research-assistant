@@ -744,7 +744,7 @@ def agent_review(state: WorkflowState) -> WorkflowState:
     if verdict["approved"] or force_approve:
         if force_approve and not verdict["approved"]:
             logger.info(
-                "Multi-agent review hit the %d-retry limit — forcing approval",
+                "Multi-agent review hit the %d-retry limit - forcing approval",
                 MAX_REVIEW_RETRIES,
             )
         state["review_approved"] = True
@@ -768,7 +768,7 @@ def agent_review(state: WorkflowState) -> WorkflowState:
     logger.info(
         "Multi-agent review rejected (cycle %d/%d)%s",
         rounds + 1, MAX_REVIEW_RETRIES,
-        " — routing to Researcher" if verdict["needs_research"] else "",
+        " - routing to Researcher" if verdict["needs_research"] else "",
     )
     return state
 

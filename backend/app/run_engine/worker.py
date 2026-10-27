@@ -3686,9 +3686,9 @@ class RunWorker:
         while not self._stopped and not self._stopping():
             try:
                 await asyncio.to_thread(self.poll_once)
-            except Exception as exc:  # noqa: BLE001 — a sweep must not kill the loop
+            except Exception as exc:  # noqa: BLE001 - a sweep must not kill the loop
                 logger.error("RunWorker %s sweep failed: %s", self.worker_id,
-                             type(exc).__name__)  # class only — no traceback / text
+                             type(exc).__name__)  # class only - no traceback / text
             await asyncio.sleep(int(settings.run_worker_poll_interval_s))
         logger.info("RunWorker %s stopped", self.worker_id)
 

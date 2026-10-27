@@ -253,7 +253,7 @@ class HuggingFaceProvider(LLMProvider):
                             continue
 
                         delta = (
-                            chunk.get("choices", [{}])[0]
+                            (chunk.get("choices") or [{}])[0]
                             .get("delta", {})
                             .get("content", "")
                         )

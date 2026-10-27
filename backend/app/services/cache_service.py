@@ -259,7 +259,7 @@ def _self_check() -> None:
         if hit is not None:
             print("semantic cache HIT:", hit[:45], "...")
         else:
-            print("semantic cache: no hit (Ollama offline or low similarity) — OK")
+            print("semantic cache: no hit (Ollama offline or low similarity) - OK")
     except Exception as exc:  # noqa: BLE001
         raise AssertionError(f"semantic get must not raise: {exc}") from exc
 

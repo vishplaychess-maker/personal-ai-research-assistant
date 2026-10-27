@@ -324,7 +324,7 @@ def _call_ollama_with_retry(
             last_exc = exc
             if attempt < max_retries:
                 logger.warning(
-                    "Ollama extraction attempt %d failed: %s. Retrying in %.1fs…",
+                    "Ollama extraction attempt %d failed: %s. Retrying in %.1fs...",
                     attempt + 1, exc, retry_delay,
                 )
                 time.sleep(retry_delay)

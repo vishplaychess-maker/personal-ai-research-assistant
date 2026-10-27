@@ -87,7 +87,7 @@ async def _scrape_async(url: str) -> str:
                 )
             except Exception:
                 logger.debug(
-                    "networkidle timeout for %s — using current content", url
+                    "networkidle timeout for %s - using current content", url
                 )
 
             content = await page.inner_text("body")

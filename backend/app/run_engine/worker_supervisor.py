@@ -149,7 +149,7 @@ def assert_embedded_topology_ok() -> None:
     if detected is not None and detected != configured:
         logger.warning(
             "run_worker_web_concurrency=%d disagrees with a detected web-process "
-            "count of %d — set run_worker_web_concurrency to the real count",
+            "count of %d - set run_worker_web_concurrency to the real count",
             configured, detected,
         )
     count = max(configured, detected or 1)
@@ -278,7 +278,7 @@ class RunWorkerSupervisor:
                     # off. Minimal cleanup, then re-raise so the thread ends.
                     self._status.last_bounded_error_code = _INTERRUPTED
                     logger.warning("RunWorkerSupervisor worker thread interrupted "
-                                   "(%s) — ending, not retrying",
+                                   "(%s) - ending, not retrying",
                                    type(_interrupt).__name__)
                     raise
                 except Exception as exc:  # OPERATIONAL sweep failure ONLY
@@ -290,7 +290,7 @@ class RunWorkerSupervisor:
                         self._status.last_bounded_error_code = code
                     if fatal:
                         logger.critical("RunWorkerSupervisor fatal sweep error "
-                                        "(%s) — stopping; NOT retrying", code)
+                                        "(%s) - stopping; NOT retrying", code)
                         break
                     logger.error("RunWorkerSupervisor sweep failed (%s); backoff "
                                  "%.0fs (consecutive=%d)", code, self._backoff,
@@ -337,7 +337,7 @@ class RunWorkerSupervisor:
                 self._status.stopping = True    # stays stopping; alive stays True
                 logger.error(
                     "RunWorkerSupervisor shutdown grace (%.0fs) expired; the "
-                    "worker thread is still alive (daemon — it will not block "
+                    "worker thread is still alive (daemon - it will not block "
                     "process exit and will be abandoned at interpreter exit)",
                     grace)
                 return

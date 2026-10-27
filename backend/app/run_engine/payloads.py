@@ -136,10 +136,15 @@ def _ct_eq(a: str | None, b: str | None) -> bool:
 def _cipher():
     """The repo's canonical Fernet cipher. Raises RuntimeError when
     ENCRYPTION_KEY is unset (callers translate that to a typed fail-closed
-    error)."""
+    error).
+
+    Deliberately opts OUT of the portable <data>/encryption.key fallback: a
+    durable run payload must never be sealed under a key that was auto-created
+    without an explicit operator decision.
+    """
     from app.services.encryption import get_cipher
 
-    return get_cipher()
+    return get_cipher(allow_portable_fallback=False)
 
 
 def seal_payload(

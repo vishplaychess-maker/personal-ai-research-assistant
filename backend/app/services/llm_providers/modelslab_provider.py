@@ -166,7 +166,7 @@ class ModelsLabProvider(LLMProvider):
                         except json.JSONDecodeError:
                             continue
                         delta = (
-                            chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            (chunk.get("choices") or [{}])[0].get("delta", {}).get("content", "")
                         )
                         if delta:
                             full_response.append(delta)

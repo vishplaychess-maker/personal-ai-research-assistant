@@ -641,7 +641,7 @@ async def stream_multi_agent_response(
             if verdict["approved"] or rounds >= MAX_REVIEW_RETRIES:
                 if rounds >= MAX_REVIEW_RETRIES and not verdict["approved"]:
                     logger.info(
-                        "Multi-agent review hit the %d-retry limit — forcing approval",
+                        "Multi-agent review hit the %d-retry limit - forcing approval",
                         MAX_REVIEW_RETRIES,
                     )
                 final_text = verdict["cleaned"] or code_out
@@ -723,6 +723,32 @@ async def stream_multi_agent_response(
 
 
 # ── Streaming generator ───────────────────────────────────
+
+
+async def _safe_provider_stream(provider, *, messages, system_prompt, model_name):
+    """Yield a provider stream, turning a raised exception into an error chunk.
+
+    A provider that raises (rather than yielding {"type": "error"}) must
+    not abort the whole fallback chain or collapse a chat into
+    INTERNAL_ERROR. The exception is logged by type only and surfaced as a
+    bounded error chunk so the normal fallback / PROVIDER_ERROR handling
+    applies (e.g. a malformed OLLAMA_HOST URL in the last-resort provider).
+    """
+    try:
+        async for chunk in provider.generate_stream_async(
+            messages=messages,
+            system_prompt=system_prompt,
+            model_name=model_name,
+        ):
+            yield chunk
+    except Exception as exc:  # noqa: BLE001 - bounded, no provider text
+        name = getattr(provider, "name", "provider")
+        logger.warning(
+            "Streaming provider %s raised (%s) - trying next fallback",
+            name,
+            type(exc).__name__,
+        )
+        yield {"type": "error", "error": f"{name} failed ({type(exc).__name__})"}
 
 
 async def stream_chat_response(
@@ -857,7 +883,8 @@ async def stream_chat_response(
             skill_stream = SkillStreamFilter()
             stream_error = None
             emitted_any = False
-            async for chunk in provider.generate_stream_async(
+            async for chunk in _safe_provider_stream(
+                provider,
                 messages=context.history,
                 system_prompt=context.system_prompt,
                 model_name=context.model_name if _p_idx == 0 else None,
@@ -951,8 +978,11 @@ async def stream_chat_response(
                     except Exception as exc:
                         logger.warning("Skill marker processing failed (non-fatal): %s", exc)
                     # CAG: cache this FINAL answer for identical/similar future
-                    # repeats. Skip when code/MCP ran (replay must not re-execute).
-                    if cache_question and not code and not mcp_calls:
+                    # repeats. Skip when a code marker was seen / MCP ran (replay
+                    # must not re-execute). There is no auto-execution on this
+                    # legacy path (MP-4C removed it), so the signal is the
+                    # fail-closed python block, not a removed `code` variable.
+                    if cache_question and not _python_block and not mcp_calls:
                         semantic_cache.chat_store(
                             context.session_id, cache_question, full_response_text,
                             context.provider_config, context.model_name,
@@ -993,7 +1023,7 @@ async def stream_chat_response(
 
             if stream_error and not emitted_any and _p_idx < len(provider_chain) - 1:
                 logger.warning(
-                    "Streaming provider %s failed (%s) — trying next fallback",
+                    "Streaming provider %s failed (%s) - trying next fallback",
                     provider.name, stream_error,
                 )
                 continue
@@ -1007,7 +1037,12 @@ async def stream_chat_response(
                 return
 
     except Exception as exc:
-        logger.error("Unexpected streaming error: %s", exc, exc_info=True)
+        logger.error(
+            "Unexpected streaming error (%s): %s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         yield format_sse("error", {
             "code": "INTERNAL_ERROR",
             "detail": "An unexpected error occurred during generation.",
