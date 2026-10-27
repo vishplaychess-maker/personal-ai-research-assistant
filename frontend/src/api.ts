@@ -21,6 +21,12 @@ import type {
   OAuthStatusResponse,
   OAuthAccountResponse,
   OAuthLogoutResponse,
+  DesktopStatus,
+  DesktopTreeResponse,
+  DesktopReadResponse,
+  DesktopWriteResponse,
+  DesktopRunResult,
+  DesktopScreenshotResult,
   AgentDirective,
   UserSkill,
   UserSkillDetail,
@@ -358,6 +364,37 @@ export const API = {
   },
   grokAccount() {
     return request<OAuthAccountResponse>("/api/oauth/grok/account");
+  },
+
+  // ── Desktop automation (workspace-sandboxed, opt-in) ─────
+  desktopStatus() {
+    return request<DesktopStatus>("/api/desktop/status");
+  },
+  desktopTree() {
+    return request<DesktopTreeResponse>("/api/desktop/tree");
+  },
+  desktopRead(path: string) {
+    return request<DesktopReadResponse>("/api/desktop/read", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+  },
+  desktopWrite(path: string, content: string) {
+    return request<DesktopWriteResponse>("/api/desktop/write", {
+      method: "POST",
+      body: JSON.stringify({ path, content }),
+    });
+  },
+  desktopRun(command: string, args: string[], timeout_s?: number) {
+    return request<DesktopRunResult>("/api/desktop/run", {
+      method: "POST",
+      body: JSON.stringify({ command, args, timeout_s }),
+    });
+  },
+  desktopScreenshot() {
+    return request<DesktopScreenshotResult>("/api/desktop/screenshot", {
+      method: "POST",
+    });
   },
 
   // ── Agent Directives (F6 Cap 3 "Lessons Learned") ────────

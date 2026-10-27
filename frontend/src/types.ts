@@ -124,6 +124,58 @@ export interface ProviderModelGroup {
   models: ModelInfo[];
 }
 
+// ── Desktop automation (opt-in, workspace-sandboxed) ───────
+
+export interface DesktopStatus {
+  enabled: boolean;
+  workspace: string;
+  commands: string[];
+  internal_commands: string[];
+  blocked_commands: string[];
+  timeout_s: number;
+}
+
+export interface DesktopTreeEntry {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  size: number;
+  depth: number;
+}
+
+export interface DesktopTreeResponse {
+  root: string;
+  entries: DesktopTreeEntry[];
+}
+
+export interface DesktopReadResponse {
+  path: string;
+  content: string;
+}
+
+export interface DesktopWriteResponse {
+  path: string;
+  ok: boolean;
+  bytes_written: number;
+}
+
+export interface DesktopRunResult {
+  command: string;
+  returncode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  duration_ms: number;
+  timed_out: boolean;
+}
+
+export interface DesktopScreenshotResult {
+  status: string;
+  description: string | null;
+  notice: string;
+  image_bytes: number;
+}
+
 // ── Subscription sign-in (OAuth device code) ───────────────
 
 export type OAuthLoginStatus =

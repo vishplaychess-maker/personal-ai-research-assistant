@@ -8,6 +8,7 @@ per session so streaming tests do not pay the cold start.
 import logging
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 import httpx
@@ -54,11 +55,20 @@ def _configure_test_database() -> Path | None:
         return None
 
     db_path = (_test_db_dir() / "thunder-test.db").resolve()
-    # A leftover file from an aborted run would make results depend on it.
+    # A leftover file from an aborted run would make results depend on it. When
+    # another run still holds it (two sessions overlapping on Windows), fall
+    # back to a unique name instead of failing the whole session.
     for suffix in ("", "-wal", "-shm"):
         stale = Path(str(db_path) + suffix)
-        if stale.exists():
+        if not stale.exists():
+            continue
+        try:
             stale.unlink()
+        except OSError:
+            db_path = (
+                _test_db_dir() / f"thunder-test-{os.getpid()}-{uuid.uuid4().hex[:6]}.db"
+            ).resolve()
+            break
     os.environ["DATABASE_URL"] = "sqlite:///" + db_path.as_posix()
     logger.info("Tests will use an isolated database at %s", db_path)
     return db_path

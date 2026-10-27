@@ -83,6 +83,7 @@ from app.routes.runs import router as runs_router
 from app.routes.vision import router as vision_router
 from app.routes.setup import router as setup_router
 from app.routes.oauth import router as oauth_router
+from app.routes.desktop import router as desktop_router
 from app.services import access_guard, setup_service
 from app.static_mount import mount_frontend
 
@@ -1582,6 +1583,7 @@ app.include_router(runs_router)  # Phase 1B.2R MP-3A — gated by run_public_api
 app.include_router(vision_router)  # Local Vision (ZERO API cost) — POST /api/vision/describe
 app.include_router(setup_router)  # First-run setup - GET /api/setup/status, POST /api/setup/configure
 app.include_router(oauth_router)  # Subscription sign-in - /api/oauth/{provider}/start|status|refresh|account
+app.include_router(desktop_router)  # Desktop automation - /api/desktop/* (503 unless DESKTOP_AUTOMATION_ENABLED)
 
 
 @app.get("/health")

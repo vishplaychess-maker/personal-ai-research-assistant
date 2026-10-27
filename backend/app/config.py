@@ -1,3 +1,5 @@
+import re
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 from pathlib import Path
@@ -158,6 +160,15 @@ class Settings(BaseSettings):
     # Enable the terminal executor tool for the AI agent.
     # When true, the agent can propose shell commands for user approval.
     enable_terminal_tool: bool = False
+
+    # ── Desktop automation (opt-in, local only) ───────────
+    # A sandboxed file/command surface for the packaged desktop app. Every path
+    # is confined to workspace_dir; there is no shell, no network expectation,
+    # and nothing is written outside the workspace. Off by default: with this
+    # false the routes answer 503 and no service is constructed.
+    desktop_automation_enabled: bool = False
+    workspace_dir: str = "D:/ThunderAI/workspace"
+    command_timeout_s: int = 30
 
     # ── Multi-agent collaboration (Phase 3) ──────────────
     # When true, complex build/code tasks are routed through the
@@ -1012,6 +1023,36 @@ class Settings(BaseSettings):
                     )
         if self.grok_oauth_poll_interval_s < 1:
             raise ValueError("grok_oauth_poll_interval_s must be at least 1 second")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_desktop_automation(self) -> "Settings":
+        """Refuse to arm desktop automation inside a system or user-private tree.
+
+        The workspace is the sandbox root, so pointing it at Windows, a browser
+        profile or a documents folder would put those trees behind the
+        automation API. Checked at load and again on every path resolution.
+        """
+        if self.command_timeout_s < 1 or self.command_timeout_s > 300:
+            raise ValueError("command_timeout_s must be between 1 and 300 seconds")
+        if not self.desktop_automation_enabled:
+            return self
+        root = (self.workspace_dir or "").strip()
+        if not root:
+            raise ValueError(
+                "workspace_dir is required when desktop_automation_enabled is true"
+            )
+        resolved = str(Path(root).expanduser().resolve()).lower().replace("\\", "/")
+        for prefix in ("c:/windows", "c:/program files", "c:/programdata"):
+            if resolved == prefix or resolved.startswith(prefix + "/"):
+                raise ValueError("workspace_dir must not point at a system directory")
+        if re.match(
+            r"^[a-z]:/users/[^/]+/(appdata|documents|desktop|downloads|onedrive)",
+            resolved,
+        ):
+            raise ValueError(
+                "workspace_dir must not point at a user profile folder"
+            )
         return self
 
     @property

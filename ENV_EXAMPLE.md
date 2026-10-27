@@ -128,6 +128,23 @@ unencrypted. See `docs/grok_oauth_signin.md`.
 | `DEEP_RESEARCH_MAX_SCRAPE` | `3` | No | Hard cap on scrape loop |
 | `ENABLE_TERMINAL_TOOL` | `false` | Keep `false` | HITL shell proposals |
 | `GROK_OAUTH_ENABLED` | `false` | No | Grok subscription sign-in; see **LLM Providers → Grok** above and `docs/grok_oauth_signin.md` |
+| `DESKTOP_AUTOMATION_ENABLED` | `false` | No | Sandboxed file/command surface (`/api/desktop/*`); 503 while false |
+| `WORKSPACE_DIR` | `D:/ThunderAI/workspace` | No | The only directory the automation API may read or write; system and user-profile trees are refused even if set here |
+| `COMMAND_TIMEOUT_S` | `30` | No | Per-command timeout, 1–300 s |
+
+**Desktop automation limits.** Paths resolve inside `WORKSPACE_DIR` only
+(symlinks followed; `C:/Windows`, `C:/Program Files`, `C:/ProgramData` and
+`C:/Users/<name>/{AppData,Documents,Desktop,Downloads,OneDrive}` are refused,
+with this process's `%LOCALAPPDATA%/Temp` exempt as scratch space). Commands run
+as an argv list with no shell: `python`, `node`, `npm`, `git`, `pip` (workspace
+`.venv` only) plus in-process `dir`/`ls`/`cat`/`type`/`echo`; eval flags (`-c`,
+`-e`, `git -C`) and the `rm`/`del`/`format`/`net`/`regedit`/`shutdown`/`taskkill`
+family are refused. The child gets a scrubbed environment (no `ENCRYPTION_KEY`,
+`JWT_SECRET` or provider keys) with `HOME`/`TEMP` inside the workspace. A
+whitelist around interpreters is a guardrail, not a jail — code already inside
+the workspace runs as that code, and child-process network egress cannot be
+blocked from inside CPython; use a container or an OS firewall rule if that
+must be enforced.
 | `ENABLE_MCP_TOOL` | `false` | No | — |
 | `MCP_CALL_TIMEOUT_S` | `30` | No | — |
 | `MCP_DISCOVERY_TIMEOUT_S` | `20` | No | — |

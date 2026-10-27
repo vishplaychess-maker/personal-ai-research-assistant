@@ -25,6 +25,7 @@ import { MCPTab } from "./MCPTab";
 import { AgentDirectives } from "./AgentDirectives";
 import { SkillsTab } from "./SkillsTab";
 import { GrokOAuthCard } from "./GrokOAuth";
+import { DesktopAutomation } from "./DesktopAutomation";
 
 const PROVIDER_OPTIONS = [
   { value: "glm", label: "GLM 5.3 Flash (Free)" },
@@ -55,7 +56,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) {
-  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp" | "directives" | "skills">("providers");
+  const [activeTab, setActiveTab] = useState<"providers" | "scheduler" | "mcp" | "directives" | "skills" | "desktop">("providers");
   
   // ── Providers state ──────────────────────────────────────
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -161,14 +162,27 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp" | "directives" | "skills")} className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "scheduler" | "mcp" | "directives" | "skills" | "desktop")} className="w-full">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="scheduler">Scheduled Tasks</TabsTrigger>
             <TabsTrigger value="mcp">MCP Servers</TabsTrigger>
             <TabsTrigger value="directives">Lessons Learned</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
+            <TabsTrigger value="desktop">Desktop</TabsTrigger>
           </TabsList>
+
+          {/* ── Desktop Automation Tab ── */}
+          <TabsContent value="desktop">
+            <DialogHeader>
+              <DialogTitle>Desktop Automation</DialogTitle>
+              <DialogDescription>
+                Files and commands inside one workspace folder. Off by default, and
+                nothing outside the workspace can be reached.
+              </DialogDescription>
+            </DialogHeader>
+            <DesktopAutomation />
+          </TabsContent>
 
           {/* ── Providers Tab ── */}
           <TabsContent value="providers">
