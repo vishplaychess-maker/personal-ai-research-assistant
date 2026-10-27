@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import App from "../App";
 import { ThemeProvider } from "../components/ThemeProvider";
 
@@ -135,7 +136,7 @@ describe("App", () => {
     ).toBeTruthy();
   });
 
-  it("renders health indicators", () => {
+  it("renders health indicators", async () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
@@ -148,9 +149,14 @@ describe("App", () => {
       clearError: vi.fn(),
     });
 
+    const user = userEvent.setup();
     renderApp();
-    expect(screen.getByText("API")).toBeTruthy();
-    expect(screen.getByText("LLM")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("API");
+    expect(menu).toHaveTextContent("LLM");
+    expect(menu).toHaveTextContent("DB");
+    await waitFor(() => expect(menu).toHaveTextContent("3/3"));
   });
 
   it("renders the new session button", () => {

@@ -29,6 +29,15 @@ import { useTheme } from "./components/ThemeProvider";
 import { Button } from "./components/ui/button";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { cn } from "./lib/utils";
+import { MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
 import type { Session, HealthStatus, SearchResult } from "./types";
 
 function formatDate(iso: string) {
@@ -96,6 +105,7 @@ export function Sidebar({
   userName,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -395,126 +405,73 @@ export function Sidebar({
         </div>
       </ScrollArea>
 
-      {/* Footer - Minimal */}
-      <footer className="border-t border-white/10 px-3 py-3">
-        {userName ? (
-          <div className="mb-3 flex items-center gap-2.5 rounded-lg px-1 py-1">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-medium text-foreground">
-              {userName.slice(0, 2).toUpperCase()}
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-medium leading-none text-foreground">
-                {userName}
-              </div>
-              <div className="mt-1 truncate text-[11px] leading-none text-secondary">
-                Signed in
-              </div>
-            </div>
+      {/* Footer — compact single row (~52px). Everything else lives in the
+          overflow menu so no action is hover-only or unreachable by keyboard. */}
+      <footer className="border-t border-white/10 px-2 py-1.5">
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <div className="group flex h-9 items-center gap-2 rounded-lg px-1.5 transition-colors hover:bg-white/5 focus-within:bg-white/5">
+            <button
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              aria-label="Account and actions"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left"
+            >
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-medium text-foreground">
+                {(userName ?? "?").slice(0, 2).toUpperCase()}
+              </span>
+              <span className="truncate text-[13px] font-medium text-foreground">
+                {userName ?? "Account"}
+              </span>
+            </button>
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                title="Settings"
+                aria-label="Settings"
+                className="rounded-md p-1.5 text-secondary opacity-60 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <SettingsIcon className="h-4 w-4" />
+              </button>
+            )}
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                title="More actions"
+                aria-label="More actions"
+                className="rounded-md p-1.5 text-secondary opacity-60 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
           </div>
-        ) : null}
 
-        {/* Health Status - Readable */}
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-secondary">
-          <span className="flex items-center gap-1">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                health?.backend === "ok" ? "bg-green-500" : "bg-destructive"
-              )}
-            />
-            API
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                health?.ollama === "ok" ? "bg-green-500" : "bg-destructive"
-              )}
-            />
-            LLM
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                health?.chromadb === "ok" ? "bg-green-500" : "bg-destructive"
-              )}
-            />
-            DB
-          </span>
-          <span className="ml-auto text-[10px] font-medium text-secondary">
-            {healthOk === 3 ? "All OK" : `${healthOk}/3`}
-          </span>
-        </div>
-
-        {/* Action Buttons - Readable */}
-        <div className="flex items-center gap-0.5">
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={toggleTheme}
-            title={theme === "paper" ? "Switch to a dark theme" : "Switch to paper"}
-            className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
-          >
-            {theme === "paper" ? <Moon className="h-4 w-4 icon-secondary" /> : <Sun className="h-4 w-4 icon-secondary" />}
-          </Button>
-          {onOpenGraph && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onOpenGraph}
-              title="Knowledge Graph"
-              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
-            >
-              <Network className="h-4 w-4 icon-secondary" />
-            </Button>
-          )}
-          {onOpenTerminal && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onOpenTerminal}
-              title="Terminal"
-              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
-            >
-              <SquareTerminal className="h-4 w-4 icon-secondary" />
-            </Button>
-          )}
-          {onOpenMediaGeneration && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onOpenMediaGeneration}
-              title="Media Generation"
-              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
-            >
-              <Image className="h-4 w-4 icon-secondary" />
-              <Video className="h-4 w-4 icon-secondary ml-1 -mt-1" />
-            </Button>
-          )}
-          {onOpenSettings && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onOpenSettings}
-              title="Settings"
-              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5"
-            >
-              <SettingsIcon className="h-4 w-4 icon-secondary" />
-            </Button>
-          )}
-          {onLogout && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onLogout}
-              title="Sign out"
-              className="h-9 w-9 rounded-xl transition-colors hover:bg-white/5 hover:text-destructive"
-            >
-              <LogOut className="h-4 w-4 icon-secondary" />
-            </Button>
-          )}
-        </div>
+          <DropdownMenuContent align="start" side="top" className="w-56">
+            <DropdownMenuLabel className="flex items-center gap-1.5 text-[10px] font-normal text-secondary">
+              <span className={cn("h-1.5 w-1.5 rounded-full", health?.backend === "ok" ? "bg-green-500" : "bg-destructive")} />
+              API
+              <span className={cn("h-1.5 w-1.5 rounded-full", health?.ollama === "ok" ? "bg-green-500" : "bg-destructive")} />
+              LLM
+              <span className={cn("h-1.5 w-1.5 rounded-full", health?.chromadb === "ok" ? "bg-green-500" : "bg-destructive")} />
+              DB
+              <span className="ml-auto font-mono">{healthOk === 3 ? "3/3" : `${healthOk}/3`}</span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => toggleTheme()}>
+              {theme === "paper" ? <Moon className="mr-2 h-3.5 w-3.5" /> : <Sun className="mr-2 h-3.5 w-3.5" />}
+              {theme === "paper" ? "Dark theme" : "Paper theme"}
+            </DropdownMenuItem>
+            {onOpenGraph && <DropdownMenuItem onSelect={onOpenGraph}>Knowledge Graph</DropdownMenuItem>}
+            {onOpenTerminal && <DropdownMenuItem onSelect={onOpenTerminal}>Terminal</DropdownMenuItem>}
+            {onOpenMediaGeneration && <DropdownMenuItem onSelect={onOpenMediaGeneration}>Media Generation</DropdownMenuItem>}
+            <DropdownMenuSeparator />
+            {onLogout && (
+              <DropdownMenuItem onSelect={onLogout} className="text-destructive">
+                Sign out
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </footer>
     </aside>
   );

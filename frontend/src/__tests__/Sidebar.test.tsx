@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import { ThemeProvider } from "../components/ThemeProvider";
 import type { Session, HealthStatus } from "../types";
@@ -156,21 +157,28 @@ describe("Sidebar", () => {
     expect(onRenameSession).toHaveBeenCalledWith(1, "Renamed Session");
   });
 
-  it("shows health indicators", () => {
+  it("shows health indicators", async () => {
+    const user = userEvent.setup();
     renderSidebar();
-    expect(screen.getByText("API")).toBeTruthy();
-    expect(screen.getByText("LLM")).toBeTruthy();
-    expect(screen.getByText("All OK")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("API");
+    expect(menu).toHaveTextContent("LLM");
+    expect(menu).toHaveTextContent("DB");
+    expect(menu).toHaveTextContent("3/3");
   });
 
-  it("shows health count when not all services are ok", () => {
+  it("shows health count when not all services are ok", async () => {
     const partialHealth: HealthStatus = {
       backend: "ok",
       chromadb: "error",
       ollama: "ok",
     };
+    const user = userEvent.setup();
     renderSidebar({ health: partialHealth });
-    expect(screen.getByText("2/3")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("2/3");
   });
 
   // ── Search ─────────────────────────────────────────────
