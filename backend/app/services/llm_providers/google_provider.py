@@ -183,7 +183,7 @@ class GoogleProvider(LLMProvider):
                         except json.JSONDecodeError:
                             continue
                         delta = (
-                            chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            (chunk.get("choices") or [{}])[0].get("delta", {}).get("content", "")
                         )
                         if delta:
                             full_response.append(delta)
@@ -197,9 +197,17 @@ class GoogleProvider(LLMProvider):
             yield {"type": "error", "error": "Google AI request failed."}
 
     def fetch_available_chat_models(self) -> Optional[List[str]]:
-        """Dynamically fetch Gemini models from the OpenAI-compatible /models endpoint."""
+        """Dynamically fetch Gemini models from the OpenAI-compatible /models endpoint.
+
+        When no key is configured yet (for example the Add Provider dialog,
+        which lists models before a key is saved) the curated Gemini list is
+        returned instead of None so the model dropdown is never empty. Once a
+        key is available the live catalog is used, with the curated list as the
+        fallback. The key is never logged.
+        """
         if not (self._api_key or settings.google_api_key):
-            return None
+            logger.info("Google AI key is not configured; using the curated Gemini list.")
+            return list(_POPULAR_GEMINI_MODELS)
         chat_models: List[str] = []
         try:
             with httpx.Client(timeout=httpx.Timeout(15.0, connect=10.0)) as client:

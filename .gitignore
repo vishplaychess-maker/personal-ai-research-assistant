@@ -36,6 +36,9 @@ build_output.txt
 .env
 .env.local
 .env.bak-*
+# Frontend production override (shareable template: frontend/.env.production.example).
+# Render injects VITE_API_BASE_URL via service discovery instead.
+frontend/.env.production
 
 # Data (created at runtime)
 /data/

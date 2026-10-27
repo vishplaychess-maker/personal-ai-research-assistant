@@ -31,6 +31,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.services.setup_service import resolve_gemini_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,8 @@ class GeminiService:
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
                  vision_model: Optional[str] = None, timeout: Optional[float] = None,
                  max_tokens: Optional[int] = None) -> None:
-        self.api_key = api_key if api_key is not None else getattr(settings, "gemini_api_key", "")
+        # Explicit key wins; otherwise env / .env, then config.json (first-run).
+        self.api_key = api_key if api_key is not None else resolve_gemini_api_key()
         self.model = model or getattr(settings, "gemini_model", "gemini-1.5-flash")
         self.vision_model = vision_model or getattr(settings, "gemini_vision_model", self.model)
         try:

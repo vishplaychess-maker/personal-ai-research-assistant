@@ -9,17 +9,23 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# npm install (not npm ci): the committed lockfile is out of sync with the
+# package.json ranges (pre-existing drift), so npm ci refuses to install.
+RUN npm install --no-audit --no-fund
 
 COPY . .
 RUN npm run build
 
-# Stage 2: serve the static bundle with nginx (SPA fallback + /api proxy).
-FROM nginx:alpine
+# Stage 2: serve the static bundle with nginx as a non-root user.
+# nginx-unprivileged runs as uid 101, listens on 8080, and keeps its pid and
+# temp paths under /tmp, so no root or privileged port is required.
+FROM nginxinc/nginx-unprivileged:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf.prod /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+USER 101
+
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

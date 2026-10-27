@@ -1,22 +1,49 @@
-# Build context for the root-context build (executor_service/Dockerfile).
-# The backend/frontend builds use their own subdirectory contexts and are not
-# affected by this file.
-.git
-.github
-.venv
-.tmp
-.pytest_cache
-.superpowers
-node_modules
-frontend
-# backend/ stays out of the executor context EXCEPT the shared contract.
-backend/*
-!backend/mp4c_contract
-evals
-docs
-secrets
-*.db
-test.db
-build_output.txt
+# ── Root build context (Render ./Dockerfile + executor_service/Dockerfile) ──
+# Docker reads exactly ONE .dockerignore, from the build-context root, so this
+# file serves every root-context build. It MUST NOT exclude `backend/` (the
+# Render image copies it) — the previous executor-only version did.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Secrets & environment (never bake into an image)
 .env
 .env.*
+!.env.example
+!.env.production.example
+
+# VCS / editors
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node / frontend build output
+node_modules/
+frontend/dist/
+
+# Local data & build artefacts
+*.db
+test.db
+/data/
+build_output.txt
+.tmp/
+tmp/
+
+# Docs & non-runtime material
+*.md
+docs/
+evals/
+.superpowers/
+
+# Operator secrets (executor grant keys / tokens)
+secrets/

@@ -64,7 +64,7 @@ def decrypt_key(ciphertext: str) -> str:
         return decrypt_api_key(value)
     except RuntimeError:
         logger.warning(
-            "ENCRYPTION_KEY is not configured — cannot decrypt a stored "
+            "ENCRYPTION_KEY is not configured - cannot decrypt a stored "
             "API key; falling back to the environment provider key if any."
         )
         return ""

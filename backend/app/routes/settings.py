@@ -24,6 +24,7 @@ from app.services.cookie_service import require_csrf
 from app.services.auth_service import get_current_user
 from app.services.encryption_service import decrypt_key
 from app.services.encryption import mask_api_key
+from app.services.google_key_validation import verify_google_api_key
 from app.models.models import User
 from app.config import settings
 from app.run_engine.messages_stream import _SUPPORTED_DURABLE_MODES
@@ -176,6 +177,15 @@ def _validate_api_key_format(provider: str, api_key: str) -> None:
                 "and the selected provider."
             ),
         )
+    # Google keys have several valid prefixes ("AIza", "AQ.", ...): verify the
+    # key against the live Generative Language models endpoint instead.
+    if provider == "google":
+        ok, message = verify_google_api_key(api_key)
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail=message or "Invalid Google AI API key.",
+            )
 
 
 @router.get("", response_model=SettingsResponse)

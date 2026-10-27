@@ -13,6 +13,7 @@ fail-closed provider error.
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.config import settings
+from app.services.setup_service import resolve_gemini_api_key
 from app.services.llm_providers.base import LLMProvider
 
 #: Curated fallback list (no network) for model discovery.
@@ -93,7 +94,7 @@ class GeminiProvider(LLMProvider):
         return models
 
     def health_check(self) -> bool:
-        return bool(self._api_key or getattr(settings, "gemini_api_key", ""))
+        return bool(self._api_key or resolve_gemini_api_key())
 
 
 __all__ = ["GeminiProvider"]

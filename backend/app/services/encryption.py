@@ -29,9 +29,17 @@ logger = logging.getLogger(__name__)
 # from legacy plaintext values without touching the key.
 FERNET_PREFIX = "gAAAAA"
 
+#: Portable encryption-key file, created on first use when ENCRYPTION_KEY is unset.
+ENCRYPTION_KEY_FILE = "encryption.key"
 
-def _load_key_material() -> bytes:
-    """Return the configured Fernet key, or raise RuntimeError if unset."""
+
+def _load_key_material(allow_portable_fallback: bool = True) -> bytes:
+    """Return the configured Fernet key, or raise RuntimeError if unset.
+
+    "allow_portable_fallback" enables the persistent <data>/encryption.key
+    fallback used for provider API keys. Run-payload sealing passes False, so
+    an unset ENCRYPTION_KEY still fails closed there.
+    """
     key = (os.getenv("ENCRYPTION_KEY") or "").strip()
     if not key:
         try:
@@ -39,6 +47,19 @@ def _load_key_material() -> bytes:
 
             key = (getattr(_settings, "encryption_key", "") or "").strip()
         except Exception:  # noqa: BLE001 — never let config errors crash callers
+            key = ""
+    if not key and allow_portable_fallback:
+        # Portable fallback (source checkout, or any launch path that bypasses
+        # the launcher env setup): derive and persist a key beside the database
+        # so provider keys can still be saved. Never logs the key material.
+        try:
+            from app.services.secret_store import load_or_create_secret
+
+            key = (load_or_create_secret(ENCRYPTION_KEY_FILE) or "").strip()
+        except Exception as exc:  # noqa: BLE001 — bounded, falls through to raise
+            logger.warning(
+                "ENCRYPTION_KEY fallback failed (%s)", type(exc).__name__
+            )
             key = ""
     if not key:
         raise RuntimeError(
@@ -50,20 +71,20 @@ def _load_key_material() -> bytes:
     return key.encode("utf-8")
 
 
-def get_cipher() -> Fernet:
+def get_cipher(allow_portable_fallback: bool = True) -> Fernet:
     """Return a Fernet cipher built from the configured ENCRYPTION_KEY."""
-    return Fernet(_load_key_material())
+    return Fernet(_load_key_material(allow_portable_fallback))
 
 
-def encrypt_api_key(plain_key: str) -> str:
+def encrypt_api_key(plain_key: str, allow_portable_fallback: bool = True) -> str:
     """Encrypt a plaintext API key and return the Fernet token string."""
     if not plain_key:
         return ""
-    token = get_cipher().encrypt(str(plain_key).encode("utf-8"))
+    token = get_cipher(allow_portable_fallback).encrypt(str(plain_key).encode("utf-8"))
     return token.decode("utf-8")
 
 
-def decrypt_api_key(encrypted_key: str) -> str:
+def decrypt_api_key(encrypted_key: str, allow_portable_fallback: bool = True) -> str:
     """Decrypt a Fernet token back to the plaintext API key.
 
     Raises ``InvalidToken`` when the value was not encrypted with the
@@ -71,7 +92,7 @@ def decrypt_api_key(encrypted_key: str) -> str:
     """
     if not encrypted_key:
         return ""
-    plain = get_cipher().decrypt(str(encrypted_key).encode("utf-8"))
+    plain = get_cipher(allow_portable_fallback).decrypt(str(encrypted_key).encode("utf-8"))
     return plain.decode("utf-8")
 
 

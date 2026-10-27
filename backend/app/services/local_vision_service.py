@@ -291,9 +291,10 @@ def _gemini_describe(raw: bytes) -> VisionResult:
     notice, and no API text / image content is ever logged."""
     try:
         from app.services.gemini_service import GeminiAPIError, GeminiService
+        from app.services.setup_service import resolve_gemini_api_key
 
         service = GeminiService(
-            api_key=getattr(settings, "gemini_api_key", ""),
+            api_key=resolve_gemini_api_key(),
             model=getattr(settings, "gemini_model", "gemini-1.5-flash"),
             vision_model=getattr(settings, "gemini_vision_model", "gemini-1.5-flash"),
             timeout=getattr(settings, "gemini_timeout_s", 30.0),
