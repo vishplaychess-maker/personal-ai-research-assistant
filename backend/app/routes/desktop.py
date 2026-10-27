@@ -13,16 +13,21 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import get_db
 from app.models.models import User
 from app.services.auth_service import get_current_user
+from app.services.capability_preferences import get_permission_level
 from app.services.cookie_service import require_csrf
 from app.services.desktop_automation import (
     ALLOWED_PROGRAMS,
     BLOCKED_COMMANDS,
+    DEFAULT_PERMISSION_LEVEL,
     INTERNAL_COMMANDS,
     DesktopAutomationService,
+    PermissionLevel,
     SandboxViolationError,
 )
 
@@ -41,6 +46,7 @@ class DesktopStatusResponse(BaseModel):
     internal_commands: List[str] = []
     blocked_commands: List[str] = []
     timeout_s: int = 30
+    permission_level: str = DEFAULT_PERMISSION_LEVEL.value
 
 
 class TreeEntry(BaseModel):
@@ -117,12 +123,15 @@ def _gate() -> None:
         )
 
 
-def _service() -> DesktopAutomationService:
+def _service(
+    permission_level: PermissionLevel = DEFAULT_PERMISSION_LEVEL,
+) -> DesktopAutomationService:
     """Built per request; tests monkeypatch this to inject OS seams."""
     _gate()
     return DesktopAutomationService(
         settings.workspace_dir,
         timeout_s=int(settings.command_timeout_s),
+        permission_level=permission_level,
     )
 
 
@@ -139,7 +148,10 @@ def _refused(exc: SandboxViolationError) -> HTTPException:
 
 
 @router.get("/status", response_model=DesktopStatusResponse)
-def desktop_status(current_user: User = Depends(get_current_user)) -> DesktopStatusResponse:
+def desktop_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DesktopStatusResponse:
     """Whether the feature is armed, and the policy the UI renders."""
     enabled = bool(settings.desktop_automation_enabled)
     return DesktopStatusResponse(
@@ -149,15 +161,17 @@ def desktop_status(current_user: User = Depends(get_current_user)) -> DesktopSta
         internal_commands=list(INTERNAL_COMMANDS),
         blocked_commands=list(BLOCKED_COMMANDS),
         timeout_s=int(settings.command_timeout_s),
+        permission_level=get_permission_level(db, current_user.id).value,
     )
 
 
 @router.get("/tree", response_model=TreeResponse)
 def desktop_tree(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TreeResponse:
     """Bounded listing of the workspace for the file-tree panel."""
-    service = _service()
+    service = _service(get_permission_level(db, current_user.id))
     try:
         entries = service.list_workspace()
     except SandboxViolationError as exc:
@@ -171,10 +185,11 @@ def desktop_tree(
 @router.post("/read", response_model=ReadResponse)
 def desktop_read(
     payload: ReadRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ) -> ReadResponse:
-    service = _service()
+    service = _service(get_permission_level(db, current_user.id))
     try:
         content = service.read_file(payload.path)
     except SandboxViolationError as exc:
@@ -185,10 +200,11 @@ def desktop_read(
 @router.post("/write", response_model=WriteResponse)
 def desktop_write(
     payload: WriteRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ) -> WriteResponse:
-    service = _service()
+    service = _service(get_permission_level(db, current_user.id))
     try:
         ok = service.write_file(payload.path, payload.content)
     except SandboxViolationError as exc:
@@ -201,10 +217,11 @@ def desktop_write(
 @router.post("/run", response_model=RunResponse)
 def desktop_run(
     payload: RunRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ) -> RunResponse:
-    service = _service()
+    service = _service(get_permission_level(db, current_user.id))
     try:
         result = service.run_command(
             payload.command, payload.args, timeout=payload.timeout_s
@@ -224,6 +241,7 @@ def desktop_run(
 
 @router.post("/screenshot", response_model=ScreenshotResponse)
 def desktop_screenshot(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
 ) -> ScreenshotResponse:
@@ -234,7 +252,7 @@ def desktop_screenshot(
     is the configured vision provider) and are never written to disk or
     returned to the client.
     """
-    service = _service()
+    service = _service(get_permission_level(db, current_user.id))
     try:
         raw = service.take_screenshot()
     except SandboxViolationError as exc:

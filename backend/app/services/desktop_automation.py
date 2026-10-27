@@ -37,6 +37,7 @@ Honest limits (why this is a guardrail, not a jail)
 from __future__ import annotations
 
 import datetime
+import enum
 import io
 import logging
 import os
@@ -125,6 +126,38 @@ class CommandBlockedError(SandboxViolationError):
     """
 
 
+class PermissionLevel(str, enum.Enum):
+    """How much confirmation a user wants before sandboxed actions run.
+
+    The sandbox (workspace boundary + command whitelist) always applies. This
+    level only decides whether an action is allowed to run at all:
+
+    * ``ASK_EVERY_TIME`` — every action raises :class:`PermissionRequired`.
+    * ``AUTO_APPROVE`` — sandbox-permitted actions run; destructive/system
+      commands stay refused by the whitelist before this level is consulted.
+    * ``FULL_ACCESS`` — same sandbox, no permission prompts.
+    """
+
+    ASK_EVERY_TIME = "ask_every_time"
+    AUTO_APPROVE = "auto_approve"
+    FULL_ACCESS = "full_access"
+
+
+DEFAULT_PERMISSION_LEVEL = PermissionLevel.AUTO_APPROVE
+#: Stable string values used by the API/UI; keep in sync with PermissionLevel.
+PERMISSION_LEVELS = tuple(level.value for level in PermissionLevel)
+PERMISSION_REQUIRED_MESSAGE = (
+    "Blocked: Requires 'Auto approve' or 'Full access' permission"
+)
+
+
+class PermissionRequired(SandboxViolationError):
+    """The stored permission level requires explicit approval before this action."""
+
+    def __init__(self, message: str = PERMISSION_REQUIRED_MESSAGE) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Metadata plus bounded output; the caller renders it, the log never does."""
@@ -153,12 +186,30 @@ class DesktopAutomationService:
         runner=None,
         screenshotter=None,
         clipboard_reader=None,
+        permission_level: "PermissionLevel | str" = DEFAULT_PERMISSION_LEVEL,
     ) -> None:
         self._root = Path(workspace_dir).expanduser().resolve()
         self._timeout_s = max(1, int(timeout_s))
         self._runner = runner or subprocess.run
         self._screenshotter = screenshotter or self._grab_screen
         self._clipboard_reader = clipboard_reader or self._read_clipboard_os
+        self._permission_level = self._coerce_permission_level(permission_level)
+
+    @staticmethod
+    def _coerce_permission_level(value: "PermissionLevel | str") -> PermissionLevel:
+        """Unknown/missing values fall back to the safe default, never to full."""
+        try:
+            return PermissionLevel(value)
+        except (ValueError, TypeError):
+            return DEFAULT_PERMISSION_LEVEL
+
+    @property
+    def permission_level(self) -> PermissionLevel:
+        return self._permission_level
+
+    def _require_permission(self) -> None:
+        if self._permission_level is PermissionLevel.ASK_EVERY_TIME:
+            raise PermissionRequired()
 
     # ── workspace ────────────────────────────────────────────
 
@@ -216,6 +267,7 @@ class DesktopAutomationService:
     # ── files ────────────────────────────────────────────────
 
     def read_file(self, path: str) -> str:
+        self._require_permission()
         target = self.resolve(path)
         if not target.is_file():
             raise SandboxViolationError("File not found in workspace.")
@@ -231,6 +283,7 @@ class DesktopAutomationService:
         return raw.decode("utf-8", errors="replace")
 
     def write_file(self, path: str, content: str) -> bool:
+        self._require_permission()
         target = self.resolve(path)
         data = (content or "").encode("utf-8")
         if len(data) > MAX_WRITE_BYTES:
@@ -258,6 +311,7 @@ class DesktopAutomationService:
 
     def list_workspace(self) -> List[Dict[str, object]]:
         """Breadth-first listing for the UI tree (bounded depth and count)."""
+        self._require_permission()
         self.ensure_workspace()
         entries: List[Dict[str, object]] = []
         queue: List[Tuple[Path, int]] = [(self._root, 0)]
@@ -297,6 +351,7 @@ class DesktopAutomationService:
         args: Optional[Sequence[str]] = None,
         timeout: Optional[int] = None,
     ) -> CommandResult:
+        self._require_permission()
         command = (cmd or "").strip().lower()
         argv = [str(a) for a in (args or [])]
         for arg in argv:
@@ -456,6 +511,7 @@ class DesktopAutomationService:
 
     def take_screenshot(self) -> bytes:
         """Capture the screen as PNG bytes held in memory — never written to disk."""
+        self._require_permission()
         try:
             data = self._screenshotter()
         except SandboxViolationError:
@@ -475,6 +531,7 @@ class DesktopAutomationService:
 
     def get_clipboard(self) -> str:
         """Read the clipboard (read-only by design; there is no write method)."""
+        self._require_permission()
         try:
             text = self._clipboard_reader()
         except SandboxViolationError:

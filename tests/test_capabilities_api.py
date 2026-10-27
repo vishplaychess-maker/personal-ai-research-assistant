@@ -19,7 +19,8 @@ from cryptography.fernet import Fernet
 from app.config import settings
 from tests.auth_helpers import auth_headers, register_and_login
 
-_CAPABILITY_IDS = {"web_search", "code_executor", "file_reader"}
+_CAPABILITY_IDS = {"web_search", "code_executor", "file_reader", "desktop_automation"}
+_CONFIGURED_IDS = {"code_executor", "desktop_automation"}
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +72,10 @@ def test_lists_static_catalog_with_disabled_defaults():
             assert item["name"]
             assert item["description"]
             assert item["enabled"] is False
-            assert item["config"] == {}
+            if item["id"] in _CONFIGURED_IDS:
+                assert item["config"] == {"permission_level": "auto_approve"}
+            else:
+                assert item["config"] == {}
 
 
 def test_patch_upserts_and_get_reflects_the_override():

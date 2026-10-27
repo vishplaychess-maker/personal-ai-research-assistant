@@ -450,7 +450,7 @@ def signed_in(client):
 @pytest.fixture
 def enabled(monkeypatch, service):
     monkeypatch.setattr(settings, "desktop_automation_enabled", True)
-    monkeypatch.setattr(desktop_routes, "_service", lambda: service)
+    monkeypatch.setattr(desktop_routes, "_service", lambda *args, **kwargs: service)
     return service
 
 

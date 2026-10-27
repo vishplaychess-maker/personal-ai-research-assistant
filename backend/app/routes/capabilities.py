@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models.models import SkillPreference, User
 from app.services import capability_registry
 from app.services.auth_service import get_current_user
+from app.services.capability_preferences import parse_permission_level
 from app.services.cookie_service import require_csrf
 
 router = APIRouter(prefix="/api/capabilities", tags=["capabilities"])
@@ -57,11 +58,11 @@ def _merged(default: Dict[str, Any], pref: Optional[SkillPreference]) -> Dict[st
         "description": default["description"],
         "icon": default["icon"],
         "enabled": bool(default["enabled"]),
-        "config": {},
+        "config": dict(default.get("config") or {}),
     }
     if pref is not None:
         merged["enabled"] = bool(pref.enabled)
-        merged["config"] = _parse_config(pref.config_json)
+        merged["config"].update(_parse_config(pref.config_json))
     return merged
 
 
@@ -106,6 +107,10 @@ def update_capability(
     default = capability_registry.get_capability(skill_id)
     if default is None:
         raise HTTPException(status_code=404, detail="Unknown capability")
+
+    if payload.config is not None and "permission_level" in payload.config:
+        if parse_permission_level(payload.config["permission_level"]) is None:
+            raise HTTPException(status_code=422, detail="Invalid permission_level")
 
     encoded_config = (
         json.dumps(payload.config, sort_keys=True) if payload.config is not None else None

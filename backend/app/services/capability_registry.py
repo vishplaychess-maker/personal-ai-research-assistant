@@ -24,6 +24,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "description": "Run snippets in an isolated workspace and return the output.",
         "icon": "terminal",
         "enabled": False,
+        "config": {"permission_level": "auto_approve"},
     },
     {
         "id": "file_reader",
@@ -31,6 +32,14 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "description": "Open files from the workspace to summarize or extract text.",
         "icon": "file-text",
         "enabled": False,
+    },
+    {
+        "id": "desktop_automation",
+        "name": "Desktop Automation",
+        "description": "Read and write workspace files and run sandboxed commands on this computer.",
+        "icon": "monitor",
+        "enabled": False,
+        "config": {"permission_level": "auto_approve"},
     },
 )
 
