@@ -108,6 +108,9 @@ class User(Base):
     providers = relationship("UserProvider", back_populates="user", cascade="all, delete-orphan")
     scheduled_tasks = relationship("ScheduledTask", back_populates="user", cascade="all, delete-orphan")
     skills = relationship("UserSkill", back_populates="user", cascade="all, delete-orphan")
+    skill_preferences = relationship(
+        "SkillPreference", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"
@@ -525,6 +528,34 @@ class UserSkill(Base):
 
     def __repr__(self):
         return f"<UserSkill(id={self.id}, user_id={self.user_id}, name='{self.name}', enabled={self.enabled})>"
+
+
+class SkillPreference(Base):
+    """Per-user override for an executable capability.
+
+    The capability catalog itself is static (``capability_registry.py``); this
+    table only stores what a user changed — the enabled flag and, later, any
+    capability-specific config. Absence of a row means "use the default".
+    """
+
+    __tablename__ = "skill_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", "skill_id", name="uq_skill_preferences_user_skill"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    skill_id = Column(String(50), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    config_json = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="skill_preferences")
+
+    def __repr__(self):
+        return (
+            f"<SkillPreference(user_id={self.user_id}, skill_id='{self.skill_id}', "
+            f"enabled={self.enabled})>"
+        )
 
 
 class GraphEntity(Base):

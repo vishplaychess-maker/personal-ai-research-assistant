@@ -45,6 +45,7 @@ import type {
   ApprovalDecision,
   RunCancelResult,
   BuiltinSkillCatalog,
+  Capability,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -456,6 +457,20 @@ export const API = {
       `/api/skills/${id}/toggle`,
       { method: "POST" }
     );
+  },
+
+  // ── Executable Capabilities ──────────────────────────────
+  getCapabilities() {
+    return request<Capability[]>("/api/capabilities");
+  },
+  updateCapability(
+    id: string,
+    data: { enabled: boolean; config?: Record<string, unknown> }
+  ) {
+    return request<Capability>(`/api/capabilities/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
   },
 
   // ── Scheduler ────────────────────────────────────────────

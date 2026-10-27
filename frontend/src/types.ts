@@ -265,6 +265,16 @@ export interface UserSkillDetail extends UserSkill {
   body: string;
 }
 
+// Executable capability toggle (GET/PATCH /api/capabilities)
+export interface Capability {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
+
 // ── Model Types ───────────────────────────────────────────
 
 export interface ModelInfo {

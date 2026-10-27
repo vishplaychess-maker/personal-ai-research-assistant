@@ -69,6 +69,7 @@ from app.routes.models import router as models_router
 from app.routes.providers import router as providers_router
 from app.routes.directives import router as directives_router
 from app.routes.skills import router as skills_router
+from app.routes.capabilities import router as capabilities_router
 from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
@@ -1569,6 +1570,7 @@ app.include_router(models_router)
 app.include_router(providers_router)
 app.include_router(directives_router)
 app.include_router(skills_router)
+app.include_router(capabilities_router)  # Executable capability toggles - /api/capabilities
 app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(scheduler_router)

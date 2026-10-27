@@ -1,93 +1,93 @@
 /**
  * SkillsPanel — capability grid for Settings > Skills.
  *
- * Phase 1 skeleton: three mocked capabilities with local-only enable state.
- * Nothing here executes; no network calls. Toggles are persisted in
- * localStorage so the UI survives a reload until the backend registry exists.
+ * Phase 2: preferences are stored per user via /api/capabilities (the static
+ * catalog lives on the server). Execution is still not wired — the panel says
+ * so — this only persists the enabled flag.
  */
-import { useEffect, useMemo, useState } from "react";
-import { FileText, Globe, Search, Sparkles, Terminal, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FileText,
+  Globe,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
+import { API } from "../../api";
+import type { Capability } from "../../types";
+import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 
-interface CapabilitySkill {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  icon: LucideIcon;
-}
-
-const MOCK_SKILLS: CapabilitySkill[] = [
-  {
-    id: "web-search",
-    name: "Web Search",
-    description: "Search the web and read pages the agent cites in its answers.",
-    category: "Research",
-    icon: Globe,
-  },
-  {
-    id: "code-executor",
-    name: "Code Executor",
-    description: "Run snippets in an isolated workspace and return the output.",
-    category: "Automation",
-    icon: Terminal,
-  },
-  {
-    id: "file-reader",
-    name: "File Reader",
-    description: "Open files from the workspace to summarize or extract text.",
-    category: "Files",
-    icon: FileText,
-  },
-];
-
-const STORAGE_KEY = "thunder.capabilities.v1";
-
-function defaultEnabled(): Record<string, boolean> {
-  return Object.fromEntries(MOCK_SKILLS.map((s) => [s.id, s.id !== "code-executor"]));
-}
-
-function loadEnabled(): Record<string, boolean> {
-  const defaults = defaultEnabled();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      MOCK_SKILLS.map((s) => [
-        s.id,
-        typeof parsed[s.id] === "boolean" ? (parsed[s.id] as boolean) : defaults[s.id],
-      ])
-    );
-  } catch {
-    return defaults;
-  }
-}
+const ICON_MAP: Record<string, LucideIcon> = {
+  globe: Globe,
+  terminal: Terminal,
+  "file-text": FileText,
+};
 
 export function SkillsPanel() {
-  const [enabled, setEnabled] = useState<Record<string, boolean>>(loadEnabled);
+  const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(enabled));
-    } catch {
-      // Storage can be unavailable (private mode); toggles still work for the session.
+      setCapabilities(await API.getCapabilities());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load capabilities");
+    } finally {
+      setLoading(false);
     }
-  }, [enabled]);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleToggle = async (capability: Capability) => {
+    const nextEnabled = !capability.enabled;
+    setPendingId(capability.id);
+    setError(null);
+    const previous = capabilities;
+    // Optimistic flip; rollback on failure so the UI never claims a save
+    // that the server rejected.
+    setCapabilities((current) =>
+      current.map((c) =>
+        c.id === capability.id ? { ...c, enabled: nextEnabled } : c
+      )
+    );
+    try {
+      const updated = await API.updateCapability(capability.id, {
+        enabled: nextEnabled,
+      });
+      setCapabilities((current) =>
+        current.map((c) => (c.id === updated.id ? updated : c))
+      );
+    } catch (err) {
+      setCapabilities(previous);
+      setError(err instanceof Error ? err.message : "Failed to update capability");
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return MOCK_SKILLS;
-    return MOCK_SKILLS.filter((s) =>
-      `${s.name} ${s.description} ${s.category}`.toLowerCase().includes(q)
+    if (!q) return capabilities;
+    return capabilities.filter((c) =>
+      `${c.name} ${c.description}`.toLowerCase().includes(q)
     );
-  }, [query]);
+  }, [capabilities, query]);
 
-  const enabledCount = MOCK_SKILLS.filter((s) => enabled[s.id]).length;
+  const enabledCount = capabilities.filter((c) => c.enabled).length;
 
   return (
     <section data-testid="capabilities-panel" className="mb-6">
@@ -96,13 +96,15 @@ export function SkillsPanel() {
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
             <h3 className="text-sm font-medium">Capabilities</h3>
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              {enabledCount} of {MOCK_SKILLS.length} enabled
-            </span>
+            {!loading && !error && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {enabledCount} of {capabilities.length} enabled
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             Turn individual capabilities on or off. Preview only — execution is not
-            wired yet, and switches are saved in this browser.
+            wired yet. Changes are saved to your account.
           </p>
         </div>
         <div className="relative w-full shrink-0 sm:w-56">
@@ -117,49 +119,69 @@ export function SkillsPanel() {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {error && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+          <p className="text-xs text-destructive">{error}</p>
+          <Button size="sm" variant="outline" onClick={load} className="shrink-0">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+      ) : capabilities.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          No capabilities are available on this deployment.
+        </p>
+      ) : filtered.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">
           No capabilities match “{query}”.
         </p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {filtered.map((skill) => {
-            const Icon = skill.icon;
-            const isEnabled = Boolean(enabled[skill.id]);
+          {filtered.map((capability) => {
+            const Icon = ICON_MAP[capability.icon] ?? Sparkles;
             return (
               <Card
-                key={skill.id}
+                key={capability.id}
                 className={cn(
                   "transition-colors",
-                  isEnabled && "border-primary/40 bg-primary/5"
+                  capability.enabled && "border-primary/40 bg-primary/5"
                 )}
               >
                 <CardContent className="flex items-start gap-3 p-4">
                   <span
                     className={cn(
                       "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-                      isEnabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                      capability.enabled
+                        ? "bg-primary/10 text-primary"
+                        : "bg-muted text-muted-foreground"
                     )}
                   >
                     <Icon className="h-4 w-4" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{skill.name}</span>
-                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                        {skill.category}
+                      <span className="truncate text-sm font-medium">
+                        {capability.name}
                       </span>
+                      {pendingId === capability.id && (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          Saving…
+                        </span>
+                      )}
                     </div>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      {skill.description}
+                      {capability.description}
                     </p>
                   </div>
                   <Switch
-                    checked={isEnabled}
-                    onCheckedChange={(checked) =>
-                      setEnabled((prev) => ({ ...prev, [skill.id]: checked }))
-                    }
-                    aria-label={`Enable ${skill.name}`}
+                    checked={capability.enabled}
+                    onCheckedChange={() => handleToggle(capability)}
+                    disabled={pendingId !== null}
+                    aria-label={`Enable ${capability.name}`}
                   />
                 </CardContent>
               </Card>
