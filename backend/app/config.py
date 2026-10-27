@@ -1,5 +1,5 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
-from pydantic import model_validator
 from pathlib import Path
 from typing import List
 
@@ -125,6 +125,25 @@ class Settings(BaseSettings):
     # Set true when remote access terminates TLS (Cloudflare Tunnel / HTTPS
     # reverse proxy). Drives Secure + SameSite=None cookies for remote HTTPS.
     remote_https: bool = False
+    # Telegram bot (Phase 1, text chat only). Runs as its own process via
+    # backend/telegram_bot.py and is opt-in: nothing in the web app changes
+    # while telegram_enabled is false. The token is never logged and never
+    # echoed in an error.
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""
+    # Empty allows every Telegram user; non-empty is an allow-list of Telegram
+    # numeric IDs. Leave it set for a personal bot.
+    #
+    # Held as the raw env string and exposed as a typed list by the
+    # ``telegram_allowed_user_ids`` property below. A ``List[int]`` field would
+    # make pydantic-settings JSON-decode the value in every source, so the
+    # natural "123456,789012" (or even "123456") would abort config load for the
+    # whole app -- the same raw-string-then-split shape ``cors_origins`` uses.
+    telegram_allowed_user_ids_raw: str = Field(
+        default="", validation_alias="TELEGRAM_ALLOWED_USER_IDS"
+    )
+    # Stream a reply by editing one message instead of sending several.
+    telegram_stream_edit: bool = True
     # Allowed CORS origin for the frontend (never "*" with credentials).
     frontend_origin: str = "http://localhost:5173"
     # Phase 5 (cloud): comma-separated list of extra CORS origins for
@@ -602,8 +621,8 @@ class Settings(BaseSettings):
 
     # ── Model / LLM provider settings ───────────────────
     # Provider: "gemini" | "glm" | "ollama" | "openrouter" | "nvidia" |
-    #           "huggingface" | "google" | "modelslab" | "groq" | "together"
-    #           | "mistral" | "cohere"
+    #           "huggingface" | "google" | "modelslab" | "groq" | "grok"
+    #           | "together" | "mistral" | "cohere"
     # Default is Gemini API (fast, generous free tier). Ollama remains a
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
@@ -700,6 +719,43 @@ class Settings(BaseSettings):
     cohere_model: str = "command-r-plus"
     cohere_max_tokens: int = 2048
     cohere_temperature: float = 0.7
+
+    # ── Grok (xAI) — subscription sign-in + inference ─────────────
+    # Two ways to use Grok: a pay-per-token API key on api.x.ai, or the OAuth
+    # device-code flow below, which spends an existing SuperGrok / X Premium+
+    # subscription instead of an API key. The endpoint defaults are the live
+    # values published by xAI's OIDC discovery document
+    # (https://auth.x.ai/.well-known/openid-configuration); they are NOT the
+    # accounts.x.ai/oauth/* paths that circulate in secondhand write-ups.
+    grok_api_key: str = ""
+    grok_base_url: str = "https://api.x.ai/v1"
+    grok_model: str = "grok-4"
+    grok_max_tokens: int = 2048
+    grok_temperature: float = 0.7
+    # Subscription (OAuth) traffic is rejected by api.x.ai with 402/403: the
+    # entitlement lives behind the Grok CLI chat proxy, which speaks the
+    # OpenAI Responses API and gates models by what the account can list.
+    grok_oauth_enabled: bool = False
+    grok_oauth_subscription_base_url: str = "https://cli-chat-proxy.grok.com/v1"
+    grok_oauth_device_auth_url: str = "https://auth.x.ai/oauth2/device/code"
+    grok_oauth_token_url: str = "https://auth.x.ai/oauth2/token"
+    grok_oauth_userinfo_url: str = "https://auth.x.ai/oauth2/userinfo"
+    grok_oauth_revocation_url: str = "https://auth.x.ai/oauth2/revoke"
+    # xAI publishes no OAuth app registration and this client has no secret, so
+    # empty means "use the public Grok-CLI client id baked into the service".
+    # Override only if xAI rotates or revokes that value.
+    grok_oauth_client_id: str = ""
+    # Space- or comma-separated scope list. Kept as a raw string and exposed
+    # through a property: pydantic-settings decodes a list field inside the env
+    # source before any validator runs, so "a b c" or "a,b" would raise.
+    grok_oauth_scopes_raw: str = Field(
+        default="", validation_alias="GROK_OAUTH_SCOPES"
+    )
+    #: Poll cadence for a sign-in the user has not finished yet (RFC 8628 says
+    #: honour the server's interval; this is the floor the UI is told about).
+    grok_oauth_poll_interval_s: float = 5.0
+    #: A token inside this window of its `exp` is refreshed before it is used.
+    grok_oauth_expiry_skew_s: int = 300
 
     # Venice AI (OpenAI-compatible API) — primary media provider
     venice_api_key: str = ""
@@ -921,6 +977,86 @@ class Settings(BaseSettings):
                 "remote_https requires remote_access_enabled=true"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_telegram(self) -> "Settings":
+        """Enabled without a token fails at config load, not mid-poll."""
+        if self.telegram_enabled and not self.telegram_bot_token.strip():
+            raise ValueError(
+                "telegram_enabled=true requires telegram_bot_token "
+                "(TELEGRAM_BOT_TOKEN)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grok_oauth(self) -> "Settings":
+        """Fail closed on a Grok sign-in that could leak credentials in clear.
+
+        The device/token endpoints carry a long-lived refresh token, so a
+        non-TLS override of any of them must stop startup rather than silently
+        ship the account's credentials over the wire.
+        """
+        if self.grok_oauth_enabled:
+            endpoints = (
+                self.grok_oauth_device_auth_url,
+                self.grok_oauth_token_url,
+                self.grok_oauth_userinfo_url,
+                self.grok_oauth_revocation_url,
+                self.grok_oauth_subscription_base_url,
+            )
+            for url in endpoints:
+                if not str(url).startswith("https://"):
+                    raise ValueError(
+                        "Grok OAuth endpoints must be https:// URLs when "
+                        "grok_oauth_enabled is true"
+                    )
+        if self.grok_oauth_poll_interval_s < 1:
+            raise ValueError("grok_oauth_poll_interval_s must be at least 1 second")
+        return self
+
+    @property
+    def telegram_allowed_user_ids(self) -> List[int]:
+        """Telegram IDs allowed to use the bot; empty means the bot is open.
+
+        Raises on a malformed value rather than falling back to an empty list:
+        an allow-list that quietly parses to empty would open the bot to every
+        Telegram user and to whoever's API quota is configured.
+        """
+        raw = (self.telegram_allowed_user_ids_raw or "").strip()
+        if not raw:
+            return []
+        tokens = raw.strip("[]").replace(",", " ").replace('"', " ").split()
+        ids: List[int] = []
+        for token in tokens:
+            try:
+                ids.append(int(token))
+            except ValueError:
+                raise ValueError(
+                    "TELEGRAM_ALLOWED_USER_IDS must be comma-separated "
+                    "Telegram numeric user IDs"
+                ) from None
+        return ids
+
+    @property
+    def grok_oauth_scopes(self) -> List[str]:
+        """Scopes requested for a Grok subscription sign-in.
+
+        The default grant is what the public Grok-CLI client asks for: the
+        identity scopes plus ``offline_access`` (a refresh token) and
+        ``grok-cli:access``/``api:access`` (entitlement). ``grok.access``, which
+        appears in third-party write-ups, is not a scope xAI publishes.
+        """
+        raw = (self.grok_oauth_scopes_raw or "").strip()
+        if not raw:
+            return [
+                "openid",
+                "profile",
+                "email",
+                "offline_access",
+                "grok-cli:access",
+                "api:access",
+            ]
+        return raw.strip("[]").replace(",", " ").replace('"', " ").split()
 
     @property
     def remote_cookie_flags(self) -> tuple[bool, str]:

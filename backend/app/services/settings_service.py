@@ -243,12 +243,23 @@ def provider_config_for_row(row) -> dict:
     a warning. No key material is ever logged.
     """
     provider = row.provider_name
+    signed_in_user_id = _oauth_signed_in_user_id(row)
+    if signed_in_user_id is not None:
+        # A live subscription sign-in wins over any stored key, and the key is
+        # withheld so the provider cannot fall back to it mid-request.
+        return {
+            "provider": provider,
+            "api_key": None,
+            "model": row.default_model or None,
+            "user_id": signed_in_user_id,
+            "auth_mode": "oauth",
+        }
     plain = decrypt_stored_provider_key(row)
     if not plain:
         env_key = _env_provider_key(provider)
         if env_key:
             logger.warning(
-                "Stored API key for provider '%s' is empty or undecryptable — "
+                "Stored API key for provider '%s' is empty or undecryptable - "
                 "falling back to the server environment key.",
                 provider,
             )
@@ -258,6 +269,37 @@ def provider_config_for_row(row) -> dict:
         "api_key": plain or None,
         "model": row.default_model or None,
     }
+
+
+def _oauth_signed_in_user_id(row) -> Optional[int]:
+    """The user behind a usable OAuth sign-in for this row, else None.
+
+    Scopes to providers that support subscription sign-in and to the opt-in
+    flag, and never raises: a broken credential row must not take the provider
+    list or a chat request down with it.
+    """
+    if (row.provider_name or "").strip().lower() != "grok":
+        return None
+    from app.config import settings
+
+    if not settings.grok_oauth_enabled:
+        return None
+
+    from sqlalchemy.orm import object_session
+
+    db = object_session(row)
+    if db is None:
+        return None
+    from app.services.oauth_token_store import GROK, STATUS_CONNECTED, token_store
+
+    try:
+        account = token_store.account(db, row.user_id, GROK)
+    except Exception as exc:  # noqa: BLE001 - credential lookup is best effort
+        logger.warning("Grok sign-in lookup failed (%s)", type(exc).__name__)
+        return None
+    if account is None or account.status != STATUS_CONNECTED:
+        return None
+    return row.user_id
 
 
 def get_active_provider_config(db: DBSession, user_id: int) -> Optional[dict]:
@@ -290,7 +332,7 @@ def get_user_llm_config(db: DBSession, user_id: int) -> Optional[dict]:
         env_key = _env_provider_key(row.llm_provider)
         if env_key:
             logger.warning(
-                "Stored API key for provider '%s' is empty or undecryptable — "
+                "Stored API key for provider '%s' is empty or undecryptable - "
                 "falling back to the server environment key.",
                 row.llm_provider,
             )

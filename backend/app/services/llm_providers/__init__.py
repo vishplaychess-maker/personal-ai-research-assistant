@@ -33,8 +33,15 @@ def _build_provider(
     provider_name: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    *,
+    user_id: Optional[int] = None,
 ) -> LLMProvider:
-    """Instantiate a provider by name, with optional per-user overrides."""
+    """Instantiate a provider by name, with optional per-user overrides.
+
+    ``user_id`` is only meaningful for providers that can be signed in to with
+    an OAuth subscription instead of an API key (today: Grok). It selects that
+    account's stored credentials and, by contract, suppresses the API key.
+    """
     if provider_name == "glm":
         from app.services.llm_providers.glm_provider import GLMProvider
         return GLMProvider(api_key=api_key, model=model)
@@ -50,6 +57,9 @@ def _build_provider(
     elif provider_name == "openrouter":
         from app.services.llm_providers.openrouter_provider import OpenRouterProvider
         return OpenRouterProvider(api_key=api_key, model=model)
+    elif provider_name == "grok":
+        from app.services.llm_providers.grok_provider import GrokProvider
+        return GrokProvider(api_key=api_key, model=model, user_id=user_id)
     elif provider_name == "nvidia":
         from app.services.llm_providers.nvidia_provider import NvidiaProvider
         return NvidiaProvider(api_key=api_key, model=model)
@@ -100,6 +110,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             provider_name,
             api_key=config.get("api_key"),
             model=config.get("model"),
+            user_id=config.get("user_id"),
         )
 
     provider_name = settings.llm_provider.lower().strip()
@@ -118,6 +129,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "google": "google ai",
             "modelslab": "modelslab",
             "groq": "groq",
+            "grok": "grok",
             "together": "together ai",
             "mistral": "mistral",
             "cohere": "cohere",
@@ -203,7 +215,7 @@ def generate_response_with_fallback(
             )
         except (ConnectionError, TimeoutError, RuntimeError) as exc:
             logger.warning(
-                "LLM provider '%s' failed (%s) — trying next fallback",
+                "LLM provider '%s' failed (%s) - trying next fallback",
                 (cfg or {}).get("provider") or settings.llm_provider,
                 exc,
             )

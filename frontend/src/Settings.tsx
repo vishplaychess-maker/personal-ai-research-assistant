@@ -24,6 +24,7 @@ import { ScheduledTasks } from "./ScheduledTasks";
 import { MCPTab } from "./MCPTab";
 import { AgentDirectives } from "./AgentDirectives";
 import { SkillsTab } from "./SkillsTab";
+import { GrokOAuthCard } from "./GrokOAuth";
 
 const PROVIDER_OPTIONS = [
   { value: "glm", label: "GLM 5.3 Flash (Free)" },
@@ -33,6 +34,7 @@ const PROVIDER_OPTIONS = [
   { value: "google", label: "Google AI" },
   { value: "modelslab", label: "ModelsLab" },
   { value: "groq", label: "Groq" },
+  { value: "grok", label: "Grok (xAI)" },
   { value: "together", label: "Together AI" },
   { value: "mistral", label: "Mistral" },
   { value: "cohere", label: "Cohere" },
@@ -186,6 +188,12 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
             </div>
 
             {error && <p className="text-sm text-destructive mb-4">{error}</p>}
+
+            {/* Subscription sign-in costs no API credits, so it sits above the
+                API-key provider list rather than inside it. */}
+            <div className="mb-4">
+              <GrokOAuthCard />
+            </div>
 
             {loading ? (
               <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>

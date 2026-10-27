@@ -17,6 +17,10 @@ import type {
   SessionModelResponse,
   ProviderConfig,
   ProviderModelGroup,
+  OAuthStartResponse,
+  OAuthStatusResponse,
+  OAuthAccountResponse,
+  OAuthLogoutResponse,
   AgentDirective,
   UserSkill,
   UserSkillDetail,
@@ -334,6 +338,26 @@ export const API = {
   },
   listAllProviderModels() {
     return request<ProviderModelGroup[]>("/api/providers/models");
+  },
+
+  // ── Subscription sign-in (Grok / xAI device code) ────────
+  startGrokSignIn() {
+    return request<OAuthStartResponse>("/api/oauth/grok/start", { method: "POST" });
+  },
+  grokSignInStatus() {
+    return request<OAuthStatusResponse>("/api/oauth/grok/status");
+  },
+  refreshGrokTokens() {
+    return request<{ provider: string; status: string; access_expires_at: string | null; message: string }>(
+      "/api/oauth/grok/refresh",
+      { method: "POST" }
+    );
+  },
+  signOutGrok() {
+    return request<OAuthLogoutResponse>("/api/oauth/grok", { method: "DELETE" });
+  },
+  grokAccount() {
+    return request<OAuthAccountResponse>("/api/oauth/grok/account");
   },
 
   // ── Agent Directives (F6 Cap 3 "Lessons Learned") ────────

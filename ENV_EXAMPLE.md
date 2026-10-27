@@ -61,7 +61,7 @@ Legend: **Prod** = required or strongly recommended for cloud deployment.
 
 | Variable | Default | Prod | Notes |
 | --- | --- | --- | --- |
-| `LLM_PROVIDER` | `glm` | Optional | `glm` \| `ollama` \| `openrouter` \| `nvidia` \| `huggingface` \| `google` \| `modelslab` \| `groq` \| `together` \| `mistral` \| `cohere` |
+| `LLM_PROVIDER` | `glm` | Optional | `glm` \| `ollama` \| `openrouter` \| `nvidia` \| `huggingface` \| `google` \| `modelslab` \| `groq` \| `grok` \| `together` \| `mistral` \| `cohere` |
 | `DEFAULT_MODEL` | `glm-5.3-flash` | No | — |
 | `OLLAMA_TAGS_TIMEOUT` | `5` | No | Seconds |
 | `GLM_ENABLE` | `true` | No | Master switch for GLM + fallback |
@@ -74,10 +74,33 @@ Legend: **Prod** = required or strongly recommended for cloud deployment.
 
 Per-provider OpenAI-compatible blocks (`*_API_KEY`, `*_BASE_URL`, `*_MODEL`,
 `*_MAX_TOKENS`, `*_TEMPERATURE`) exist for: `OPENROUTER`, `NVIDIA`,
-`HUGGINGFACE`, `GOOGLE`, `MODELSLAB`, `GROQ`, `TOGETHER`, `MISTRAL`,
+`HUGGINGFACE`, `GOOGLE`, `MODELSLAB`, `GROQ`, `GROK`, `TOGETHER`, `MISTRAL`,
 `COHERE`. Defaults in `config.py:148-209`. Keys default to `""` (provider
 disabled); in the cloud configure at least one so the GLM→free-provider→
 Ollama fallback chain has a target.
+
+### Grok (xAI) subscription sign-in
+
+`GROK_API_KEY` buys tokens on `api.x.ai`; the keys below instead let a
+SuperGrok / X Premium+ subscriber sign in with OAuth and spend the
+subscription. Off by default — nothing changes until you opt in.
+
+| Variable | Default | Prod | Notes |
+| --- | --- | --- | --- |
+| `GROK_OAUTH_ENABLED` | `false` | No | Master switch for the sign-in routes and the subscription provider |
+| `GROK_OAUTH_SUBSCRIPTION_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | No | The Grok CLI chat proxy; a subscription bearer is refused by `api.x.ai` (402/403) |
+| `GROK_OAUTH_DEVICE_AUTH_URL` | `https://auth.x.ai/oauth2/device/code` | No | From xAI's OIDC discovery document; must stay `https://` |
+| `GROK_OAUTH_TOKEN_URL` | `https://auth.x.ai/oauth2/token` | No | Must stay `https://` |
+| `GROK_OAUTH_USERINFO_URL` | `https://auth.x.ai/oauth2/userinfo` | No | Must stay `https://` |
+| `GROK_OAUTH_REVOCATION_URL` | `https://auth.x.ai/oauth2/revoke` | No | Must stay `https://` |
+| `GROK_OAUTH_CLIENT_ID` | `""` | No | Public Grok-CLI client id is baked in; set only if xAI rotates it. **There is no client secret** |
+| `GROK_OAUTH_SCOPES` | `""` | No | Space- or comma-separated; empty means the default Grok-CLI grant |
+| `GROK_OAUTH_POLL_INTERVAL_S` | `5` | No | Floor for status polling; the server's own `interval` wins |
+| `GROK_OAUTH_EXPIRY_SKEW_S` | `300` | No | Refresh an access token this many seconds before it expires |
+
+Requires `ENCRYPTION_KEY`: access and refresh tokens are Fernet-encrypted in
+`provider_oauth_tokens`, and a sign-in is refused (HTTP 500) rather than stored
+unencrypted. See `docs/grok_oauth_signin.md`.
 
 ## Features & Tools
 
@@ -91,6 +114,7 @@ Ollama fallback chain has a target.
 | `DEEP_RESEARCH_MAX_RESULTS` | `5` | No | — |
 | `DEEP_RESEARCH_MAX_SCRAPE` | `3` | No | Hard cap on scrape loop |
 | `ENABLE_TERMINAL_TOOL` | `false` | Keep `false` | HITL shell proposals |
+| `GROK_OAUTH_ENABLED` | `false` | No | Grok subscription sign-in; see **LLM Providers → Grok** above and `docs/grok_oauth_signin.md` |
 | `ENABLE_MCP_TOOL` | `false` | No | — |
 | `MCP_CALL_TIMEOUT_S` | `30` | No | — |
 | `MCP_DISCOVERY_TIMEOUT_S` | `20` | No | — |

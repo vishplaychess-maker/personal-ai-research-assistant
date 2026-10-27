@@ -124,6 +124,58 @@ export interface ProviderModelGroup {
   models: ModelInfo[];
 }
 
+// ── Subscription sign-in (OAuth device code) ───────────────
+
+export type OAuthLoginStatus =
+  | "none"
+  | "pending"
+  | "connected"
+  | "expired"
+  | "error";
+
+export interface OAuthStartResponse {
+  provider: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  poll_interval_s: number;
+  status: OAuthLoginStatus;
+}
+
+export interface OAuthStatusResponse {
+  provider: string;
+  status: OAuthLoginStatus;
+  user_code: string;
+  verification_uri: string;
+  account_name: string;
+  account_email: string;
+  scopes: string;
+  access_expires_at: string | null;
+  device_expires_at: string | null;
+  poll_interval_s: number;
+  next_poll_at: string | null;
+  last_error: string;
+  message: string;
+}
+
+export interface OAuthAccountResponse {
+  provider: string;
+  status: OAuthLoginStatus;
+  account_name: string;
+  account_email: string;
+  scopes: string;
+  models: string[];
+  entitlement_known: boolean;
+  message: string;
+}
+
+export interface OAuthLogoutResponse {
+  provider: string;
+  status: string;
+  revoked: boolean;
+  message: string;
+}
+
 // ── Agent Directives (F6 Cap 3 "Lessons Learned") ─────────
 
 export interface AgentDirective {

@@ -22,6 +22,10 @@ from app.schemas.sessions import ModelInfo, is_free_model
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services.encryption import mask_api_key
+from app.services.google_key_validation import (
+    INVALID_KEY_MESSAGE as GOOGLE_INVALID_KEY_MESSAGE,
+    verify_google_api_key,
+)
 from app.services.llm_providers import get_provider
 from app.services.settings_service import (
     create_user_provider,
@@ -39,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
-    "groq", "together", "mistral", "cohere",
+    "groq", "grok", "together", "mistral", "cohere",
 }
 
 PROVIDER_LABELS = {
@@ -51,6 +55,7 @@ PROVIDER_LABELS = {
     "google": "Google AI",
     "modelslab": "ModelsLab",
     "groq": "Groq",
+    "grok": "Grok (xAI)",
     "together": "Together AI",
     "mistral": "Mistral",
     "cohere": "Cohere",
@@ -61,8 +66,14 @@ PREFIXES = {
     "openrouter": "sk-or-",
     "nvidia": "nvapi-",
     "huggingface": "hf_",
-    "google": "AIza",
+    # "google" is intentionally absent: valid Google AI keys start with "AIza"
+    # (AI Studio) or "AQ." (Firebase/Cloud) and other formats exist, so validity
+    # is checked with a live models call in _validate_api_key_format().
     "groq": "gsk_",
+    # "grok" is intentionally absent too: xAI keys are commonly "xai-" prefixed
+    # but the format is not a published contract, and a Grok row may hold no key
+    # at all (subscription sign-in), so a prefix check would reject valid saves.
+    "grok": "",
     "together": "tgp-",
     "mistral": "",
     "cohere": "",
@@ -121,6 +132,14 @@ def _validate_provider_name(provider_name: str) -> str:
 
 
 def _validate_api_key_format(provider: str, api_key: str) -> None:
+    """Reject a key that is clearly wrong for the selected provider.
+
+    A prefix is only a cheap filter for providers whose keys have a fixed,
+    documented shape. Google is deliberately NOT prefix-checked: valid Google
+    AI keys start with "AIza" (AI Studio) or "AQ." (Firebase/Cloud) and other
+    formats exist, so the key is verified with a real call to the Generative
+    Language models endpoint instead.
+    """
     if not api_key:
         return
     prefix = PREFIXES.get(provider)
@@ -132,6 +151,13 @@ def _validate_api_key_format(provider: str, api_key: str) -> None:
                 f"key (expected prefix '{prefix}'). Double-check the key and provider."
             ),
         )
+    if provider == "google":
+        ok, message = verify_google_api_key(api_key)
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail=message or GOOGLE_INVALID_KEY_MESSAGE,
+            )
 
 
 def _is_masked_echo(api_key: Optional[str]) -> bool:

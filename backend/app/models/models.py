@@ -293,6 +293,76 @@ class UserProvider(Base):
         return f"<UserProvider(id={self.id}, provider='{self.provider_name}', active={self.is_active})>"
 
 
+class ProviderOAuthToken(Base):
+    """A provider account signed in through OAuth instead of an API key.
+
+    One row per (user, provider). It carries both halves of the device-code
+    flow: the in-flight sign-in (``status='pending'`` plus the encrypted device
+    code, so a restart mid-login can still be finished) and, once the user has
+    authorised in their browser, the token set.
+
+    Access and refresh tokens are Fernet-encrypted and never returned by any
+    route. ``user_code``/``verification_uri`` are stored in the clear because
+    they are already displayed on the user's own screen and expire with the
+    device code. Timestamps are naive UTC, matching the provider tables.
+    """
+
+    __tablename__ = "provider_oauth_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider_name = Column(String(50), nullable=False)
+
+    # pending -> the user has not finished in the browser yet
+    # connected -> tokens are stored and usable
+    # expired   -> the device code timed out (sign in again)
+    # error     -> the user denied access or the grant was rejected
+    status = Column(String(20), nullable=False, default="pending")
+
+    encrypted_access_token = Column(Text, nullable=True, default="")
+    encrypted_refresh_token = Column(Text, nullable=True, default="")
+    encrypted_device_code = Column(Text, nullable=True, default="")
+
+    access_expires_at = Column(DateTime, nullable=True)
+    device_expires_at = Column(DateTime, nullable=True)
+    #: RFC 8628 polling cadence; the server's ``interval``, raised on slow_down.
+    poll_interval_s = Column(Integer, nullable=False, default=5)
+    #: Not before this instant another upstream poll attempt is allowed.
+    next_poll_at = Column(DateTime, nullable=True)
+
+    user_code = Column(String(32), nullable=True)
+    verification_uri = Column(String(512), nullable=True)
+    scopes = Column(String(512), nullable=False, default="")
+
+    # Non-secret account metadata for the settings UI, from the OIDC claims.
+    account_subject = Column(String(128), nullable=True)
+    account_name = Column(String(255), nullable=True)
+    account_email = Column(String(255), nullable=True)
+
+    #: An OAuth error code (e.g. ``expired_token``) — never a token or a body.
+    last_error = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "provider_name", name="uq_oauth_token_user_provider"
+        ),
+    )
+
+    def __repr__(self):
+        return (
+            f"<ProviderOAuthToken(id={self.id}, provider='{self.provider_name}', "
+            f"status='{self.status}')>"
+        )
+
+
 class ScheduledTask(Base):
     """A scheduled autonomous task that runs on a cron schedule."""
 
