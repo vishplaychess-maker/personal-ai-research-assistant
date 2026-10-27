@@ -731,6 +731,11 @@ class Settings(BaseSettings):
     cohere_max_tokens: int = 2048
     cohere_temperature: float = 0.7
 
+    # ── Web search (Tavily) — capability executors ───────────────
+    # Read by app/services/skill_executors/web_search.py. The value is a
+    # bearer credential: never log it or echo it in an error message.
+    tavily_api_key: str = ""
+
     # ── Grok (xAI) — subscription sign-in + inference ─────────────
     # Two ways to use Grok: a pay-per-token API key on api.x.ai, or the OAuth
     # device-code flow below, which spends an existing SuperGrok / X Premium+
