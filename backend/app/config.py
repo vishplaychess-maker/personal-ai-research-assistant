@@ -3,21 +3,68 @@ from pydantic import model_validator
 from pathlib import Path
 from typing import List
 
+from app.paths import get_database_url as _default_database_url
+from app.paths import get_data_dir as _portable_data_dir
+
 # Bundled skills directory (<backend>/skills, e.g. /app/skills in Docker).
 # The SkillManager discovers this as its primary "bundled" location regardless
 # of the process working directory.
 _DEFAULT_SKILLS_DIR = str(Path(__file__).resolve().parent.parent / "skills")
 
+# Portable writable directories: <repo>/data in dev, %APPDATA%/ThunderAI when
+# frozen. Evaluated once at import; an explicit DATA_DIR / UPLOAD_DIR env var
+# (or .env value) still wins via pydantic-settings.
+_DEFAULT_DATA_DIR = str(_portable_data_dir())
+_DEFAULT_UPLOAD_DIR = str(_portable_data_dir() / "uploads")
+
+
+#: Wildcard bind addresses are not client targets; map them to loopback.
+_WILDCARD_HOSTS = {"0.0.0.0": "127.0.0.1", "::": "[::1]", "[::]": "[::1]"}
+
+
+def _service_base_url(host: str, port: int, scheme: str = "http") -> str:
+    """Build a service base URL from a configured host and port.
+
+    OLLAMA_HOST / CHROMADB_HOST are commonly exported as "host:port" (and
+    sometimes with a scheme) in container environments. Appending the port
+    again would build an invalid URL such as "http://0.0.0.0:11434:11434", so
+    an explicit scheme or port is preserved as-is. A wildcard bind address
+    (0.0.0.0 / ::) is rewritten to loopback because these URLs are always
+    client targets.
+    """
+    value = (host or "").strip()
+    if not value:
+        return f"{scheme}://localhost:{port}"
+    if "://" in value:
+        return value.rstrip("/")
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing != -1:
+            addr = _WILDCARD_HOSTS.get(value[:closing + 1], value[:closing + 1])
+            rest = value[closing + 1:]
+            suffix = rest if rest.startswith(":") else f":{port}"
+            return f"{scheme}://{addr}{suffix}"
+    if ":" in value:
+        host_only, _, port_only = value.partition(":")
+        host_only = _WILDCARD_HOSTS.get(host_only, host_only)
+        return f"{scheme}://{host_only}:{port_only}"
+    value = _WILDCARD_HOSTS.get(value, value)
+    return f"{scheme}://{value}:{port}"
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    database_url: str = "sqlite:////data/app.db"
+    # Portable default: an explicit DATABASE_URL (process env, or a .env
+    # file read by pydantic-settings) always wins; otherwise the SQLite file
+    # lives under app.paths.get_data_dir() - repo-relative in dev,
+    # %APPDATA%/ThunderAI when frozen. See backend/app/paths.py.
+    database_url: str = _default_database_url()
     chromadb_host: str = "localhost"
     chromadb_port: int = 8000
     ollama_host: str = "localhost"
     ollama_port: int = 11434
-    upload_dir: str = "/data/uploads"
-    data_dir: str = "/data"
+    upload_dir: str = _DEFAULT_UPLOAD_DIR
+    data_dir: str = _DEFAULT_DATA_DIR
 
     # ── Memory settings ─────────────────────────────────
     enable_memory: bool = True
@@ -66,6 +113,18 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     # SameSite attribute for the refresh cookie (lax for local dev).
     cookie_samesite: str = "lax"
+    # ── Remote access (tunnel / LAN hardening) ───────────
+    # Default OFF: the launcher binds loopback only and local behaviour is
+    # unchanged. When enabled the launcher binds 0.0.0.0, prints LAN URLs and
+    # warns that login is required; every non-public /api route then requires
+    # a valid session for remote/tunnel callers (see main.py access guard).
+    remote_access_enabled: bool = False
+    # Interface the launcher binds. Loopback by default; a non-loopback value
+    # is accepted only while remote_access_enabled is true (validated below).
+    bind_host: str = "127.0.0.1"
+    # Set true when remote access terminates TLS (Cloudflare Tunnel / HTTPS
+    # reverse proxy). Drives Secure + SameSite=None cookies for remote HTTPS.
+    remote_https: bool = False
     # Allowed CORS origin for the frontend (never "*" with credentials).
     frontend_origin: str = "http://localhost:5173"
     # Phase 5 (cloud): comma-separated list of extra CORS origins for
@@ -841,13 +900,42 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_remote_access(self) -> "Settings":
+        """Fail closed when remote exposure is requested without the opt-in.
+
+        A non-loopback bind or HTTPS cookie flags are only meaningful for
+        deliberate remote access; refusing to start prevents an accidental
+        LAN/tunnel exposure whose auth assumptions were never enabled.
+        """
+        host = (self.bind_host or "").strip().lower()
+        if not self.remote_access_enabled and host not in (
+            "", "127.0.0.1", "::1", "localhost",
+        ):
+            raise ValueError(
+                "bind_host may be non-loopback only when "
+                "remote_access_enabled is true"
+            )
+        if self.remote_https and not self.remote_access_enabled:
+            raise ValueError(
+                "remote_https requires remote_access_enabled=true"
+            )
+        return self
+
+    @property
+    def remote_cookie_flags(self) -> tuple[bool, str]:
+        """(secure, samesite) for cookies under the current remote config."""
+        if self.remote_access_enabled and self.remote_https:
+            return True, "none"
+        return self.cookie_secure, self.cookie_samesite
+
     @property
     def chromadb_url(self) -> str:
-        return f"http://{self.chromadb_host}:{self.chromadb_port}"
+        return _service_base_url(self.chromadb_host, self.chromadb_port)
 
     @property
     def ollama_url(self) -> str:
-        return f"http://{self.ollama_host}:{self.ollama_port}"
+        return _service_base_url(self.ollama_host, self.ollama_port)
 
 
 settings = Settings()

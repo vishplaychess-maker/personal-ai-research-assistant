@@ -30,6 +30,14 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+# ── Cookie flags ───────────────────────────────────────────
+
+
+def _cookie_flags() -> tuple[bool, str]:
+    """(secure, samesite) — HTTPS remote access upgrades both automatically."""
+    return settings.remote_cookie_flags
+
+
 # ── Refresh cookie (HttpOnly) ──────────────────────────────
 
 
@@ -39,25 +47,27 @@ def set_refresh_cookie(response: Response, token: str) -> None:
     The cookie is scoped to Path=/api/auth so it is only sent to auth
     endpoints. Max-Age matches JWT_REFRESH_EXPIRY_DAYS.
     """
+    secure, samesite = _cookie_flags()
     response.set_cookie(
         key=settings.refresh_cookie_name,
         value=token,
         max_age=settings.jwt_refresh_expiry_days * 24 * 60 * 60,
         path="/api/auth",
         httponly=True,
-        secure=settings.cookie_secure,
-        samesite=settings.cookie_samesite,
+        secure=secure,
+        samesite=samesite,
     )
 
 
 def clear_refresh_cookie(response: Response) -> None:
     """Expire the HttpOnly refresh-token cookie."""
+    secure, samesite = _cookie_flags()
     response.delete_cookie(
         key=settings.refresh_cookie_name,
         path="/api/auth",
         httponly=True,
-        secure=settings.cookie_secure,
-        samesite=settings.cookie_samesite,
+        secure=secure,
+        samesite=samesite,
     )
 
 
@@ -76,25 +86,27 @@ def set_csrf_cookie(response: Response) -> str:
     and echo it back in the X-CSRF-Token header (double-submit pattern).
     """
     token = secrets.token_urlsafe(32)
+    secure, samesite = _cookie_flags()
     response.set_cookie(
         key=settings.csrf_cookie_name,
         value=token,
         max_age=settings.jwt_refresh_expiry_days * 24 * 60 * 60,
         path="/",
         httponly=False,
-        secure=settings.cookie_secure,
-        samesite=settings.cookie_samesite,
+        secure=secure,
+        samesite=samesite,
     )
     return token
 
 
 def clear_csrf_cookie(response: Response) -> None:
     """Expire the CSRF cookie."""
+    secure, samesite = _cookie_flags()
     response.delete_cookie(
         key=settings.csrf_cookie_name,
         path="/",
-        secure=settings.cookie_secure,
-        samesite="lax",
+        secure=secure,
+        samesite=samesite,
     )
 
 

@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text as sa_text
 
 from app.config import settings
@@ -80,6 +81,9 @@ from app.routes.media import router as media_router
 from app.routes.approvals import router as approvals_router
 from app.routes.runs import router as runs_router
 from app.routes.vision import router as vision_router
+from app.routes.setup import router as setup_router
+from app.services import access_guard, setup_service
+from app.static_mount import mount_frontend
 
 
 def _migrate_provider_encryption():
@@ -119,7 +123,7 @@ def _migrate_provider_encryption():
                     value = encrypt_key(value)
                 except RuntimeError:
                     logger.warning(
-                        "ENCRYPTION_KEY is not set — cannot encrypt the plaintext "
+                        "ENCRYPTION_KEY is not set - cannot encrypt the plaintext "
                         "API key stored for provider id=%s. The legacy value is "
                         "kept and encryption will be retried on the next start.",
                         row_id,
@@ -1177,7 +1181,7 @@ def _migrate_database():
 
     if engine.dialect.name != "sqlite":
         logger.info(
-            "Skipping SQLite migrations: engine dialect is '%s' — schema comes "
+            "Skipping SQLite migrations: engine dialect is '%s' - schema comes "
             "from Base.metadata.create_all() (fresh PostgreSQL install).",
             engine.dialect.name,
         )
@@ -1374,7 +1378,7 @@ def _warn_ephemeral_sqlite_in_production():
     if settings.production_mode and settings.database_url.startswith("sqlite"):
         logger.warning(
             "PRODUCTION_MODE is enabled but DATABASE_URL is a SQLite database "
-            "(%s) — data will be EPHEMERAL unless the file is on a persistent "
+            "(%s) - data will be EPHEMERAL unless the file is on a persistent "
             "volume. Configure DATABASE_URL with a managed PostgreSQL URL "
             "(e.g. Render Postgres / Neon / RDS) before going live.",
             settings.database_url,
@@ -1384,9 +1388,17 @@ def _warn_ephemeral_sqlite_in_production():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create tables and default user on startup."""
-    # Ensure the SQLite parent directory exists
-    Path("/data").mkdir(parents=True, exist_ok=True)
-    Path("/data/uploads").mkdir(parents=True, exist_ok=True)
+    # Ensure the writable data + upload directories exist (portable:
+    # <repo>/data in dev, %APPDATA%/ThunderAI when frozen). Fail-closed: a
+    # read-only location must warn, never crash startup.
+    try:
+        Path(settings.data_dir).mkdir(parents=True, exist_ok=True)
+        Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "Could not create data/upload directories (%s); continuing",
+            type(exc).__name__,
+        )
 
     _validate_jwt_secret()
     _warn_ephemeral_sqlite_in_production()
@@ -1444,12 +1456,13 @@ def _create_default_user():
             user = User(username="default", email="default@example.com")
             db.add(user)
             db.commit()
-            print("✓ Created default user")
+            logger.info("Created default user")
         else:
-            print("✓ Default user already exists")
-    except Exception as exc:
+            logger.info("Default user already exists")
+    except Exception as exc:  # noqa: BLE001 - startup must not crash here
         db.rollback()
-        print(f"✗ Error creating default user: {exc}")
+        # Bounded: never echo raw DB error text into console/log output.
+        logger.warning("Error creating default user (%s)", type(exc).__name__)
     finally:
         db.close()
 
@@ -1495,6 +1508,55 @@ app.add_middleware(
     expose_headers=["X-Run-Id"],
 )
 
+# --- Proxy-aware setup lock + remote API guard ------------------------------
+# Tunnel products (Tailscale Serve, Cloudflare Tunnel) connect to the app from
+# loopback, so request.client.host == 127.0.0.1 even for a REMOTE caller. Any
+# forwarding header therefore marks the request as remote (fail closed).
+#
+# 1. POST /api/setup/configure: proxied or non-loopback callers get a bounded
+#    403. After first-run (configured == true) a valid session is required
+#    even from loopback; first-run on pure loopback stays open.
+# 2. Remote callers must authenticate for every /api/* route except the small
+#    public allow-list (health, setup status, login/register). Refresh/logout
+#    carry the HttpOnly session cookie, so the guard validates it. Pure
+#    loopback traffic is unchanged, so local-only behaviour is preserved.
+@app.middleware("http")
+async def _access_guard(request: Request, call_next):
+    path = request.url.path or ""
+    method = request.method.upper()
+
+    if path == "/api/setup/configure":
+        if access_guard.is_forwarded(request) or not access_guard.is_loopback_client(request):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "first-run setup is only available from localhost"},
+            )
+        if setup_service.is_configured() and not access_guard.has_valid_session(request):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "authentication required to reconfigure setup"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return await call_next(request)
+
+    # CORS preflight carries no credentials by design; let CORSMiddleware answer.
+    # remote_access_enabled folds in loopback peers too: a tunnel that strips
+    # forwarding headers still cannot reach /api anonymously once the operator
+    # has opted into remote exposure.
+    if (
+        method != "OPTIONS"
+        and path.startswith("/api/")
+        and (settings.remote_access_enabled or access_guard.is_remote_request(request))
+        and not access_guard.is_public_api_path(path)
+    ):
+        if not access_guard.has_valid_session(request):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "authentication required for remote access"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
+
 # ── Register routers ─────────────────────────────────────
 app.include_router(sessions_router)
 app.include_router(messages_router)
@@ -1517,6 +1579,18 @@ app.include_router(media_router)
 app.include_router(approvals_router)
 app.include_router(runs_router)  # Phase 1B.2R MP-3A — gated by run_public_api_enabled (404 when off)
 app.include_router(vision_router)  # Local Vision (ZERO API cost) — POST /api/vision/describe
+app.include_router(setup_router)  # First-run setup - GET /api/setup/status, POST /api/setup/configure
+
+
+@app.get("/health")
+async def health():
+    """Fast, dependency-free liveness probe (Render health check).
+
+    Deliberately does NOT touch the database, ChromaDB or Ollama: a managed
+    dependency outage must not fail the platform health check. The richer
+    /api/health probe below reports those dependencies.
+    """
+    return {"status": "healthy", "service": "thunder-ai-backend"}
 
 
 @app.get("/api/health")
@@ -1592,3 +1666,11 @@ async def worker_health(response: Response):
     if not ready:
         response.status_code = 503
     return {"durable_run": status, "durable_path_ready": ready}
+
+
+# --- Serve the built frontend (Phase 1 - .exe packaging) -------------------
+# Mounted LAST: after every /api, /health and docs route, so API endpoints
+# always win (Starlette matches routes in registration order). When
+# frontend/dist is absent this logs a bounded warning and the backend runs
+# headless, serving the API only.
+mount_frontend(app)
