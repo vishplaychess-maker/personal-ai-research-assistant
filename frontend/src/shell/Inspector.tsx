@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity, Blocks, Database, FileCode, Loader2, RefreshCw, X } from "lucide-react";
 import { API } from "../api";
+import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import type { OfficialMcpServer } from "../types";
 import type { TurnMeta } from "./Message";
 import { cn } from "../lib/utils";
 
@@ -45,6 +57,12 @@ export function Inspector({
   const [tab, setTab] = useState<Tab>("trace");
   const [desktopEnabled, setDesktopEnabled] = useState<boolean | null>(null);
   const [servers, setServers] = useState<Array<Record<string, unknown>> | null>(null);
+  const [official, setOfficial] = useState<OfficialMcpServer[] | null>(null);
+  const [configuring, setConfiguring] = useState<OfficialMcpServer | null>(null);
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const [enableOnSave, setEnableOnSave] = useState(true);
+  const [savingOfficial, setSavingOfficial] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [docs, setDocs] = useState<Array<Record<string, unknown>> | null>(null);
   const [tree, setTree] = useState<Array<Record<string, unknown>> | null>(null);
   const [file, setFile] = useState<{ path: string; content: string } | null>(null);
@@ -66,6 +84,43 @@ export function Inspector({
       setError(err instanceof Error ? err.message : "Could not load MCP servers");
     }
   }, []);
+
+  const loadOfficial = useCallback(async () => {
+    setOfficial(null);
+    try {
+      setOfficial(await API.listOfficialMcpServers());
+    } catch (err) {
+      setOfficial([]);
+      setError(err instanceof Error ? err.message : "Could not load official MCP servers");
+    }
+  }, []);
+
+  const openConfigure = (server: OfficialMcpServer) => {
+    setConfigError(null);
+    setConfigValues({});
+    setEnableOnSave(true);
+    setConfiguring(server);
+  };
+
+  const saveOfficial = async () => {
+    if (!configuring) return;
+    setSavingOfficial(true);
+    setConfigError(null);
+    try {
+      await API.updateOfficialMcpServer(configuring.id, {
+        enabled: enableOnSave,
+        config: configValues,
+      });
+      setConfiguring(null);
+      await loadOfficial();
+    } catch (err) {
+      setConfigError(
+        err instanceof Error ? err.message : "Could not save MCP configuration"
+      );
+    } finally {
+      setSavingOfficial(false);
+    }
+  };
 
   const loadDocs = useCallback(async () => {
     if (sessionId == null) {
@@ -96,8 +151,11 @@ export function Inspector({
       void loadMcp();
       void loadDocs();
     }
+    if (tab === "mcp" && official === null) {
+      void loadOfficial();
+    }
     if (tab === "canvas" && desktopEnabled === true && tree === null) void loadTree();
-  }, [open, tab, servers, tree, desktopEnabled, loadMcp, loadDocs, loadTree]);
+  }, [open, tab, servers, tree, desktopEnabled, official, loadMcp, loadDocs, loadOfficial, loadTree]);
 
   useEffect(() => {
     if (desktopEnabled === false && tab === "canvas") setTab("trace");
@@ -185,7 +243,74 @@ export function Inspector({
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-[11px] font-medium uppercase text-muted-foreground">
-                  MCP servers
+                  Official MCP servers
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void loadOfficial()}
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Reload official MCP servers"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {official === null ? (
+                <Spinner label="Loading official servers…" />
+              ) : official.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  No official MCP servers are registered.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {official.map((srv) => (
+                    <div
+                      key={srv.id}
+                      className="rounded-xl border border-border bg-card p-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-foreground">{srv.name}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {srv.description}
+                          </div>
+                        </div>
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                            srv.status === "connected"
+                              ? "bg-emerald-500/10 text-emerald-500"
+                              : "bg-muted text-muted-foreground"
+                          )}
+                        >
+                          {srv.status === "connected"
+                            ? "Connected"
+                            : srv.status === "disconnected"
+                              ? "Disabled"
+                              : "Not Configured"}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {srv.id}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openConfigure(srv)}
+                        >
+                          Configure
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase text-muted-foreground">
+                  Custom (stdio) servers
                 </span>
                 <button
                   type="button"
@@ -297,6 +422,59 @@ export function Inspector({
           )
         ) : null}
       </div>
+
+      <Dialog
+        open={configuring !== null}
+        onOpenChange={(next) => {
+          if (!next) setConfiguring(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Configure {configuring?.name} MCP</DialogTitle>
+            <DialogDescription>
+              Credentials are validated against the provider, then stored encrypted.
+              Leave a field blank to keep a previously saved value.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            {(configuring?.required_config_keys ?? []).map((key) => (
+              <div key={key} className="grid gap-1.5">
+                <Label className="text-xs">{key}</Label>
+                <Input
+                  type="password"
+                  value={configValues[key] ?? ""}
+                  onChange={(e) =>
+                    setConfigValues((prev) => ({ ...prev, [key]: e.target.value }))
+                  }
+                  placeholder={key}
+                  autoComplete="off"
+                />
+              </div>
+            ))}
+            <label className="flex items-center gap-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                checked={enableOnSave}
+                onChange={(e) => setEnableOnSave(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border"
+              />
+              Enable this server after saving
+            </label>
+            {configError ? (
+              <p className="text-xs text-destructive">{configError}</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfiguring(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void saveOfficial()} disabled={savingOfficial}>
+              {savingOfficial ? "Saving…" : "Save & connect"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

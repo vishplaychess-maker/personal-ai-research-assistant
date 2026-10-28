@@ -10,9 +10,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
+  Database,
   FileText,
+  GitBranch,
   Globe,
   Monitor,
+  NotebookText,
   RefreshCw,
   Search,
   Shield,
@@ -41,6 +44,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   terminal: Terminal,
   "file-text": FileText,
   monitor: Monitor,
+  github: GitBranch,
+  notebook: NotebookText,
+  database: Database,
 };
 
 type PermissionValue = "ask_every_time" | "auto_approve" | "full_access";
@@ -99,6 +105,12 @@ export function SkillsPanel() {
     id: string;
     acknowledged: boolean;
   } | null>(null);
+  const [mcpForm, setMcpForm] = useState<{
+    capability: Capability;
+    values: Record<string, string>;
+    enableOnSave: boolean;
+  } | null>(null);
+  const [mcpSaving, setMcpSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -176,6 +188,47 @@ export function SkillsPanel() {
     if (pendingFullAccess?.id !== capability.id || !pendingFullAccess.acknowledged) return;
     setPendingFullAccess(null);
     void savePermission(capability, "full_access");
+  };
+
+  const handleMcpToggle = async (capability: Capability) => {
+    setError(null);
+    const configured = Boolean(capability.config?.configured);
+    if (!capability.enabled && !configured) {
+      setMcpForm({ capability, values: {}, enableOnSave: true });
+      return;
+    }
+    setPendingId(capability.id);
+    try {
+      await API.updateOfficialMcpServer(capability.id, { enabled: !capability.enabled });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update MCP server");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const openMcpConfig = (capability: Capability, enableOnSave: boolean) => {
+    setError(null);
+    setMcpForm({ capability, values: {}, enableOnSave });
+  };
+
+  const saveMcpConfig = async () => {
+    if (!mcpForm) return;
+    setMcpSaving(true);
+    setError(null);
+    try {
+      await API.updateOfficialMcpServer(mcpForm.capability.id, {
+        enabled: mcpForm.enableOnSave,
+        config: mcpForm.values,
+      });
+      setMcpForm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save MCP configuration");
+    } finally {
+      setMcpSaving(false);
+    }
   };
 
   const filtered = useMemo(() => {
@@ -288,6 +341,24 @@ export function SkillsPanel() {
                             {levelOption.short}
                           </span>
                         )}
+                        {capability.kind === "mcp_server" && (
+                          <span
+                            className={cn(
+                              "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                              capability.enabled
+                                ? "bg-emerald-500/10 text-emerald-500"
+                                : Boolean(capability.config?.configured)
+                                  ? "bg-primary/10 text-primary"
+                                  : "bg-muted text-muted-foreground"
+                            )}
+                          >
+                            {capability.enabled
+                              ? "Connected"
+                              : Boolean(capability.config?.configured)
+                                ? "Configured"
+                                : "Not configured"}
+                          </span>
+                        )}
                         {pendingId === capability.id && (
                           <span className="shrink-0 text-[10px] text-muted-foreground">
                             Saving…
@@ -300,7 +371,11 @@ export function SkillsPanel() {
                     </div>
                     <Switch
                       checked={capability.enabled}
-                      onCheckedChange={() => handleToggle(capability)}
+                      onCheckedChange={() =>
+                        capability.kind === "mcp_server"
+                          ? handleMcpToggle(capability)
+                          : handleToggle(capability)
+                      }
                       disabled={pendingId !== null}
                       aria-label={`Enable ${capability.name}`}
                     />
@@ -410,6 +485,89 @@ export function SkillsPanel() {
                           </p>
                         </div>
                       ) : null}
+                    </div>
+                  )}
+
+                  {capability.kind === "mcp_server" && (
+                    <div className="mt-3 border-t border-white/5 pt-3">
+                      {mcpForm?.capability.id === capability.id ? (
+                        <div className="grid gap-2">
+                          <p className="text-[11px] text-muted-foreground">
+                            Required credentials
+                          </p>
+                          {(capability.required_config_keys ?? []).map((key) => (
+                            <Input
+                              key={key}
+                              type="password"
+                              value={mcpForm.values[key] ?? ""}
+                              onChange={(e) =>
+                                setMcpForm((prev) =>
+                                  prev && prev.capability.id === capability.id
+                                    ? {
+                                        ...prev,
+                                        values: { ...prev.values, [key]: e.target.value },
+                                      }
+                                    : prev
+                                )
+                              }
+                              placeholder={key}
+                              aria-label={key}
+                              autoComplete="off"
+                              className="h-8 text-xs"
+                            />
+                          ))}
+                          <label className="flex items-center gap-2 text-xs text-foreground">
+                            <input
+                              type="checkbox"
+                              checked={mcpForm.enableOnSave}
+                              onChange={(e) =>
+                                setMcpForm((prev) =>
+                                  prev && prev.capability.id === capability.id
+                                    ? { ...prev, enableOnSave: e.target.checked }
+                                    : prev
+                                )
+                              }
+                              className="h-3.5 w-3.5 rounded border"
+                            />
+                            Enable this server after saving
+                          </label>
+                          <p className="text-[11px] text-muted-foreground">
+                            Credentials are validated against the provider and stored
+                            encrypted.
+                          </p>
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={mcpSaving}
+                              onClick={() => setMcpForm(null)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button size="sm" disabled={mcpSaving} onClick={saveMcpConfig}>
+                              {mcpSaving ? "Saving…" : "Save & connect"}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] text-muted-foreground">
+                            {Boolean(capability.config?.configured)
+                              ? "Credentials saved"
+                              : "Credentials required to enable"}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={pendingId !== null}
+                            onClick={() => openMcpConfig(capability, capability.enabled)}
+                          >
+                            {Boolean(capability.config?.configured)
+                              ? "Reconfigure"
+                              : "Configure"}
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>

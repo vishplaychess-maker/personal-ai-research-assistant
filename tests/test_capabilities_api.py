@@ -19,8 +19,12 @@ from cryptography.fernet import Fernet
 from app.config import settings
 from tests.auth_helpers import auth_headers, register_and_login
 
-_CAPABILITY_IDS = {"web_search", "code_executor", "file_reader", "desktop_automation"}
+_CAPABILITY_IDS = {
+    "web_search", "code_executor", "file_reader", "desktop_automation",
+    "github-mcp", "notion-mcp", "postgres-mcp",
+}
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
+_MCP_IDS = {"github-mcp", "notion-mcp", "postgres-mcp"}
 
 
 @pytest.fixture(autouse=True)
@@ -68,12 +72,19 @@ def test_lists_static_catalog_with_disabled_defaults():
         body = r.json()
         assert {item["id"] for item in body} == _CAPABILITY_IDS
         for item in body:
-            assert set(item) == {"id", "name", "description", "icon", "enabled", "config"}
+            assert set(item) == {
+                "id", "name", "description", "icon", "enabled", "config",
+                "kind", "required_config_keys",
+            }
             assert item["name"]
             assert item["description"]
             assert item["enabled"] is False
             if item["id"] in _CONFIGURED_IDS:
                 assert item["config"] == {"permission_level": "auto_approve"}
+            elif item["id"] in _MCP_IDS:
+                assert item["kind"] == "mcp_server"
+                assert item["config"] == {"configured": False}
+                assert item["required_config_keys"]
             else:
                 assert item["config"] == {}
 

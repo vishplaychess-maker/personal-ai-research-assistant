@@ -46,6 +46,7 @@ import type {
   RunCancelResult,
   BuiltinSkillCatalog,
   Capability,
+  OfficialMcpServer,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -527,6 +528,20 @@ export const API = {
     return request<{ tools: any[]; error: string | null }>(`/api/mcp/servers/${id}/discover`, {
       method: "POST",
     });
+  },
+
+  // ── Official MCP registry ───────────────────────────────────
+  listOfficialMcpServers() {
+    return request<OfficialMcpServer[]>("/api/mcp/registry");
+  },
+  updateOfficialMcpServer(
+    id: string,
+    data: { enabled: boolean; config?: Record<string, string> }
+  ) {
+    return request<OfficialMcpServer>(
+      `/api/mcp/registry/${encodeURIComponent(id)}/config`,
+      { method: "PATCH", body: JSON.stringify(data) }
+    );
   },
 
   // ── Knowledge Graph ───────────────────────────────────────

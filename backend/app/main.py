@@ -74,6 +74,7 @@ from app.routes.search import router as search_router
 from app.routes.auth import router as auth_router
 from app.routes.scheduler import router as scheduler_router
 from app.routes.mcp import router as mcp_router
+from app.routes.mcp_registry import router as mcp_registry_router
 from app.routes.share import router as share_router
 from app.routes.knowledge_graph import router as knowledge_graph_router
 from app.routes.export import router as export_router
@@ -1575,6 +1576,7 @@ app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(scheduler_router)
 app.include_router(mcp_router)
+app.include_router(mcp_registry_router)  # Official MCP servers - /api/mcp/registry
 app.include_router(share_router)
 app.include_router(knowledge_graph_router)
 app.include_router(export_router)

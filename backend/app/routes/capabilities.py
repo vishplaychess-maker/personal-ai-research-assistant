@@ -33,6 +33,8 @@ class CapabilityResponse(BaseModel):
     icon: str
     enabled: bool
     config: Dict[str, Any] = Field(default_factory=dict)
+    kind: str = "capability"
+    required_config_keys: List[str] = Field(default_factory=list)
 
 
 class CapabilityUpdate(BaseModel):
@@ -51,7 +53,13 @@ def _parse_config(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def _merged(default: Dict[str, Any], pref: Optional[SkillPreference]) -> Dict[str, Any]:
-    """Catalog defaults are the base; a stored preference overrides them."""
+    """Catalog defaults are the base; a stored preference overrides them.
+
+    MCP server credentials are never returned: their config collapses to a
+    ``configured`` boolean derived from the encrypted values on disk.
+    """
+    kind = str(default.get("kind") or "capability")
+    required = list(default.get("required_config_keys") or [])
     merged = {
         "id": default["id"],
         "name": default["name"],
@@ -59,10 +67,19 @@ def _merged(default: Dict[str, Any], pref: Optional[SkillPreference]) -> Dict[st
         "icon": default["icon"],
         "enabled": bool(default["enabled"]),
         "config": dict(default.get("config") or {}),
+        "kind": kind,
+        "required_config_keys": required,
     }
+    if kind == "mcp_server":
+        stored = _parse_config(pref.config_json) if pref is not None else {}
+        raw = stored.get("config") if isinstance(stored.get("config"), dict) else {}
+        merged["config"] = {
+            "configured": bool(required) and all(bool(raw.get(key)) for key in required)
+        }
+    elif pref is not None:
+        merged["config"].update(_parse_config(pref.config_json))
     if pref is not None:
         merged["enabled"] = bool(pref.enabled)
-        merged["config"].update(_parse_config(pref.config_json))
     return merged
 
 
@@ -107,6 +124,29 @@ def update_capability(
     default = capability_registry.get_capability(skill_id)
     if default is None:
         raise HTTPException(status_code=404, detail="Unknown capability")
+
+    if default.get("kind") == "mcp_server":
+        if payload.config is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Use /api/mcp/registry/{skill_id}/config to store MCP "
+                    "credentials."
+                ),
+            )
+        if payload.enabled:
+            pref = _get_preference(db, current_user.id, skill_id)
+            stored = _parse_config(pref.config_json) if pref else {}
+            raw = stored.get("config") if isinstance(stored.get("config"), dict) else {}
+            required = default.get("required_config_keys") or []
+            if not all(bool(raw.get(key)) for key in required):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Configure the required credentials before enabling "
+                        "this MCP server."
+                    ),
+                )
 
     if payload.config is not None and "permission_level" in payload.config:
         if parse_permission_level(payload.config["permission_level"]) is None:

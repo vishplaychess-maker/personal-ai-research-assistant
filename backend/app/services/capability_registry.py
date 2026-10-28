@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.mcp_registry import OFFICIAL_SERVERS
+
 CAPABILITIES: tuple[dict[str, Any], ...] = (
     {
         "id": "web_search",
@@ -41,6 +43,18 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
         "config": {"permission_level": "auto_approve"},
     },
+    *(
+        {
+            "id": server.id,
+            "name": f"{server.name} MCP",
+            "description": server.description,
+            "icon": server.icon,
+            "enabled": False,
+            "kind": "mcp_server",
+            "required_config_keys": list(server.required_config_keys),
+        }
+        for server in OFFICIAL_SERVERS
+    ),
 )
 
 

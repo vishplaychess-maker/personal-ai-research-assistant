@@ -273,6 +273,19 @@ export interface Capability {
   icon: string;
   enabled: boolean;
   config: Record<string, unknown>;
+  kind?: "capability" | "mcp_server";
+  required_config_keys?: string[];
+}
+
+// Official MCP server from GET /api/mcp/registry (credentials never included)
+export interface OfficialMcpServer {
+  id: string;
+  name: string;
+  description: string;
+  required_config_keys: string[];
+  enabled: boolean;
+  status: "connected" | "disconnected" | "not_configured";
+  configured_keys: string[];
 }
 
 // ── Model Types ───────────────────────────────────────────
