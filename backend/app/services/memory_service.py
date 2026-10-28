@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.config import settings
 from app.models.models import Memory, MemoryCategory
+from app.services import mem0_service
 from app.services.embeddings_client import generate_embedding
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_memory_enabled
@@ -528,17 +529,20 @@ def retrieve_relevant_memories(
     db: DBSession,
     user_id: int = 1,
     max_results: Optional[int] = None,
+    query: Optional[str] = None,
 ) -> List[Memory]:
     """
     Retrieve the most relevant memories for the current context.
 
-    If memory is disabled (persisted SQLite setting), returns an empty list.
-    Results are ordered by last_used_at descending (most recently used first).
+    When ``query`` is provided, Mem0 ranks the user's mirrored memories
+    semantically first; any miss (Mem0 unavailable, empty result) falls back to
+    the historical recency ordering. If memory is disabled, returns [].
 
     Args:
         db: Database session.
         user_id: User ID (defaults to 1).
-        max_results: Maximum number of memories to return (defaults to config value).
+        max_results: Maximum number of memories to return.
+        query: Current user message for semantic ranking (optional).
 
     Returns:
         List of Memory objects, empty if disabled.
@@ -552,13 +556,26 @@ def retrieve_relevant_memories(
 
     limit = max_results or settings.memory_max_results
 
-    memories: List[Memory] = (
-        db.query(Memory)
-        .filter(Memory.user_id == user_id)
-        .order_by(Memory.last_used_at.desc())
-        .limit(limit)
-        .all()
-    )
+    memories: List[Memory] = []
+    if query:
+        semantic_ids = mem0_service.search_memory_ids(user_id, query, limit=limit)
+        if semantic_ids:
+            rows = (
+                db.query(Memory)
+                .filter(Memory.user_id == user_id, Memory.id.in_(semantic_ids))
+                .all()
+            )
+            by_id = {row.id: row for row in rows}
+            memories = [by_id[mem_id] for mem_id in semantic_ids if mem_id in by_id]
+
+    if not memories:
+        memories = (
+            db.query(Memory)
+            .filter(Memory.user_id == user_id)
+            .order_by(Memory.last_used_at.desc())
+            .limit(limit)
+            .all()
+        )
 
     # Update access metrics for retrieved memories
     now = datetime.utcnow()
@@ -625,6 +642,13 @@ def save_memory(
     if touched or row.content_hash:
         db.commit()
         db.refresh(row)
+
+    # Mirror the approved fact into the local semantic index. Best-effort:
+    # a Mem0 failure must never undo or block the authoritative DB write.
+    try:
+        mem0_service.index_memory(user_id, row.id, row.content, row.category)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Mem0 indexing skipped (%s)", type(exc).__name__)
     return row
 
 

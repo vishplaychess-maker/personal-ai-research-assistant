@@ -82,6 +82,22 @@ class Settings(BaseSettings):
     # unrelated facts as separate memories.
     memory_conflict_threshold: float = 0.80
 
+    # ── Mem0 semantic index (mirror of approved DB memories, local only) ──
+    # Writes still go through the existing approval-gated memory paths; this
+    # only adds semantic retrieval and an offline vector index (Qdrant path +
+    # Ollama embeddings). Telemetry is disabled in mem0_service.
+    mem0_enabled: bool = True
+    # Initialize the local Mem0 client in a background thread at startup.
+    # Disabled by the shared pytest harness so tests never touch real Qdrant.
+    mem0_warmup_enabled: bool = True
+    mem0_embedder_model: str = "nomic-embed-text"
+    mem0_llm_model: str = "llama3.2:1b"
+    mem0_embedding_dims: int = 768
+    # Hard bounds so a slow/cold Ollama or locked Qdrant can never wedge a
+    # request: the caller falls back to DB recency on timeout.
+    mem0_timeout_s: float = 3.0
+    mem0_index_timeout_s: float = 8.0
+
     # ── Auth settings ───────────────────────────────────
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"

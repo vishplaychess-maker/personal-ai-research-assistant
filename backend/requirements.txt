@@ -12,6 +12,12 @@ httpx==0.27.2
 # Imported lazily by the executor, so the web app runs without the extra cost
 # of loading it unless a search is actually executed.
 tavily-python==0.8.5
+# ── Mem0 semantic memory index ───────────────────────────────────
+# Local-only: Qdrant embedded path + Ollama embeddings (nomic-embed-text).
+# 0.1.118 is pinned because mem0ai>=2.x requires httpx>=0.28, which conflicts
+# with this project's httpx==0.27.2 pin. Imported lazily by mem0_service.
+mem0ai==0.1.118
+ollama>=0.3.0
 # ── Approval domain (Phase 1B.1) — RFC 8785 JSON Canonicalization Scheme ──
 # The reference pure-Python implementation by Trail of Bits. Apache-2.0, ZERO
 # runtime dependencies, Requires-Python>=3.8 (no conflict with the pinned

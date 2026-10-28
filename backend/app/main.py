@@ -1436,6 +1436,15 @@ async def lifespan(app: FastAPI):
     from app.run_engine.notifier import run_notifier
     run_notifier.bind_loop()
 
+    # Mem0 semantic index: warm Qdrant + Ollama embeddings off the event loop so
+    # the first memory search stays within its short budget. Optional by design:
+    # failure only means retrieval falls back to DB recency.
+    try:
+        from app.services import mem0_service
+        mem0_service.warm_up()
+    except Exception as exc:  # noqa: BLE001 - memory is never a boot dependency
+        logger.warning("Mem0 warmup skipped (%s)", type(exc).__name__)
+
     yield
 
     # Shutdown — unbind the notifier, then cooperative worker stop (bounded

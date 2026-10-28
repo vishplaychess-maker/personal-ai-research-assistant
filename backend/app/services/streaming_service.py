@@ -218,7 +218,9 @@ def prepare_chat_context(
     memories_used = False
     try:
         if get_memory_enabled(db):
-            memories = retrieve_relevant_memories(db, user_id=user_id)
+            memories = retrieve_relevant_memories(
+                db, user_id=user_id, query=user_input
+            )
             if memories:
                 memory_block = format_memories_for_prompt(memories)
                 system_parts.append(memory_block)

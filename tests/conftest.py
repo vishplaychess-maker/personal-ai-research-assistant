@@ -77,6 +77,10 @@ def _configure_test_database() -> Path | None:
 #: Import-time side effect: must stay above any ``app`` import in this file.
 TEST_DB_PATH = _configure_test_database()
 
+# Mem0 warm-up opens the real local Qdrant store and Ollama embedder; the test
+# harness must never do that (individual tests mock the Mem0 seams instead).
+os.environ["MEM0_WARMUP_ENABLED"] = "false"
+
 
 def assert_test_database_is_isolated() -> None:
     """Fail fast when the engine would touch the repo's real database.

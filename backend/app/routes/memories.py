@@ -24,6 +24,7 @@ from app.database import get_db
 from app.models.models import Memory, User
 from app.schemas.memories import MemoryCreate, MemoryUpdate, MemoryResponse
 from app.services.auth_service import get_optional_user
+from app.services import mem0_service
 from app.services.cookie_service import require_csrf
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
@@ -105,6 +106,9 @@ def create_memory(
     db.add(memory)
     db.commit()
     db.refresh(memory)
+    mem0_service.index_memory(
+        current_user.id, memory.id, memory.content, memory.category
+    )
     return memory
 
 
@@ -141,6 +145,9 @@ def update_memory(
     memory.category = payload.category
     db.commit()
     db.refresh(memory)
+    mem0_service.index_memory(
+        current_user.id, memory.id, memory.content, memory.category
+    )
     return memory
 
 
@@ -157,6 +164,7 @@ def delete_memory(
         raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
     db.delete(memory)
     db.commit()
+    mem0_service.remove_memory_for_db_id(current_user.id, memory_id)
     return None
 
 
@@ -183,4 +191,5 @@ def clear_all_memories(
     for mem in memories:
         db.delete(mem)
     db.commit()
+    mem0_service.clear_user_memories(current_user.id)
     return None
