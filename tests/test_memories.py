@@ -14,6 +14,8 @@ import os
 import httpx
 import pytest
 
+from tests.auth_helpers import register_and_login, auth_headers
+
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
 
@@ -31,15 +33,54 @@ def _clear_all_memories(c: httpx.Client):
     c.request("DELETE", "/api/memories", json={"confirm": True})
 
 
+def _auth_client() -> httpx.Client:
+    """Return an authenticated httpx client.
+
+    Phase 7C: session/message routes require a valid access token (the
+    default-user fallback was removed), so tests that create sessions or
+    send messages must authenticate. The register/login lookup runs on a
+    throwaway client so the returned client's pool is not opened before
+    the caller enters it with `with _auth_client() as c:`.
+    """
+    c = httpx.Client(base_url=BASE_URL, timeout=30.0)
+    with httpx.Client(base_url=BASE_URL, timeout=15.0) as temp:
+        _, token = register_and_login(temp)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
+
+
+def _clear_local_memories():
+    """Delete all Memory rows from the local SQLite database.
+
+    This ensures TestClient-based tests are isolated from each other,
+    since the httpx-based _clear_all_memories only reaches the Docker
+    backend's database (used by httpx-based tests), not the local
+    test.db used by in-process TestClient tests.
+    """
+    from app.database import SessionLocal
+    from app.models.models import Memory
+    db = SessionLocal()
+    try:
+        db.query(Memory).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_memories():
-    """Clean up all test memories and ensure memory is enabled before each test."""
+    """Clean up all test memories and ensure memory is enabled before each test.
+
+    Cleans both the Docker backend database (via httpx for httpx-based tests)
+    and the local test.db (via direct SQLAlchemy for TestClient-based tests).
+    """
     with client() as c:
         try:
             _clear_all_memories(c)
             c.patch("/api/settings/memory", json={"enabled": True})
         except Exception:
             pass
+    _clear_local_memories()
 
 
 # ── Memory CRUD tests ──────────────────────────────────────
@@ -62,7 +103,7 @@ def test_create_memory():
 
 def test_create_memory_with_session():
     """POST /api/memories with session_id associates the memory."""
-    with client() as c:
+    with _auth_client() as c:
         s = c.post("/api/sessions", json={"title": "Mem Session"}).json()
         resp = c.post("/api/memories", json={
             "content": "This research is about battery chemistry",
@@ -346,17 +387,21 @@ def test_memories_used_flag_with_memory():
         workflow.generate_response = mock_generate_response
 
         with TestClient(app) as c:
+            # Authenticated user (Phase 7C: sessions/messages require a token)
+            _, token = register_and_login(c)
+            headers = auth_headers(token)
+
             # Create a memory first
             c.post("/api/memories", json={
                 "content": "User likes simple analogies",
                 "category": "preference",
-            })
+            }, headers=headers)
 
             # Create a session and send a message
-            s = c.post("/api/sessions", json={"title": "Memory Chat Test"}).json()
+            s = c.post("/api/sessions", json={"title": "Memory Chat Test"}, headers=headers).json()
             resp = c.post(f"/api/sessions/{s['id']}/messages", json={
                 "message": "Explain something using an analogy.",
-            })
+            }, headers=headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -383,10 +428,12 @@ def test_memories_not_used_without_memories():
         workflow.generate_response = mock_generate_response
 
         with TestClient(app) as c:
-            s = c.post("/api/sessions", json={"title": "No Memory Test"}).json()
+            _, token = register_and_login(c)
+            headers = auth_headers(token)
+            s = c.post("/api/sessions", json={"title": "No Memory Test"}, headers=headers).json()
             resp = c.post(f"/api/sessions/{s['id']}/messages", json={
                 "message": "Hello, how are you?",
-            })
+            }, headers=headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -475,18 +522,21 @@ def test_memory_disabled_no_new_memories_from_chat():
         workflow.generate_response = mock_generate_response
 
         with TestClient(app) as c:
+            _, token = register_and_login(c)
+            headers = auth_headers(token)
+
             # Disable memory via the DB-backed setting
             c.patch("/api/settings/memory", json={"enabled": False})
 
             # Create a session and send a message that would normally
             # trigger memory extraction
-            s = c.post("/api/sessions", json={"title": "Disabled Extract Test"}).json()
+            s = c.post("/api/sessions", json={"title": "Disabled Extract Test"}, headers=headers).json()
             c.post(f"/api/sessions/{s['id']}/messages", json={
                 "message": "I prefer short and simple explanations.",
-            })
+            }, headers=headers)
 
             # Verify no memory was created
-            mems = c.get("/api/memories").json()
+            mems = c.get("/api/memories", headers=headers).json()
             assert len(mems) == 0, f"Expected 0 memories when disabled, got {len(mems)}"
     finally:
         workflow.generate_response = original
@@ -513,21 +563,24 @@ def test_memory_disabled_does_not_inject_existing():
         workflow.generate_response = mock_generate_response
 
         with TestClient(app) as c:
+            _, token = register_and_login(c)
+            headers = auth_headers(token)
+
             # Create a memory first
-            c.request("DELETE", "/api/memories", json={"confirm": True})
+            c.request("DELETE", "/api/memories", json={"confirm": True}, headers=headers)
             c.post("/api/memories", json={
                 "content": "User likes simple analogies",
                 "category": "preference",
-            })
+            }, headers=headers)
 
             # Disable memory via DB-backed setting
             c.patch("/api/settings/memory", json={"enabled": False})
 
             # Send a message
-            s = c.post("/api/sessions", json={"title": "Disabled Mem Test"}).json()
+            s = c.post("/api/sessions", json={"title": "Disabled Mem Test"}, headers=headers).json()
             resp = c.post(f"/api/sessions/{s['id']}/messages", json={
                 "message": "Explain something.",
-            })
+            }, headers=headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -617,13 +670,13 @@ def test_memory_disabled_returns_memories_used_false():
     """
     from sqlalchemy.orm import Session as DBSession
     from app.database import SessionLocal
+    from app.models.models import Memory
     from app.services.memory_service import retrieve_relevant_memories
     from app.services.settings_service import set_memory_enabled
 
     db: DBSession = SessionLocal()
     try:
         # Create a memory first
-        from app.models.models import Memory
         db.add(Memory(user_id=1, content="Test memory", category="fact"))
         db.commit()
 
@@ -641,4 +694,7 @@ def test_memory_disabled_returns_memories_used_false():
         result2 = retrieve_relevant_memories(db)
         assert len(result2) >= 1
     finally:
+        # Clean up the test memory row so it doesn't leak to other tests
+        db.query(Memory).filter(Memory.content == "Test memory").delete()
+        db.commit()
         db.close()

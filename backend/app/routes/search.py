@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import User
 from app.schemas.documents import SearchResult
-from app.services.auth_service import get_optional_user
+from app.services.auth_service import get_current_user
 
 router = APIRouter(tags=["search"])
 
@@ -29,7 +29,7 @@ MAX_RESULTS = 50
 def search_messages(
     q: Optional[str] = Query(None, min_length=1, max_length=MAX_QUERY_LENGTH),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Search across messages in the current user's sessions.
@@ -43,9 +43,15 @@ def search_messages(
 
     query_text = q.strip()
 
+    # Dialect-aware case-insensitive matching (Phase 5 — cloud deploy).
+    # SQLite LIKE is already case-insensitive for ASCII; PostgreSQL LIKE is
+    # case-sensitive, so use ILIKE there. Behavior on SQLite is unchanged.
+    dialect_name = db.bind.dialect.name if db.bind is not None else "sqlite"
+    like_operator = "ILIKE" if dialect_name == "postgresql" else "LIKE"
+
     # Use SQLAlchemy text() with parameterized bind to prevent injection
     sql = sa_text(
-        """
+        f"""
         SELECT
             m.id AS message_id,
             m.session_id,
@@ -56,7 +62,7 @@ def search_messages(
             m.created_at
         FROM messages m
         JOIN research_sessions rs ON rs.id = m.session_id
-        WHERE m.content LIKE '%' || :q || '%'
+        WHERE m.content {like_operator} '%' || :q || '%'
           AND rs.user_id = :user_id
         ORDER BY m.created_at DESC
         LIMIT :limit

@@ -13,7 +13,7 @@ services:
       - research-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; r = urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat'); assert r.status == 200, f'unexpected status {r.status}'"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && IFS= read -r status_line <&3 && [[ \"$$status_line\" == *\"200 OK\"* ]] && exec 3>&-"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -24,6 +24,8 @@ services:
     container_name: research-assistant-backend
     ports:
       - "127.0.0.1:8080:8080"
+    expose:
+      - "8080"
     volumes:
       - app_data:/data
     environment:
@@ -32,12 +34,146 @@ services:
       - CHROMADB_PORT=8000
       - OLLAMA_HOST=host.docker.internal
       - OLLAMA_PORT=11434
+      - LLM_PROVIDER=${LLM_PROVIDER:-glm}
+      # The GLM Free Router runs on the host; inside the container the host's
+      # 127.0.0.1 is reached via host.docker.internal (same pattern as Ollama).
+      - GLM_BASE_URL=${GLM_BASE_URL:-http://host.docker.internal:8320/v1}
+      - GLM_MODEL=${GLM_MODEL:-glm-5.3-flash}
+      # Phase 5: key passthrough (empty defaults keep local dev unchanged).
+      # VERDENT_API_KEY is honoured by the GLM provider as a fallback key.
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - VERDENT_API_KEY=${VERDENT_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.2-3b-instruct:free}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_BASE_URL=${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      - NVIDIA_MODEL=${NVIDIA_MODEL:-nvidia/llama-3.1-nemotron-70b-instruct}
+      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
+      - HUGGINGFACE_BASE_URL=${HUGGINGFACE_BASE_URL:-https://router.huggingface.co/v1}
+      - HUGGINGFACE_MODEL=${HUGGINGFACE_MODEL:-meta-llama/Meta-Llama-3-8B-Instruct}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_BASE_URL=${GOOGLE_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      - GOOGLE_MODEL=${GOOGLE_MODEL:-gemini-2.0-flash}
+      - MODELSLAB_API_KEY=${MODELSLAB_API_KEY:-}
+      - MODELSLAB_BASE_URL=${MODELSLAB_BASE_URL:-https://modelslab.com/api/v1}
+      - MODELSLAB_MODEL=${MODELSLAB_MODEL:-meta-llama/Llama-3.3-70B-Instruct}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_BASE_URL=${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
+      - TOGETHER_BASE_URL=${TOGETHER_BASE_URL:-https://api.together.xyz/v1}
+      - TOGETHER_MODEL=${TOGETHER_MODEL:-meta-llama/Llama-3.3-70B-Instruct-Turbo-Free}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - MISTRAL_BASE_URL=${MISTRAL_BASE_URL:-https://api.mistral.ai/v1}
+      - MISTRAL_MODEL=${MISTRAL_MODEL:-mistral-small-latest}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+      - COHERE_BASE_URL=${COHERE_BASE_URL:-https://api.cohere.ai/v1}
+      - COHERE_MODEL=${COHERE_MODEL:-command-r-plus}
+      - ENABLE_DEEP_RESEARCH=${ENABLE_DEEP_RESEARCH:-true}
+      - DEEP_RESEARCH_MAX_RESULTS=${DEEP_RESEARCH_MAX_RESULTS:-5}
+      - DEEP_RESEARCH_MAX_SCRAPE=${DEEP_RESEARCH_MAX_SCRAPE:-3}
+      - ENABLE_TERMINAL_TOOL=${ENABLE_TERMINAL_TOOL:-false}
+      - ENABLE_MCP_TOOL=${ENABLE_MCP_TOOL:-false}
+      - MCP_CALL_TIMEOUT_S=${MCP_CALL_TIMEOUT_S:-30}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # MP-4C: the SAME signing secret the executor verifies. Provisioned to
+      # these TWO services only, and never as an inline value.
+      - EXECUTOR_SERVICE_GRANT_KEY_FILE=/run/secrets/executor_grant_key
+      # MP-4C: the isolated executor endpoint and the explicit operator opt-in.
+      # BOTH default to EMPTY, which means OFF: no broker client is built, the
+      # ONE authority (real_python_execution_available) stays False, and every
+      # python_sandbox proposal/dispatch fails closed.
+      - EXECUTOR_SERVICE_URL=${EXECUTOR_SERVICE_URL:-}
+      - EXECUTOR_OPERATOR_OPT_IN=${EXECUTOR_OPERATOR_OPT_IN:-}
+      # Media Generation (Image/Video)
+      - ENABLE_MEDIA_GENERATION=${ENABLE_MEDIA_GENERATION:-true}
+      - MEDIA_PROVIDER_PRIMARY=${MEDIA_PROVIDER_PRIMARY:-venice}
+      - MEDIA_DEFAULT_IMAGE_MODEL=${MEDIA_DEFAULT_IMAGE_MODEL:-flux-schnell}
+      - MEDIA_DEFAULT_VIDEO_MODEL=${MEDIA_DEFAULT_VIDEO_MODEL:-seedance-2-0-text-to-video-basic}
+      - MEDIA_VIDEO_POLL_INTERVAL_S=${MEDIA_VIDEO_POLL_INTERVAL_S:-5}
+      - MEDIA_VIDEO_TIMEOUT_S=${MEDIA_VIDEO_TIMEOUT_S:-300}
+      - MEDIA_RATE_LIMIT_PER_MINUTE=${MEDIA_RATE_LIMIT_PER_MINUTE:-10}
+      - VENICE_API_KEY=${VENICE_API_KEY:-}
+      - VENICE_BASE_URL=${VENICE_BASE_URL:-https://api.venice.ai/api/v1}
+      - VENICE_IMAGE_MODEL=${VENICE_IMAGE_MODEL:-flux-schnell}
+      - VENICE_VIDEO_MODEL=${VENICE_VIDEO_MODEL:-seedance-2-0-text-to-video-basic}
+      - NEXA_API_KEY=${NEXA_API_KEY:-}
+      - NEXA_BASE_URL=${NEXA_BASE_URL:-https://nexa-api.com/v1}
+      - NEXA_IMAGE_MODEL=${NEXA_IMAGE_MODEL:-flux-schnell}
+      - NEXA_VIDEO_MODEL=${NEXA_VIDEO_MODEL:-kling-video}
+      - AGNES_API_KEY=${AGNES_API_KEY:-}
+      - AGNES_BASE_URL=${AGNES_BASE_URL:-https://apihub.agnes-ai.com/v1}
+      - AGNES_IMAGE_MODEL=${AGNES_IMAGE_MODEL:-agnes-image-2.1-flash}
+      - AGNES_VIDEO_MODEL=${AGNES_VIDEO_MODEL:-agnes-video-2.5-flash}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       chromadb:
         condition: service_started
     networks:
+      # Its existing required access is preserved: chromadb + host.docker.internal
+      # (Ollama / GLM) via research-network. executor-internal is ADDED so this
+      # backend is the only workload that can reach the executor.
       - research-network
+      - executor-internal
     restart: unless-stopped
+    secrets:
+      - executor_grant_key
+
+  # ── MP-4C dedicated Python executor (internal only) ─────
+  # The ONLY service that reaches the Docker daemon. It publishes NO host port:
+  # the endpoint is reachable solely by the backend, over `executor-internal`.
+  # The backend, the frontend and every executed Python container receive no
+  # Docker socket and no daemon credentials.
+  #
+  # Keep exactly ONE replica. Its quotas (1 active execution per user, 2
+  # globally) are PROCESS-LOCAL, so a second replica would each enforce its own
+  # caps and could exceed the intended global limit.
+  executor:
+    build:
+      context: .
+      dockerfile: executor_service/Dockerfile
+    image: thunder-executor:mp4c
+    container_name: research-assistant-executor
+    restart: unless-stopped
+    volumes:
+      # The socket is the daemon credential. It is mounted into THIS service only.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The DURABLE replay guard. This is what makes the SAME signed request
+      # refuse after a restart: the consumed jti survives on the volume. Losing
+      # this volume (docker compose down -v) LOSES that guarantee.
+      - executor_nonce_data:/var/lib/executor
+    secrets:
+      # The backend<->executor signing secret arrives as a FILE secret (see the
+      # top-level `secrets:` block), never as an environment value, so it never
+      # appears in `docker compose config`, Config.Env or ps output.
+      - executor_grant_key
+    environment:
+      - EXECUTOR_SERVICE_GRANT_KEY_FILE=/run/secrets/executor_grant_key
+      - EXECUTOR_SERVICE_NONCE_DB=/var/lib/executor/nonces.db
+      - EXECUTOR_SERVICE_OWNER=mp4c-executor
+      # Non-loopback bind is an explicit opt-in, required because the backend
+      # reaches this service from another container. It is safe only because no
+      # host port is published and the network is internal.
+      - EXECUTOR_SERVICE_HOST=0.0.0.0
+      - EXECUTOR_SERVICE_ALLOW_INTERNAL_BIND=1
+    expose:
+      - "8091"
+    networks:
+      - executor-internal
+    healthcheck:
+      # /healthz is 200 only when the daemon is reachable, the EXACT pinned image
+      # is present and the full isolation probe passed at startup.
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys\ntry:\n sys.exit(0 if u.urlopen('http://127.0.0.1:8091/healthz').status==200 else 1)\nexcept Exception:\n sys.exit(1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 900s
 
   # ── React frontend (Vite dev server) ────────────────────
   frontend:
@@ -49,7 +185,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - research-network
     restart: unless-stopped
@@ -57,7 +194,23 @@ services:
 networks:
   research-network:
     driver: bridge
+  # Internal-only: no external route and no published ports. Only services
+  # attached to it (the backend) can reach the executor.
+  executor-internal:
+    driver: bridge
+    internal: true
+
+secrets:
+  # Operator-provided and NEVER checked in (see .gitignore and secrets/README.md).
+  # Create it before the first start:
+  #   secrets/executor_service_tokens.json
+  #     {"<token>": {"principal": "backend", "user_id": 1, "tenant_id": null}}
+  executor_grant_key:
+    file: ./secrets/executor_grant_key
 
 volumes:
   app_data:
   chromadb_data:
+  # Durable nonce store. `docker compose down -v` DESTROYS it, and with it the
+  # cross-restart replay guarantee.
+  executor_nonce_data:

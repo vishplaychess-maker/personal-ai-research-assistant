@@ -2,6 +2,8 @@
 Client for generating text embeddings using Ollama's nomic-embed-text model.
 """
 
+import hashlib
+
 import httpx
 
 from app.config import settings
@@ -9,6 +11,24 @@ from app.config import settings
 OLLAMA_EMBED_URL = f"{settings.ollama_url}/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 EMBED_TIMEOUT = 30.0
+
+
+def _local_embedding(text: str) -> list[float]:
+    """Deterministic local embedding for tests/offline (LLM_PROVIDER=local).
+
+    Returns a 384-dim vector derived from SHA-256 of the text, so
+    ChromaDB collections have consistent dimensions and queries are
+    deterministic without needing Ollama.
+    """
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    vec: list[float] = []
+    counter = 0
+    while len(vec) < 384:
+        h = hashlib.sha256(f"{digest.hex()}-{counter}".encode()).digest()
+        vec.extend(b / 255.0 for b in h)
+        counter += 1
+    # Center around 0 for better cosine similarity distribution
+    return [v - 0.5 for v in vec[:384]]
 
 
 def generate_embedding(text: str) -> list[float]:
@@ -25,6 +45,10 @@ def generate_embedding(text: str) -> list[float]:
         ConnectionError: If Ollama is unreachable.
         RuntimeError: If the API returns an error.
     """
+    # Local test mode: return deterministic embeddings without network
+    if settings.llm_provider == "local":
+        return _local_embedding(text)
+
     try:
         with httpx.Client(timeout=EMBED_TIMEOUT) as client:
             resp = client.post(OLLAMA_EMBED_URL, json={

@@ -1,0 +1,38 @@
+# MP-4C OPT-IN OVERLAY - DISPOSABLE TEST STACK ONLY.
+#
+# NEVER add this file to a normal start. The default `docker compose up` does not
+# reference it and stays fully fail-closed. Use it only when you intend to
+# exercise the isolated-executor path on a THROWAWAY stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.optin.yml up -d --build
+#   ... run the manual test ...
+#   docker compose -f docker-compose.yml -f docker-compose.optin.yml down
+#
+# What each line turns on, and why it is required:
+#   RUN_ENGINE_ENABLED / RUN_WORKER_ENABLED / RUN_PUBLIC_API_ENABLED
+#        the durable run engine, the embedded worker and the public Run API.
+#   RUN_CHAT_STREAM_ENABLED
+#        the durable chat driver that owns the approval suspend/resume.
+#   RUN_ENGINE_SANDBOX
+#        authorizes CREATING a python proposal. It never authorizes execution.
+#   RUN_IDEMPOTENCY_HMAC_KEY
+#        required by the durable submission route (local throwaway value only).
+#   EXECUTOR_SERVICE_URL
+#        the isolated executor endpoint, reachable only over executor-internal.
+#   EXECUTOR_OPERATOR_OPT_IN=1
+#        the EXPLICIT operator opt-in. This is the only thing that lets the ONE
+#        authority real_python_execution_available() become True, and it becomes
+#        True only while the broker client ALSO reports the executor live-ready.
+#
+# Every value is explicit here. Nothing below runs unless you pass this file.
+services:
+  backend:
+    environment:
+      - RUN_ENGINE_ENABLED=true
+      - RUN_WORKER_ENABLED=true
+      - RUN_CHAT_STREAM_ENABLED=true
+      - RUN_PUBLIC_API_ENABLED=true
+      - RUN_ENGINE_SANDBOX=true
+      - RUN_IDEMPOTENCY_HMAC_KEY=${RUN_IDEMPOTENCY_HMAC_KEY:-mp4c-disposable-local-hmac-key}
+      - EXECUTOR_SERVICE_URL=http://executor:8091
+      - EXECUTOR_OPERATOR_OPT_IN=1

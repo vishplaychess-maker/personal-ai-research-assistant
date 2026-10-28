@@ -9,20 +9,36 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
+    image_url: Optional[str] = Field(None, description="Base64-encoded image data URL (data:image/...;base64,...)")
+    # Phase 1B.2R MP-3C3D3A — optional canonical mode ("chat"/"deep_research"/
+    # "multi_agent"). Omitted (None) is intentionally distinct from explicit
+    # "chat": omitted preserves existing heuristic/global-flag-driven legacy
+    # routing; explicit "chat" forces the plain single-agent path regardless
+    # of those flags. Bounded here (type + length) only — the canonical
+    # allowlist/normalization is app.run_engine.submission.validate_request_mode,
+    # the one authoritative definition reused by every mode-aware route.
+    mode: Optional[str] = Field(None, max_length=32)
 
 
 # ── Citation schemas ───────────────────────────────────────
 
 
 class Citation(BaseModel):
-    """A single citation marker with source information."""
+    """A single citation marker with source information.
 
-    marker: str  # e.g. "[1]", "[2]"
-    document_id: int
+    Phase 1B.2R MP-3C3D4C: ``document_id``/``chunk_id`` are now Optional —
+    a web-research citation (marker ``[W1]``, ``[W2]``, ...) has neither,
+    only a validated ``url`` from a sealed D4B source snapshot. Existing
+    document citations (marker ``[1]``, ``[2]``, ...) always populate both
+    unchanged — fully backward compatible, additive only."""
+
+    marker: str  # e.g. "[1]", "[2]" (document) or "[W1]", "[W2]" (web research)
+    document_id: Optional[int] = None
     filename: str
     page_number: Optional[int] = None
-    chunk_id: int
+    chunk_id: Optional[int] = None
     snippet: str
+    url: Optional[str] = None  # web-research citations only; validated, sealed-source URL
 
 
 # ── Document schemas ───────────────────────────────────────
@@ -59,7 +75,10 @@ class MessageResponse(BaseModel):
     session_id: int
     role: str
     content: str
+    image_url: Optional[str] = None  # Base64-encoded image data URL for multimodal messages
     citations: Optional[str] = None  # JSON-serialized citation list
+    confidence: Optional[int] = None  # F6 Cap 2: 0-100 advisory score
+    confidence_reason: Optional[str] = None  # F6 Cap 2: one-line why
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -91,6 +110,18 @@ class ChatResponse(BaseModel):
     sources_used: bool = False  # Whether retrieved documents were included
     memories_used: bool = False  # Whether saved memories were included
     memory_extraction: Optional[MemoryExtractionStatus] = None  # Memory extraction outcome
+
+
+class TerminalApprovalResponse(BaseModel):
+    """Response when the agent proposes a command and asks for approval."""
+    type: str = "terminal_approval"  # Discriminator for frontend
+    pending_command: str  # The command the agent wants to run
+    approval_message: str  # Full message shown to the user
+    # MP-5: canonical PendingApproval identity when the parked work belongs to
+    # the canonical authority. Optional, so an older client that only knows the
+    # legacy parked shape keeps working unchanged.
+    approval_id: str | None = None
+    session_id: int
 
 
 # ── SSE event schemas (Phase 5A streaming) ─────────────────

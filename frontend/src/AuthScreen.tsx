@@ -109,7 +109,7 @@ export function AuthScreen() {
       <div className="auth-card">
         <div className="auth-header">
           <div className="auth-logo">🧠</div>
-          <h1 className="auth-title">AI Research Assistant</h1>
+          <h1 className="auth-title">Thunder AI</h1>
           <p className="auth-subtitle">
             {mode === "login" ? "Sign in to your account" : "Create a new account"}
           </p>

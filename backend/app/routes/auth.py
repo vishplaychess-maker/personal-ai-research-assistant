@@ -1,25 +1,33 @@
 """
-Phase 6A / 7A / 7B — Authentication routes with rate limiting and refresh tokens.
+Phase 6A / 7A / 7B / 7C — Authentication routes.
 
 POST /api/auth/register      — Create a new user account (rate-limited)
-POST /api/auth/login         — Authenticate, receive access + refresh tokens (rate-limited)
-POST /api/auth/refresh       — Exchange a refresh token for a new token pair (rotation)
-POST /api/auth/logout        — Revoke the current refresh session
-POST /api/auth/logout-all    — Revoke ALL refresh sessions for the current user
+POST /api/auth/login         — Authenticate; sets HttpOnly refresh cookie (rate-limited)
+POST /api/auth/refresh       — Rotate refresh cookie → new access token + new refresh cookie
+POST /api/auth/logout        — Revoke the current refresh session; clears cookies
+POST /api/auth/logout-all    — Revoke ALL refresh sessions; clears cookies
 GET  /api/auth/me            — Get the currently authenticated user's info
+GET  /api/auth/sessions      — List sessions; current-session identified via refresh cookie
 
 Phase 7B additions:
-- Login returns both access_token (15 min) and refresh_token (30 days)
-- POST /api/auth/refresh rotates the refresh token with reuse detection
-- POST /api/auth/logout and /logout-all revoke sessions server-side
-- Backward compatible: existing TokenResponse response model still accepted
+- Access token (15 min) + refresh-token rotation with reuse detection
+- Session revocation, current-session detection, last_used_at tracking
+
+Phase 7C additions:
+- The raw refresh token is delivered ONLY as an HttpOnly cookie
+  (research_assistant_refresh_token, Path=/api/auth). It is never returned
+  in JSON responses and never accepted in the JSON body.
+- A non-HttpOnly CSRF cookie (research_assistant_csrf_token) implements
+  double-submit CSRF protection on state-changing endpoints.
+- Login and registration remain exempt from CSRF (pre-authentication).
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -28,14 +36,12 @@ from app.models.models import User
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
-    RefreshRequest,
-    RefreshResponse,
     RegisterRequest,
     LogoutResponse,
     SessionInfo,
     SessionsListResponse,
-    TokenResponse,
     UserResponse,
+    RefreshResponse,
 )
 from app.services.auth_service import (
     create_access_token,
@@ -44,9 +50,17 @@ from app.services.auth_service import (
     verify_password,
 )
 from app.services.rate_limiter import get_rate_limiter, get_lockout_duration
-
+from app.services.cookie_service import (
+    set_refresh_cookie,
+    clear_refresh_cookie,
+    set_csrf_cookie,
+    clear_csrf_cookie,
+    get_refresh_token,
+    require_csrf,
+)
 from app.services.refresh_token_service import (
     create_refresh_session,
+    family_id_for_raw_token,
     rotate_refresh_token,
     revoke_refresh_session,
     revoke_all_user_sessions,
@@ -165,16 +179,19 @@ def register_user(
 def login_user(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """
-    Authenticate a user and return JWT access + refresh tokens.
+    Authenticate a user and return a JWT access token.
 
     Rate-limited by IP and username. Returns generic 'Invalid credentials'
     for all failure modes.
 
-    Phase 7B: Returns both access_token (15 min) and refresh_token (30 days).
-    Initializes a refresh session server-side for the refresh token.
+    Phase 7C: The refresh token is delivered exclusively as an HttpOnly
+    cookie (`research_assistant_refresh_token`), never in the JSON response.
+    A CSRF cookie is also set so the browser can echo it in state-changing
+    requests (double-submit CSRF).
     """
     client_ip = _client_ip(request)
     normalized_username = _normalize_username(payload.username)
@@ -259,25 +276,43 @@ def login_user(
     user.locked_until = None
     db.commit()
 
-    # 7. Create access token (short-lived)
-    access_token = create_access_token(
-        data={"sub": str(user.id)},
-        expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
-    )
-
-    # 8. Create refresh session
+    # 7. Create the refresh session FIRST so the access token can bind to its
+    #    refresh-token family (Phase 1B.2R D5). `create_refresh_session` mints
+    #    exactly one family; we look up its id by the raw token's hash.
     refresh_token = create_refresh_session(
         db, user, device_info=f"ip:{client_ip}",
     )
 
+    # 8. Bind the access token to that family via the `sid` claim (an OIDC-style
+    #    session id = a `refresh_sessions.family_id`, never a token). If steps
+    #    8-9 fail after the session is persisted, revoke it so an undisclosed
+    #    refresh family cannot accumulate (the raw token was never delivered).
+    try:
+        family_id = family_id_for_raw_token(db, refresh_token)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "sid": family_id},
+            expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
+        )
+    except Exception:
+        try:
+            revoke_refresh_session(db, user, refresh_token)
+        except Exception:  # best-effort; never mask the original failure
+            logger.warning("Failed to revoke orphan refresh session for user_id=%d", user.id)
+        raise
+
     # 9. Periodic cleanup (every login, lightweight)
     cleanup_expired_sessions(db)
+
+    # 10. Deliver the refresh token as an HttpOnly cookie and set a CSRF
+    #     cookie for double-submit protection on subsequent requests.
+    set_refresh_cookie(response, refresh_token)
+    set_csrf_cookie(response)
 
     logger.info("User logged in: id=%d username=%s from IP=%s",
                 user.id, user.username, client_ip)
     return LoginResponse(
         access_token=access_token,
-        refresh_token=refresh_token,
+        token_type="bearer",
     )
 
 
@@ -286,18 +321,22 @@ def login_user(
 
 @router.post("/refresh", response_model=RefreshResponse)
 def refresh_token(
-    payload: RefreshRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
+    _csrf: None = Depends(require_csrf),
 ):
     """
-    Exchange a refresh token for a new access + refresh token pair.
+    Exchange the HttpOnly refresh cookie for a new access token + new cookie.
 
-    The old refresh token is revoked (rotation). If a revoked token is
-    reused (theft detected), the entire token family is revoked.
+    The refresh token is read ONLY from the HttpOnly cookie. A JSON body
+    token is ignored after Phase 7C. The old token is revoked (rotation);
+    if a revoked token is reused (theft detected), the entire token family
+    is revoked and the cookies are cleared.
 
     Returns generic 'Invalid refresh token' for all failure modes.
     Rate-limited per client IP to prevent abuse.
+    CSRF-protected via double-submit (require_csrf).
     """
     # Rate-limit refresh requests per IP
     client_ip = _client_ip(request)
@@ -305,7 +344,7 @@ def refresh_token(
     refresh_key = _rate_limit_key_refresh(client_ip)
     if limiter.is_rate_limited(
         refresh_key,
-        settings.refresh_rate_limit_max_attempts,
+        settings.refresh_rate_limit_requests,
         settings.refresh_rate_limit_window_seconds,
     ):
         raise HTTPException(
@@ -314,25 +353,63 @@ def refresh_token(
             headers={"Retry-After": str(settings.refresh_rate_limit_window_seconds)},
         )
 
-    # rotate_refresh_token validates, revokes old, creates new session,
-    # and returns (new_raw_token, user_id). Raises HTTPException(401)
-    # on any failure (invalid, expired, revoked, or reuse detected).
-    new_raw_token, user_id = rotate_refresh_token(
-        db, payload.refresh_token, device_info=f"ip:{client_ip}",
-    )
+    # Read the refresh token from the HttpOnly cookie only.
+    raw_token = get_refresh_token(request)
+    if not raw_token:
+        # No refresh cookie present → return a JSONResponse with both cookies
+        # cleared (consistent with the error path below). Clearing on the
+        # injected `response` param would be silently discarded by FastAPI
+        # when an exception is raised, so we return the response explicitly.
+        error_response = JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Invalid refresh token"},
+        )
+        clear_refresh_cookie(error_response)
+        clear_csrf_cookie(error_response)
+        return error_response
 
-    # Issue a new access token for the correct user
+    try:
+        # rotate_refresh_token validates, revokes old, creates new session,
+        # and returns (new_raw_token, user_id). Raises HTTPException(401)
+        # on any failure (invalid, expired, revoked, or reuse detected).
+        new_raw_token, user_id = rotate_refresh_token(
+            db, raw_token, device_info=f"ip:{client_ip}",
+        )
+    except HTTPException as exc:
+        # Invalid / expired / revoked / reuse-detected → clear the cookies
+        # so the browser does not keep sending a dead token.
+        #
+        # NOTE: FastAPI discards cookies set on the injected `response` param
+        # when an exception is raised (the exception handler builds a fresh
+        # response object). We therefore return the error response explicitly
+        # with the cleared cookies attached to it.
+        error_response = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+        clear_refresh_cookie(error_response)
+        clear_csrf_cookie(error_response)
+        return error_response
+
+    # Issue a new access token for the correct user, re-bound to the (stable)
+    # refresh family — `rotate_refresh_token` preserves `family_id` across
+    # rotation, so the `sid` claim is continuous for the life of the login.
+    family_id = family_id_for_raw_token(db, new_raw_token)
     access_token = create_access_token(
-        data={"sub": str(user_id)},
+        data={"sub": str(user_id), "sid": family_id},
         expires_delta=timedelta(minutes=settings.jwt_access_expiry_minutes),
     )
 
     cleanup_expired_sessions(db)
 
+    # Rotate both cookies: new refresh token + fresh CSRF token.
+    set_refresh_cookie(response, new_raw_token)
+    set_csrf_cookie(response)
+
     logger.debug("Token refreshed: user_id=%d", user_id)
     return RefreshResponse(
         access_token=access_token,
-        refresh_token=new_raw_token,
+        token_type="bearer",
     )
 
 
@@ -341,17 +418,25 @@ def refresh_token(
 
 @router.post("/logout", response_model=LogoutResponse)
 def logout_user(
-    payload: RefreshRequest,
+    request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Revoke the current refresh session (logout from this device).
 
-    Requires the refresh token in the request body and a valid
-    access token in the Authorization header.
+    The refresh token is read from the HttpOnly cookie (never the body).
+    Clears both the refresh and CSRF cookies.
+    Requires a valid access token in the Authorization header.
+    CSRF-protected via double-submit (require_csrf).
     """
-    revoke_refresh_session(db, current_user, payload.refresh_token)
+    raw_token = get_refresh_token(request)
+    if raw_token:
+        revoke_refresh_session(db, current_user, raw_token)
+    clear_refresh_cookie(response)
+    clear_csrf_cookie(response)
     logger.info("User logged out: id=%d username=%s", current_user.id, current_user.username)
     return LogoutResponse(detail="Logged out successfully")
 
@@ -361,14 +446,19 @@ def logout_user(
 
 @router.post("/logout-all", response_model=LogoutResponse)
 def logout_all(
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Revoke ALL refresh sessions for the current user
-    (logout from all devices).
+    (logout from all devices). Clears both cookies.
+    CSRF-protected via double-submit (require_csrf).
     """
     count = revoke_all_user_sessions(db, current_user)
+    clear_refresh_cookie(response)
+    clear_csrf_cookie(response)
     logger.info("User logged out from all devices: id=%d username=%s sessions=%d",
                 current_user.id, current_user.username, count)
     return LogoutResponse(detail=f"Logged out from {count} device(s)")
@@ -388,33 +478,41 @@ def list_sessions(
 
     Returns safe metadata only (no token hashes, no raw tokens).
     The current session is identified by `is_current` flag.
-    """
-    # Extract refresh token from Authorization header if present
-    # (the access token is used for auth; the refresh token is in the body
-    # for logout, but we can optionally accept it as a query param or header)
-    raw_token = None
 
-    sessions = get_user_sessions(db, current_user, current_raw_token=raw_token)
+    Phase 7C: the current session is identified using the HttpOnly refresh
+    cookie on the backend (no X-Refresh-Token header required). The raw
+    token is hashed internally and matched against stored token_hash values
+    with a constant-time comparison. If the cookie is missing, invalid,
+    expired, or revoked, all sessions return is_current=False. Refresh
+    tokens are never accepted via query params or headers.
+    """
+    raw_token = get_refresh_token(request)
+
+    sessions = get_user_sessions(db, current_user)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     active_count = sum(
         1 for s in sessions
         if s.revoked_at is None and s.expires_at > now
     )
 
-    # Accurate current-session identification requires a safe session
-    # identifier design (e.g., a short session ID stored alongside the
-    # refresh token). For now, we do not guess which session is current
-    # to avoid misleading the client. All sessions get is_current=False.
     session_infos = []
     for s in sessions:
+        # Mark current only for the exact matching token AND an active
+        # (non-revoked, non-expired) session. Constant-time hash comparison
+        # is performed inside is_current_session().
+        is_current = (
+            is_current_session(s, raw_token)
+            and s.revoked_at is None
+            and s.expires_at > now
+        )
         session_infos.append(SessionInfo(
             id=s.id,
             created_at=s.created_at,
-            last_used_at=s.created_at,  # Proxy: uses created_at until per-refresh tracking is added
+            last_used_at=s.last_used_at or s.created_at,
             expires_at=s.expires_at,
             revoked_at=s.revoked_at,
             device_info=s.device_info,
-            is_current=False,
+            is_current=is_current,
         ))
 
     return SessionsListResponse(
@@ -432,12 +530,14 @@ def revoke_session(
     session_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Revoke a specific refresh session by ID.
 
     Only the session owner can revoke their own sessions.
     Returns 404 if the session is not found or does not belong to the user.
+    CSRF-protected via double-submit (require_csrf).
     """
     revoked = revoke_session_by_id(db, current_user, session_id)
     if not revoked:

@@ -50,9 +50,9 @@ describe("AuthScreen", () => {
     expect(screen.getByPlaceholderText("your password")).toBeTruthy();
   });
 
-  it("renders the AI Research Assistant title", async () => {
+  it("renders the Thunder AI title", async () => {
     await renderAuthScreen();
-    expect(screen.getByText("AI Research Assistant")).toBeTruthy();
+    expect(screen.getByText("Thunder AI")).toBeTruthy();
   });
 
   it("shows switch to register link", async () => {
@@ -180,8 +180,21 @@ describe("AuthScreen", () => {
   // ── Loading state ─────────────────────────────────────
 
   it("shows loading state during submission", async () => {
-    // Mock restoreSession (returns null immediately since no token)
-    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    // Phase 7C: restoreSession() always calls /api/auth/refresh on mount.
+    // Resolve that quickly (401 -> no session -> form renders), but make the
+    // login POST hang so the submit button stays in its loading state.
+    vi.spyOn(globalThis, "fetch").mockImplementation((url: string | URL | Request) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/api/auth/refresh")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "Invalid refresh token" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          })
+        );
+      }
+      return new Promise(() => {});
+    });
 
     await renderAuthScreen();
     fireEvent.change(screen.getByPlaceholderText("your username"), { target: { value: "testuser" } });

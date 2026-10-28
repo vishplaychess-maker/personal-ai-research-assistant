@@ -87,6 +87,8 @@ describe("ChatArea", () => {
     onSend: vi.fn(),
     onKeyDown: vi.fn(),
     inputRef: { current: null } as React.RefObject<HTMLTextAreaElement>,
+    chatMode: "auto" as const,
+    onChatModeChange: vi.fn(),
     isStreaming: false,
     streamedContent: "",
     generationStopped: false,
@@ -113,12 +115,19 @@ describe("ChatArea", () => {
 
   it("shows empty state when no session is selected", () => {
     render(<ChatArea {...baseProps} activeSession={null} />);
-    expect(screen.getByText("Select or create a session")).toBeTruthy();
+    // Current copy (unchanged by MP-3C3D3B): a two-line heading + subtext,
+    // not the single stale string this assertion used to check for.
+    expect(screen.getByText("Start a conversation with Thunder AI")).toBeTruthy();
+    expect(
+      screen.getByText("Select a session from the sidebar or create a new one to begin."),
+    ).toBeTruthy();
   });
 
   it("shows start conversation prompt when session is selected but no messages", () => {
     render(<ChatArea {...baseProps} messages={[]} />);
-    expect(screen.getByText("Start a conversation")).toBeTruthy();
+    // Current copy (unchanged by MP-3C3D3B) for the centered, session-selected
+    // empty-composer state.
+    expect(screen.getByText("Ask Thunder AI anything")).toBeTruthy();
   });
 
   // ── Chat Header ────────────────────────────────────────
@@ -130,7 +139,8 @@ describe("ChatArea", () => {
 
   it("shows message count", () => {
     render(<ChatArea {...baseProps} />);
-    expect(screen.getByText("2 msgs")).toBeTruthy();
+    // Current copy (unchanged by MP-3C3D3B) pluralizes the full word.
+    expect(screen.getByText("2 messages")).toBeTruthy();
   });
 
   it("renders the system prompt button", () => {
@@ -147,7 +157,11 @@ describe("ChatArea", () => {
 
   it("renders memory status", () => {
     render(<ChatArea {...baseProps} />);
-    expect(screen.getByText("🧠 On")).toBeTruthy();
+    // The "Memory Controls - Minimal" redesign (unrelated to MP-3C3D3B)
+    // replaced a visible "On"/"Off" text label with an icon-only toggle
+    // whose accessible title reflects the current state; with
+    // `memoryEnabled: true` in baseProps the affordance is "Disable memory".
+    expect(screen.getByTitle("Disable memory")).toBeTruthy();
   });
 
   // ── Messages ───────────────────────────────────────────
@@ -164,12 +178,16 @@ describe("ChatArea", () => {
 
   it("shows RAG badge for messages with sources", () => {
     render(<ChatArea {...baseProps} sourcesUsedIds={new Set([2])} />);
-    expect(screen.getByText("📄 RAG")).toBeTruthy();
+    // Badge is an icon + plain "RAG" text node (no emoji) — unchanged by
+    // MP-3C3D3B.
+    expect(screen.getByText("RAG")).toBeTruthy();
   });
 
   it("shows Memory badge for messages with memories used", () => {
     render(<ChatArea {...baseProps} memoriesUsedIds={new Set([2])} />);
-    expect(screen.getByText("🧠 Memory")).toBeTruthy();
+    // Badge is an icon + plain "Memory" text node (no emoji) — unchanged by
+    // MP-3C3D3B.
+    expect(screen.getByText("Memory")).toBeTruthy();
   });
 
   it("renders citation markers as clickable buttons", () => {
@@ -206,8 +224,12 @@ describe("ChatArea", () => {
   // ── Streaming ──────────────────────────────────────────
 
   it("shows streaming indicator when isStreaming is true", () => {
-    render(<ChatArea {...baseProps} isStreaming={true} streamedContent="Generating…" />);
-    expect(screen.getByText("⏳ Generating…")).toBeTruthy();
+    // Use content distinct from the fixed "Generating…" caption below the
+    // streamed text — both would otherwise share the exact same text node
+    // content and make an exact-text query ambiguous.
+    render(<ChatArea {...baseProps} isStreaming={true} streamedContent="Hello there" />);
+    expect(screen.getByText("Hello there")).toBeTruthy();
+    expect(screen.getByText("Generating…")).toBeTruthy();
   });
 
   it("shows stop button during streaming", () => {
@@ -243,7 +265,10 @@ describe("ChatArea", () => {
         retryTarget={{ message: "Hello", errorDetail: "Ollama unavailable" }}
       />
     );
-    expect(screen.getByText("🔄 Retry")).toBeTruthy();
+    // Retry button is an icon + plain "Retry" text node (no emoji) — query
+    // by accessible role/name rather than exact text, unchanged by
+    // MP-3C3D3B.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("calls onRetry when retry button is clicked", () => {
@@ -256,7 +281,7 @@ describe("ChatArea", () => {
         onRetry={onRetry}
       />
     );
-    fireEvent.click(screen.getByText("🔄 Retry"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
 

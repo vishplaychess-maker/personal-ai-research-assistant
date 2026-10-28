@@ -1,0 +1,99 @@
+# MP-4C ISOLATION OVERLAY - disposable browser-verification stack ONLY.
+#
+# This file is NEVER used by the normal `docker compose up`. It exists so the
+# MP-4C browser journeys can run on a THROWAWAY stack that shares NOTHING with the
+# existing `personal-ai-research-assistant` project. It must always be invoked
+# with an explicit project name AND a disposable env file:
+#
+#   docker compose --env-file secrets/mp4c_uitest.env -p mp4c-uitest \
+#     -f docker-compose.yml -f docker-compose.isolation.yml config
+#   docker compose --env-file secrets/mp4c_uitest.env -p mp4c-uitest \
+#     -f docker-compose.yml -f docker-compose.isolation.yml up -d --build
+#
+# Isolation guarantees this overlay provides (each one is verified by rendering
+# the merged configuration before anything is started):
+#   * DISTINCT container names (the base file fixes research-assistant-* names;
+#     `-p` alone would still collide with them).
+#   * UNUSED localhost ports (18080 / 15173, never 8080 / 5173). `!override` is
+#     required because compose CONCATENATES `ports` across files.
+#   * SEPARATE, explicitly named volumes - never the existing project volumes.
+#   * A SEPARATE grant-key file (secrets/executor_grant_key.mp4c_uitest).
+#   * A DISPOSABLE encryption key, JWT secret and idempotency HMAC key, supplied
+#     through secrets/mp4c_uitest.env; the real .env is never read.
+#   * A UNIQUE executor owner label, so the executor startup sweep can only
+#     match containers carrying THAT label (none exist).
+#   * NO frontend host bind mount: the image is built from the working tree, so
+#     the container shares no host source directory (only its own named
+#     node_modules volume, which is writable and project-local).
+#
+# It also enables the durable stream path. `run_messages_stream_durable_enabled`
+# is required for the browser to create a python proposal at all, and is enabled
+# ONLY here, never in the base file.
+
+services:
+  chromadb:
+    container_name: mp4c-uitest-chromadb
+    volumes: !override
+      - chromadb_data:/chroma/chroma
+
+  backend:
+    # Explicitly disposable image names for EVERY built service, so a build can
+    # never retag a shared image (the base file pins the executor to the shared
+    # `thunder-executor:mp4c`, which an earlier run clobbered).
+    image: mp4c-uitest-backend:latest
+    container_name: mp4c-uitest-backend
+    ports: !override
+      - "127.0.0.1:18080:8080"
+    volumes: !override
+      - app_data:/data
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?disposable ENCRYPTION_KEY required}
+      - JWT_SECRET=${JWT_SECRET:?disposable JWT_SECRET required}
+      - RUN_IDEMPOTENCY_HMAC_KEY=${RUN_IDEMPOTENCY_HMAC_KEY:?disposable RUN_IDEMPOTENCY_HMAC_KEY required}
+      - RUN_ENGINE_ENABLED=true
+      - RUN_WORKER_ENABLED=true
+      - RUN_MESSAGES_STREAM_DURABLE_ENABLED=true
+      - RUN_CHAT_STREAM_ENABLED=true
+      - RUN_PUBLIC_API_ENABLED=true
+      - RUN_ENGINE_SANDBOX=true
+      - EXECUTOR_SERVICE_URL=http://executor:8091
+      # OFF unless the operator exports MP4C_UITEST_OPT_IN=1 in THIS shell.
+      - EXECUTOR_OPERATOR_OPT_IN=${MP4C_UITEST_OPT_IN:-}
+
+  executor:
+    # A FIXED image tag would be shared with the real stack (the base file pins
+    # `image: thunder-executor:mp4c`), so the disposable build gets its own name
+    # and can never clobber the shared tag.
+    image: mp4c-uitest-executor:latest
+    container_name: mp4c-uitest-executor
+    volumes: !override
+      - /var/run/docker.sock:/var/run/docker.sock
+      - executor_nonce_data:/var/lib/executor
+    environment:
+      - EXECUTOR_SERVICE_GRANT_KEY_FILE=/run/secrets/executor_grant_key
+      - EXECUTOR_SERVICE_NONCE_DB=/var/lib/executor/nonces.db
+      - EXECUTOR_SERVICE_OWNER=mp4c-uitest-executor
+      - EXECUTOR_SERVICE_HOST=0.0.0.0
+      - EXECUTOR_SERVICE_ALLOW_INTERNAL_BIND=1
+
+  frontend:
+    image: mp4c-uitest-frontend:latest
+    container_name: mp4c-uitest-frontend
+    ports: !override
+      - "127.0.0.1:15173:5173"
+    volumes: !override
+      - frontend_node_modules:/app/node_modules
+
+volumes:
+  app_data:
+    name: mp4cuitest_app_data
+  chromadb_data:
+    name: mp4cuitest_chromadb_data
+  executor_nonce_data:
+    name: mp4cuitest_executor_nonce_data
+  frontend_node_modules:
+    name: mp4cuitest_frontend_node_modules
+
+secrets:
+  executor_grant_key:
+    file: ./secrets/executor_grant_key.mp4c_uitest

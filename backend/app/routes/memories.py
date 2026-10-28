@@ -24,6 +24,7 @@ from app.database import get_db
 from app.models.models import Memory, User
 from app.schemas.memories import MemoryCreate, MemoryUpdate, MemoryResponse
 from app.services.auth_service import get_optional_user
+from app.services.cookie_service import require_csrf
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
@@ -71,6 +72,7 @@ def create_memory(
     payload: MemoryCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_optional_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Create a new memory manually.
@@ -112,6 +114,7 @@ def update_memory(
     payload: MemoryUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_optional_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """Edit a memory's content and/or category (scoped to current user)."""
     memory = _get_memory_or_404(db, memory_id)
@@ -146,6 +149,7 @@ def delete_memory(
     memory_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_optional_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """Delete a single memory by ID (scoped to current user)."""
     memory = _get_memory_or_404(db, memory_id)
@@ -161,6 +165,7 @@ def clear_all_memories(
     payload: ClearMemoriesRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_optional_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Delete ALL memories for the current user.

@@ -4,7 +4,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+
+from app.database import SessionLocal
+from app.services.auth_service import bearer_scheme
 
 from app.database import get_db
 from app.models.models import Message, ResearchSession, MessageRole, User
@@ -13,9 +17,12 @@ from app.schemas.documents import (
     ChatRequest,
     ChatResponse,
     MemoryExtractionStatus,
+    TerminalApprovalResponse,
 )
 from app.services.langgraph_workflow import run_research_workflow
-from app.services.auth_service import get_optional_user
+from app.run_engine.context import AuthContext, get_auth_context
+from app.services.auth_service import get_current_user
+from app.services.cookie_service import require_csrf
 from app.services.streaming_service import (
     prepare_chat_context,
     stream_chat_response,
@@ -23,6 +30,7 @@ from app.services.streaming_service import (
     run_memory_extraction,
     format_sse,
 )
+from app.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +47,112 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchS
     return session
 
 
+# ── Approval parking helpers ──────────────────────────────
+
+
+def _active_canonical_run(db: Session, session_id: int, user_id: int):
+    # The session run parked on a CANONICAL PendingApproval, if any.
+    from app.models.models import Run
+    from app.run_engine.state_machine import WAITING_FOR_APPROVAL
+
+    return (db.query(Run)
+            .filter(Run.session_id == session_id, Run.user_id == user_id,
+                    Run.status == WAITING_FOR_APPROVAL)
+            .order_by(Run.created_at.desc()).first())
+
+
+def _parked_response(session_id: int, *,
+                     approval_id: Optional[str] = None):
+    # Bounded actionable parked response. Starts NO run and writes NO marker.
+    # Reuses the response model an already-open or older client understands,
+    # plus the ONE canonical approval id.
+    text = ("An approval is waiting for your decision. Decide it in the "
+            "approvals panel (or POST /api/approvals/<id>/approve|deny). "
+            "No new request was started.")
+    return TerminalApprovalResponse(pending_command="", approval_message=text,
+                                    session_id=session_id,
+                                    approval_id=approval_id)
+
+
+def _nonstream_key(db: Session, session_id: int, message: str) -> str:
+    # Deterministic per-turn idempotency key: the same client message on the same
+    # session state replays the SAME Run.
+    import hashlib
+
+    from app.models.models import Message
+
+    last_id = 0
+    row = (db.query(Message).filter(Message.session_id == session_id)
+           .order_by(Message.id.desc()).first())
+    if row is not None:
+        last_id = row.id
+    digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:24]
+    return "ns:%d:%d:%s" % (session_id, last_id, digest)
+
+
+def _engine_cutover_gate(db: Session, session, *, payload, current_user, ctx,
+                         idempotency_key: Optional[str] = None):
+    # Authority gate for the REVERSIBLE canonical cutover. Returns the response
+    # the canonical side owns. The legacy citations-marker approval encoding has
+    # been RETIRED, so there is no longer a legacy decision to drain.
+    from app.config import settings as _settings
+    from app.run_engine import nonstream as _ns
+
+    outcome = _ns.execute_chat_sync(
+        db, ctx, session=session, message=payload.message,
+        idempotency_key=(idempotency_key
+                         or _nonstream_key(db, session.id, payload.message)),
+        wait_deadline_s=float(_settings.messages_nonstream_wait_deadline_s))
+
+    if outcome.status == _ns.SUCCEEDED:
+        assistant = db.query(Message).filter(
+            Message.id == outcome.assistant_message_id).first()
+        if assistant is None:
+            raise HTTPException(status_code=500,
+                                detail="Canonical run produced no assistant message")
+        user_msg = (db.query(Message)
+                    .filter(Message.session_id == session.id,
+                            Message.role == MessageRole.user)
+                    .order_by(Message.id.desc()).first())
+        citations = []
+        try:
+            parsed = json.loads(assistant.citations) if assistant.citations else []
+            if isinstance(parsed, list):
+                citations = parsed
+        except (json.JSONDecodeError, TypeError):
+            citations = []
+        session.updated_at = __import__("datetime").datetime.utcnow()
+        db.commit()
+        return ChatResponse(
+            user_message=MessageResponse.model_validate(user_msg),
+            assistant_message=MessageResponse.model_validate(assistant),
+            citations=citations, sources_used=bool(citations),
+            memories_used=False, memory_extraction=None)
+
+    if outcome.status == _ns.PENDING_APPROVAL:
+        return _parked_response(session.id, approval_id=outcome.approval_id)
+
+    if outcome.status == _ns.PENDING:
+        raise HTTPException(
+            status_code=504,
+            detail="The run is still in progress; no answer was produced "
+                   "(run %s)." % (outcome.run_id or "-"))
+
+    if outcome.status == _ns.CANCELLED:
+        raise HTTPException(status_code=409, detail="The run was cancelled.")
+
+    if outcome.status == _ns.DENIED:
+        raise HTTPException(status_code=403,
+                            detail="The run was denied by approval.")
+
+    raise HTTPException(
+        status_code=502,
+        detail="The run did not succeed (%s)." % (outcome.reason or outcome.status))
+
+
+# ── List messages ─────────────────────────────────────────
+
+
 @router.get(
     "/api/sessions/{session_id}/messages",
     response_model=List[MessageResponse],
@@ -46,7 +160,7 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ResearchS
 def list_messages(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get all messages for a session, oldest first (scoped to current user)."""
     _get_session_or_404(db, session_id, current_user.id)
@@ -59,73 +173,99 @@ def list_messages(
     return [MessageResponse.model_validate(m) for m in messages]
 
 
+# ── Create message (non-streaming) ───────────────────────
+
+
 @router.post(
     "/api/sessions/{session_id}/messages",
-    response_model=ChatResponse,
 )
 def create_message(
     session_id: int,
     payload: ChatRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    ctx: AuthContext = Depends(get_auth_context),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Send a user message and get an AI response via the LangGraph workflow.
 
-    1. Saves the user message
-    2. Runs the research workflow (load_context → retrieve_context → generate_answer → save_output)
-    3. Returns both messages with citations if documents were used
-
-    This is the non-streaming endpoint, kept for backward compatibility.
-    For streaming responses, use POST /api/sessions/{id}/messages/stream.
+    Approvals are owned by the canonical path (Persisted PendingApproval rows
+    + the approvals API): this endpoint decides no approval itself, and the
+    legacy citations-marker approval encoding has been RETIRED.
     """
     session = _get_session_or_404(db, session_id, current_user.id)
 
-    # 1. Save user message
+    # Authority invariant, FLAG-INDEPENDENT: a session with an unresolved
+    # CANONICAL PendingApproval must not start another Run - not even through
+    # the legacy path, which could create a second pending approval of a
+    # different kind. This is why the check is NOT inside the flag branch.
+    parked = _active_canonical_run(db, session.id, current_user.id)
+    if parked is not None:
+        return _parked_response(session.id,
+                                approval_id=parked.pending_approval_id)
+
+    from app.config import settings as _settings
+
+    if _settings.messages_nonstream_engine_enabled:
+        gated = _engine_cutover_gate(
+            db, session, payload=payload, current_user=current_user, ctx=ctx,
+            idempotency_key=request.headers.get("Idempotency-Key"))
+        if gated is not None:
+            return gated
+
+    # ── Normal message flow ───────────────────────────────
     user_msg = Message(
         session_id=session.id,
         role=MessageRole.user,
         content=payload.message,
+        image_url=payload.image_url,
     )
     db.add(user_msg)
     db.commit()
     db.refresh(user_msg)
 
-    # 2. Run the LangGraph workflow
     result = run_research_workflow(
         session_id=session.id,
         user_input=payload.message,
         db=db,
+        user_id=current_user.id,
+        image_url=payload.image_url,
     )
 
+    # ── Handle errors ─────────────────────────────────────
     if result.get("error"):
-        # If Ollama is unavailable, save a friendly error message
         assistant_msg = Message(
             session_id=session.id,
             role=MessageRole.assistant,
-            content=f"⚠️ {result['error']}",
+            content=f"\u26a0\ufe0f {result['error']}",
         )
         db.add(assistant_msg)
         db.commit()
         db.refresh(assistant_msg)
     else:
-        # Assistant message was saved inside the workflow. The workflow
-        # returns the message ID to avoid ORM session-detach issues
-        # caused by subsequent db.commit() calls in the extract_memory node.
         assistant_msg_id = result.get("assistant_message_id")
         if assistant_msg_id is None:
-            raise HTTPException(status_code=500, detail="Workflow did not produce an assistant message")
-        assistant_msg = db.query(Message).filter(Message.id == assistant_msg_id).first()
+            raise HTTPException(
+                status_code=500,
+                detail="Workflow did not produce an assistant message",
+            )
+        assistant_msg = db.query(Message).filter(
+            Message.id == assistant_msg_id
+        ).first()
         if assistant_msg is None:
-            raise HTTPException(status_code=500, detail=f"Assistant message {assistant_msg_id} not found after workflow")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Assistant message {assistant_msg_id} not found after workflow",
+            )
 
-    # Refresh the session object (may have been expired by workflow commits)
-    # before updating its timestamp, then commit.
+    # Refresh session timestamp
     db.refresh(session)
     session.updated_at = __import__("datetime").datetime.utcnow()
     db.commit()
 
-    # Build extraction status if the workflow ran memory extraction
+    # Build extraction status
     extract_raw = result.get("extraction_result")
     extraction_status: Optional[MemoryExtractionStatus] = None
     if extract_raw is not None:
@@ -159,7 +299,9 @@ async def stream_chat(
     payload: ChatRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
+    _bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     """
     Send a user message and stream the AI response token-by-token via SSE.
@@ -167,18 +309,42 @@ async def stream_chat(
     This endpoint uses Server-Sent Events to deliver tokens as they are
     generated by Ollama. The event stream has this sequence:
 
-      1. ``event: start`` — Stream begins, includes session metadata
-      2. ``event: token`` — Zero or more token events (one per generated token)
-      3. ``event: complete`` — Stream finished successfully; assistant message saved
-         OR ``event: error`` — A non-recoverable error occurred
-         OR ``event: cancelled`` — Client disconnected before completion
+      1. ``event: start`` -- Stream begins, includes session metadata
+      2. ``event: token`` -- Zero or more token events (one per generated token)
+      3. ``event: complete`` -- Stream finished successfully; assistant message saved
+         OR ``event: error`` -- A non-recoverable error occurred
+         OR ``event: cancelled`` -- Client disconnected before completion
 
     The non-streaming POST /api/sessions/{id}/messages endpoint remains
     available for backward compatibility.
 
     Memory extraction runs as a background step after the stream completes.
     On cancellation, partial responses are NOT saved to the database.
+
+    Phase 1B.2R MP-3C3B: when ``run_messages_stream_durable_enabled`` is on, this
+    route instead submits/reuses a durable ``chat_stream`` run and streams its
+    persisted events adapted into the exact wire format below. When the flag is
+    off (default) the code below is the unchanged legacy path.
     """
+    # Phase 1B.2R MP-3C3D3A — validate/canonicalize the request-level mode
+    # ONCE, before either branch, so an invalid mode fails identically (422,
+    # before any persistence) regardless of the durable cutover flag. The
+    # ONE authoritative allowlist/normalization lives in
+    # app.run_engine.submission.validate_request_mode — reused here, not
+    # duplicated. Omitted (None) is intentionally distinct from explicit
+    # "chat" (see that function's docstring).
+    from app.run_engine.submission import validate_request_mode
+    try:
+        resolved_mode = validate_request_mode(payload.mode)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Unrecognized request mode.")
+
+    if settings.run_messages_stream_durable_enabled:
+        return await _stream_chat_durable(
+            session_id, payload, request, db, current_user, _bearer,
+            resolved_mode=resolved_mode,
+        )
+
     # Validate session ID format
     if session_id <= 0:
         raise HTTPException(status_code=422, detail="Invalid session ID")
@@ -190,6 +356,17 @@ async def stream_chat(
             detail="Message exceeds maximum length of 10,000 characters",
         )
 
+    # Phase 1B.2R MP-3C3D3A — legacy capability gate: an explicitly requested
+    # mode this deployment has not enabled must fail BEFORE persistence.
+    # prepare_chat_context() below saves the user Message immediately (its
+    # own step 2), so this check must run first, never inside it.
+    if resolved_mode == "deep_research" and not settings.enable_deep_research:
+        raise HTTPException(status_code=422,
+                            detail="deep_research mode is not enabled on this deployment.")
+    if resolved_mode == "multi_agent" and not settings.enable_multi_agent:
+        raise HTTPException(status_code=422,
+                            detail="multi_agent mode is not enabled on this deployment.")
+
     # Synchronous setup: validate session, save user message, prepare context
     try:
         context = prepare_chat_context(
@@ -197,9 +374,14 @@ async def stream_chat(
             user_input=payload.message,
             db=db,
             user_id=current_user.id,
+            image_url=payload.image_url,
+            mode=resolved_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+    # Capture user_id before async generator to avoid DetachedInstanceError
+    user_id = current_user.id
 
     async def event_generator():
         """Async generator producing SSE events for the streaming response."""
@@ -220,13 +402,57 @@ async def stream_chat(
                 # Intercept complete events to save the message
                 if sse_event.startswith("event: complete"):
                     # Parse the complete event data to get the content
-                    # The format is "event: complete\ndata: {...}\n\n"
                     lines = sse_event.strip().split("\n")
+                    confidence = None
+                    confidence_reason = None
                     for line in lines:
                         if line.startswith("data: "):
                             data = json.loads(line[6:])
                             full_response_content = data.get("content", "")
+                            confidence = data.get("confidence")
+                            confidence_reason = data.get("confidence_reason")
                             break
+
+                    # save_memory tool: persist [SAVE_MEMORY: ...] markers the
+                    # LLM emitted during streaming (strip them from saved text).
+                    from app.tools.memory_tool import (
+                        process_memory_markers,
+                        process_use_memory_markers,
+                    )
+                    cleaned_content, saved_count = process_memory_markers(
+                        full_response_content, db, user_id, session_id
+                    )
+                    if saved_count:
+                        logger.info(
+                            "save_memory tool saved %d memory(ies) for user %s",
+                            saved_count, current_user.id,
+                        )
+                    full_response_content = cleaned_content
+
+                    # use_memory tool (Phase 4): resolve [USE_MEMORY: <query>]
+                    # recall markers (inject memories inline, strip markers).
+                    cleaned_content, used_count = process_use_memory_markers(
+                        full_response_content, db, user_id, session_id
+                    )
+                    if used_count:
+                        logger.info(
+                            "use_memory tool resolved %d marker(s) for user %s",
+                            used_count, current_user.id,
+                        )
+                    full_response_content = cleaned_content
+
+                    # save_directive tool (F6 Cap 3): persist [SAVE_DIRECTIVE: ...]
+                    # markers the LLM emitted during streaming (strip them too).
+                    from app.tools.directive_tool import process_directive_markers
+                    cleaned_content, saved_directives = process_directive_markers(
+                        full_response_content, db, user_id
+                    )
+                    if saved_directives:
+                        logger.info(
+                            "save_directive tool saved %d directive(s) for user %s",
+                            saved_directives, current_user.id,
+                        )
+                    full_response_content = cleaned_content
 
                     # Save assistant message to database
                     try:
@@ -235,6 +461,8 @@ async def stream_chat(
                             content=full_response_content,
                             citations=context.citations,
                             db=db,
+                            confidence=confidence,
+                            confidence_reason=confidence_reason,
                         )
                         save_message_id = assistant_msg.id
                     except Exception as exc:
@@ -259,6 +487,7 @@ async def stream_chat(
                             user_input=payload.message,
                             db=db,
                             session_id=session_id,
+                            user_id=user_id,
                         )
                     except Exception as exc:
                         logger.warning("Background memory extraction failed: %s", exc)
@@ -284,4 +513,112 @@ async def stream_chat(
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+_LEGACY_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+
+async def _stream_chat_durable(
+    session_id: int,
+    payload: "ChatRequest",
+    request: Request,
+    db: Session,
+    current_user: User,
+    bearer: Optional[HTTPAuthorizationCredentials],
+    *,
+    resolved_mode: Optional[str] = None,
+) -> StreamingResponse:
+    """Phase 1B.2R MP-3C3B durable cutover. Fails closed BEFORE any persistence
+    unless every dependency is satisfied; submits (or idempotently reuses) a
+    durable ``chat_stream`` run — NO executor is called here — and streams its
+    persisted events in the legacy wire format. Reached only when the cutover
+    flag is on.
+
+    ``resolved_mode`` (MP-3C3D3A) is the caller's already-validated request
+    mode — ``None`` when omitted (resolves to ``DURABLE_STREAM_MODE``, i.e.
+    "chat", preserving MP-3C3D1 behavior exactly), or one of the canonical
+    mode strings. ``deep_research``/``multi_agent`` are recognized but not
+    yet executable durably and are rejected below, before any persistence."""
+    from app.run_engine import messages_stream as _ms
+    from app.run_engine.context import build_auth_context
+    from app.services.auth_service import decode_access_token
+
+    supervisor = getattr(request.app.state, "run_worker_supervisor", None)
+    try:
+        _ms.assert_durable_stream_ready(supervisor)
+    except _ms.DurableStreamError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
+
+    if session_id <= 0:
+        raise HTTPException(status_code=422, detail="Invalid session ID")
+    if len(payload.message) > 10000:
+        raise HTTPException(status_code=422,
+                            detail="Message exceeds maximum length of 10,000 characters")
+
+    reason = _ms.unsupported_mode_code(
+        has_image=payload.image_url is not None,
+        mode=(resolved_mode or _ms.DURABLE_STREAM_MODE),
+    )
+    if reason is not None:
+        logger.info("durable /messages/stream refused unsupported mode: %s", reason)
+        raise HTTPException(
+            status_code=422,
+            detail="Durable streaming currently supports plain chat and "
+                   "tool-approval conversations only.",
+        )
+
+    idem = request.headers.get("idempotency-key")
+    if not _ms.valid_idempotency_key(idem):
+        raise HTTPException(status_code=422,
+                            detail="A valid Idempotency-Key header is required.")
+
+    if bearer is None:
+        raise HTTPException(status_code=401,
+                            detail="A bearer access token is required for durable streaming.")
+    try:
+        claims = decode_access_token(bearer.credentials)
+        ctx = build_auth_context(db, user=current_user, token_payload=claims)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid access token.")
+
+    if _ms.submit_rate_limited(current_user.id):
+        raise HTTPException(status_code=429,
+                            detail="Too many durable stream submissions; please slow down.")
+
+    try:
+        run, _created = _ms.resolve_and_submit(
+            db, ctx, session_id=session_id, message=payload.message,
+            idempotency_key=idem, mode=resolved_mode,
+        )
+    except _ms.DurableStreamError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
+
+    uid = current_user.id
+    if not _ms.acquire_stream_slot(uid):
+        raise HTTPException(status_code=429,
+                            detail="Too many concurrent durable streams for this account.")
+
+    cursor = _ms.parse_cursor(request.headers.get("last-event-id"),
+                              request.query_params.get("after_seq"))
+
+    async def _durable_gen():
+        try:
+            async for frame in _ms.stream_legacy_wire(
+                request, SessionLocal, ctx, run.id, after_seq=cursor,
+            ):
+                yield frame
+        finally:
+            _ms.release_stream_slot(uid)
+
+    return StreamingResponse(
+        _durable_gen(),
+        media_type="text/event-stream",
+        headers={**_LEGACY_SSE_HEADERS, "X-Run-Id": run.id},
     )

@@ -1,0 +1,94 @@
+name: evals
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}   # Gate C (live) is manual-only
+
+jobs:
+  # ── Gate A — harness integrity (hermetic; runs on every change) ──────────
+  gate-a-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Harness deps only — NO backend deps. Pins mirror backend/requirements.txt.
+      - run: pip install "pydantic==2.9.0" "httpx==0.27.2" "pytest==9.1.1"
+      - name: Runner unit + integrity tests (no network, no backend)
+        run: python -m pytest tests/test_evals_runner.py -q
+      - name: Offline baseline (synthetic regression + harness only)
+        run: python -m evals.runner --offline
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report-offline
+          path: evals/report.json
+
+  # ── Gate B — product integration (real backend code, side effects mocked at
+  #    the boundary; runs on every change) ─────────────────────────────────
+  gate-b-product:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r backend/requirements.txt
+      - name: Approval-domain + gateway + API + migration tests (Phase 1B.1/1B.2 — the --inprocess runner exercises app.approval)
+        run: PYTHONPATH=backend python -m pytest tests/test_approval_domain.py tests/test_approval_gateway.py tests/test_approvals_api.py tests/test_approval_migrations.py -q
+      - name: Gate B integrity tests (boundary mocks prove no execution)
+        run: PYTHONPATH=backend python -m pytest tests/test_evals_inprocess.py -q
+      - name: In-process product adapter (real parser/router/validator/guard)
+        run: PYTHONPATH=backend python -m evals.runner --inprocess --report evals/report.inprocess.json
+        # Exit non-zero if any UNBLOCKED safety task lacks a VERIFIED product pass,
+        # or any task fails / errors. Model-quality tasks report `unverified`
+        # (no free model in CI) and do NOT gate.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report-inprocess
+          path: evals/report.inprocess.json
+
+  # ── Gate C — live / model quality (manual; needs a running backend +
+  #    a FREE local model; non-deterministic, reported not gated) ──────────
+  gate-c-live:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r backend/requirements.txt
+      - name: "Live eval (requires EVAL_BACKEND_URL + a free provider; do not gate merges on this)"
+        env:
+          # The backend adapter is default-closed with two independent gates
+          # (see evals/README.md):
+          #  GATE 1 target auth  — non-loopback URL needs EVAL_ALLOW_REMOTE_BACKEND=true
+          #  GATE 2 live-model   — any model call needs EVAL_ALLOW_LLM_CALLS=true; a
+          #    remote model call also needs the effective model in
+          #    EVAL_FREE_MODEL_ALLOWLIST and a verifiable free provider (which the
+          #    current API cannot expose -> remote live-model stays unverified).
+          # Set these as workflow-run variables when dispatching.
+          EVAL_BACKEND_URL: ${{ vars.EVAL_BACKEND_URL }}
+          EVAL_ALLOW_LLM_CALLS: ${{ vars.EVAL_ALLOW_LLM_CALLS }}
+          EVAL_ALLOW_REMOTE_BACKEND: ${{ vars.EVAL_ALLOW_REMOTE_BACKEND }}
+          EVAL_FREE_MODEL_ALLOWLIST: ${{ vars.EVAL_FREE_MODEL_ALLOWLIST }}
+          PAID_ENABLED: ${{ vars.PAID_ENABLED }}
+        run: |
+          if [ -z "${EVAL_BACKEND_URL:-}" ]; then
+            echo "EVAL_BACKEND_URL not set — Gate C needs a running backend pointed at a free/local model. Skipping."
+            exit 0
+          fi
+          PYTHONPATH=backend python -m evals.runner --backend "$EVAL_BACKEND_URL" --report evals/report.live.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report-live
+          path: evals/report.live.json

@@ -1,0 +1,84 @@
+# ── Thunder AI — Render Blueprint (Infrastructure as Code) ──────────────
+# One-click deploy: connect this GitHub repo to Render and it creates
+#   * thunder-ai-backend  — FastAPI, built from ./Dockerfile (env: docker)
+#   * thunder-ai-frontend — React/Vite static site (env: static)
+#   * thunder-ai-db       — managed PostgreSQL (free plan)
+#
+# SECRETS: the ONLY secret is GEMINI_API_KEY, marked `sync: false`, so Render
+# prompts for it in the dashboard and it is NEVER written to this file.
+# Everything else is a non-secret value, a Render-injected fromDatabase
+# connection string, or a Render-generated random value.
+#
+# NOTE: Docker reads exactly ONE .dockerignore from the build-context root; the
+# root .dockerignore was updated so the ./Dockerfile context includes backend/
+# (it previously excluded it for the executor image).
+
+services:
+  # ── FastAPI backend ────────────────────────────────────────────────────
+  - type: web
+    name: thunder-ai-backend
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # No-op for Docker services (kept for blueprint parity); the image is
+    # built from ./Dockerfile.
+    buildCommand: ""
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
+      # SECRET — `sync: false` makes Render prompt for it; never committed.
+      - key: GEMINI_API_KEY
+        sync: false
+      # Connection string injected by Render from the managed database below.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: thunder-ai-db
+          property: connectionString
+      # Cross-origin deployment (static site <-> API): allow the frontend origin
+      # and mark the auth/CSRF cookies Secure + SameSite=None so the browser
+      # sends them on the cross-site request.
+      - key: CORS_ORIGINS
+        fromService:
+          name: thunder-ai-frontend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+      # Render generates a strong random signing secret at first deploy.
+      - key: JWT_SECRET
+        generateValue: true
+
+  # ── React frontend (static site) ───────────────────────────────────────
+  - type: web
+    name: thunder-ai-frontend
+    env: static
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Service discovery: the frontend points at the backend's public URL, so
+      # no URL is ever hard-coded in the repository.
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: thunder-ai-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
+databases:
+  - name: thunder-ai-db
+    plan: free
+    databaseName: thunder_ai
+    user: thunder_user

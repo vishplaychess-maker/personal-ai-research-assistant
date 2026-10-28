@@ -98,6 +98,36 @@ def decode_access_token(token: str) -> dict:
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def resolve_user_from_payload(payload: dict, db: Session) -> User:
+    """Resolve the ``User`` referenced by a decoded access-token payload.
+
+    Shared by ``get_current_user``, ``_resolve_user_id`` and the Phase 1B.2R
+    ``AuthContext`` builder so the ``sub -> int -> User`` rules live in one
+    place. Raises ``HTTPException(401)`` for a missing / malformed subject or
+    an unknown user.
+    """
+    user_id_str: Optional[str] = payload.get("sub")
+    if user_id_str is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing subject",
+        )
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: malformed subject",
+        )
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    return user
+
+
 def _resolve_user_id(
     credentials: Optional[HTTPAuthorizationCredentials],
     db: Session,
@@ -128,29 +158,8 @@ def _resolve_user_id(
 
     # Token provided: verify it
     payload = decode_access_token(credentials.credentials)
-    user_id_str: Optional[str] = payload.get("sub")
-    if user_id_str is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing subject",
-        )
-
-    try:
-        user_id = int(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: malformed subject",
-        )
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-
-    return user, user_id
+    user = resolve_user_from_payload(payload, db)
+    return user, user.id
 
 
 def get_current_user(
@@ -174,29 +183,7 @@ def get_current_user(
         )
 
     payload = decode_access_token(credentials.credentials)
-    user_id_str: Optional[str] = payload.get("sub")
-    if user_id_str is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing subject",
-        )
-
-    try:
-        user_id = int(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: malformed subject",
-        )
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-
-    return user
+    return resolve_user_from_payload(payload, db)
 
 
 def get_optional_user(

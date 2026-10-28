@@ -9,10 +9,22 @@ build/
 *.egg
 .venv/
 venv/
+env/
+
+# Eval harness build artifacts (regenerated locally; CI publishes the
+# authoritative copies from a clean checkout — see evals/README.md).
+evals/report.json
+evals/report.*.json
+evals/recordings/
 
 # Node
 node_modules/
 npm-debug.log*
+*.tsbuildinfo
+
+# Build logs
+build_log.txt
+build_output.txt
 
 # IDE
 .vscode/
@@ -23,6 +35,10 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+.env.bak-*
+# Frontend production override (shareable template: frontend/.env.production.example).
+# Render injects VITE_API_BASE_URL via service discovery instead.
+frontend/.env.production
 
 # Data (created at runtime)
 /data/
@@ -30,7 +46,17 @@ npm-debug.log*
 
 # Docker persistent volume data
 chromadb_data/
+chroma_db/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# MP-4C executor-service credentials — NEVER checked in.
+# The README and the .example template stay tracked; the real token does not.
+secrets/*
+!secrets/README.md
+!secrets/*.example
+# Disposable-stack inventories and stray probe output - never committed.
+mp4c_pre_test_*.txt
+undefined/

@@ -30,19 +30,53 @@ from app.schemas.documents import (
     DocumentListResponse,
     UploadResponse,
 )
-from app.services.auth_service import get_optional_user
+from app.services.auth_service import get_current_user
+from app.services.cookie_service import require_csrf
 from app.services.document_processor import extract_text, chunk_text
-from app.services.embeddings_client import generate_embeddings_batch
+import app.services.embeddings_client as embeddings_client
 from app.services.chromadb_client import add_chunks, delete_chunks, delete_collection
 
 router = APIRouter(tags=["documents"])
 
 # ── Constants ──────────────────────────────────────────────
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".r", ".m", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".sql", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".conf", ".md", ".markdown", ".rst", ".tex", ".dockerfile", ".gitignore", ".dockerignore"}
 ALLOWED_MIME_TYPES = {
     "application/pdf",
     "text/plain",
+    "text/x-python",
+    "application/javascript",
+    "text/javascript",
+    "application/typescript",
+    "text/typescript",
+    "text/x-java-source",
+    "text/x-c",
+    "text/x-c++",
+    "text/x-csharp",
+    "text/x-go",
+    "text/x-rust",
+    "text/x-ruby",
+    "application/x-php",
+    "text/x-swift",
+    "text/x-kotlin",
+    "text/x-scala",
+    "text/x-r",
+    "text/x-objc",
+    "application/x-sh",
+    "application/x-sql",
+    "text/html",
+    "text/css",
+    "application/json",
+    "application/x-yaml",
+    "application/xml",
+    "application/toml",
+    "text/markdown",
+    "application/x-tex",
+    "text/x-dockerfile",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "text/markdown",
+    "application/octet-stream",
 }
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
@@ -77,12 +111,16 @@ def _validate_file(filename: str, content_type: str, file_size: int) -> None:
             detail=f"Invalid file extension '{ext}'. Allowed: .pdf, .txt",
         )
 
-    # Check MIME type
+    # Check MIME type - allow if extension is valid and MIME is generic
     if content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type '{content_type}'. Allowed: application/pdf, text/plain",
-        )
+        # Allow generic octet-stream for allowed extensions (browser may send generic MIME for .md/.docx)
+        if content_type not in ("application/octet-stream", "") and not content_type.startswith("text/"):
+            # Still allow if extension is explicitly allowed - be permissive for drag-drop
+            if ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type '{content_type}'. Allowed: application/pdf, text/plain",
+                )
 
     # Check file size
     if file_size > MAX_FILE_SIZE:
@@ -109,7 +147,8 @@ async def upload_document(
     session_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Upload a PDF or TXT document (scoped to current user's session).
@@ -162,7 +201,7 @@ async def upload_document(
 
         # Step 3: Generate embeddings
         texts = [c["text"] for c in chunks]
-        embeddings = generate_embeddings_batch(texts)
+        embeddings = embeddings_client.generate_embeddings_batch(texts)
 
         # Step 4: Store in ChromaDB
         chroma_ids = []
@@ -178,6 +217,7 @@ async def upload_document(
             chroma_metadatas.append({
                 "document_id": doc.id,
                 "original_filename": doc.filename,
+                "source": doc.filename,
                 "page_number": chunk.get("page_number") or 0,
                 "chunk_index": chunk["chunk_index"],
                 "chunk_db_id": 0,  # Will update after DB insert
@@ -219,6 +259,15 @@ async def upload_document(
         except Exception:
             pass  # Non-critical update, chunks are already indexed
 
+        # Knowledge graph: extract entities from the document (fire-and-forget,
+        # own thread + session — never blocks or fails the upload).
+        try:
+            from app.services.knowledge_graph import ingest_text_async
+
+            ingest_text_async(current_user.id, " ".join(texts), f"doc:{doc.id}")
+        except Exception:  # noqa: BLE001 — KG ingest must never fail the upload
+            pass
+
         # Update document status
         doc.status = DocumentStatus.ready.value
         doc.chunk_count = len(chunks)
@@ -255,7 +304,7 @@ async def upload_document(
 def list_documents(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """List all documents for a session (scoped to current user)."""
     _get_session_or_404(db, session_id, current_user.id)
@@ -272,7 +321,7 @@ def list_documents(
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get details for a single document (scoped to current user)."""
     doc = _get_document_or_404(db, document_id)
@@ -290,7 +339,8 @@ def get_document(
 def delete_document(
     document_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ):
     """
     Delete a document and all associated data (scoped to current user).

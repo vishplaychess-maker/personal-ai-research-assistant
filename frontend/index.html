@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Personal AI Research Assistant</title>
+    <meta name="theme-color" content="#09090B" />
+    <meta name="description" content="Thunder AI — your AI research assistant with document analysis, web search, and memory." />
+    <title>Thunder AI</title>
+    <!-- D6B-R6: the web manifest link is injected by `vite-plugin-pwa` at build
+         time (it also emits dist/manifest.webmanifest). Hand-declaring it here
+         pointed the dev server at a URL it does not serve, so the SPA fallback
+         answered with index.html (text/html) and Chrome reported
+         "Manifest: Line: 1, column: 1, Syntax error." One owner only. -->
+    <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Thunder AI" />
+    <script>(function(){try{if(localStorage.getItem("research-assistant-theme")==="dark"){document.documentElement.classList.add("dark");}}catch(e){}})();</script>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
   </head>
   <body>

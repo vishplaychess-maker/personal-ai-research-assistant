@@ -9,6 +9,9 @@ from app.models.models import (
     MessageRole,
     MemoryCategory,
     DocumentStatus,
+    UserSkill,
+    GraphEntity,
+    GraphRelation,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "MessageRole",
     "MemoryCategory",
     "DocumentStatus",
+    "UserSkill",
+    "GraphEntity",
+    "GraphRelation",
 ]

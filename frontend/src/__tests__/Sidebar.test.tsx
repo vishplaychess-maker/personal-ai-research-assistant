@@ -5,7 +5,9 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
+import { ThemeProvider } from "../components/ThemeProvider";
 import type { Session, HealthStatus } from "../types";
 
 describe("Sidebar", () => {
@@ -46,17 +48,23 @@ describe("Sidebar", () => {
   });
 
   function renderSidebar(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
+    // Test-only harness repair: production `main.tsx` always mounts
+    // `ThemeProvider` around the app and `Sidebar` calls `useTheme()`, so a
+    // bare render throws before any assertion can run. Same wrapper App.test
+    // and ModePropagation.test use. No production change.
     return render(
-      <Sidebar
-        sessions={props.sessions ?? mockSessions}
-        activeSessionId={props.activeSessionId ?? null}
-        loadingSessions={props.loadingSessions ?? false}
-        health={props.health ?? mockHealth}
-        onSelectSession={props.onSelectSession ?? vi.fn()}
-        onCreateSession={props.onCreateSession ?? vi.fn()}
-        onDeleteSession={props.onDeleteSession ?? vi.fn()}
-        onRenameSession={props.onRenameSession ?? vi.fn()}
-      />
+      <ThemeProvider>
+        <Sidebar
+          sessions={props.sessions ?? mockSessions}
+          activeSessionId={props.activeSessionId ?? null}
+          loadingSessions={props.loadingSessions ?? false}
+          health={props.health ?? mockHealth}
+          onSelectSession={props.onSelectSession ?? vi.fn()}
+          onCreateSession={props.onCreateSession ?? vi.fn()}
+          onDeleteSession={props.onDeleteSession ?? vi.fn()}
+          onRenameSession={props.onRenameSession ?? vi.fn()}
+        />
+      </ThemeProvider>
     );
   }
 
@@ -68,10 +76,14 @@ describe("Sidebar", () => {
     expect(screen.getByText("Research on AI")).toBeTruthy();
   });
 
-  it("renders the sidebar header", () => {
+  // Replaces the removed "Research Sessions" header assertion. Contract now
+  // covered: the sidebar landmark (<aside>), the product brand, and the primary
+  // new-session control (an icon button whose accessible name is its title).
+  it("renders the sidebar landmark, brand and new-session control", () => {
     renderSidebar();
-    expect(screen.getByText("Research Sessions")).toBeTruthy();
-    expect(screen.getByText("✚ New")).toBeTruthy();
+    expect(screen.getByRole("complementary")).toBeTruthy();
+    expect(screen.getByText("Thunder AI")).toBeTruthy();
+    expect(screen.getByTitle("New session")).toBeTruthy();
   });
 
   it("shows loading state when sessions are loading", () => {
@@ -81,13 +93,13 @@ describe("Sidebar", () => {
 
   it("shows empty state when there are no sessions", () => {
     renderSidebar({ sessions: [] });
-    expect(screen.getByText("No sessions yet")).toBeTruthy();
+    expect(screen.getByText("No conversations yet")).toBeTruthy();
   });
 
   it("calls onCreateSession when New button is clicked", () => {
     const onCreateSession = vi.fn();
     renderSidebar({ onCreateSession });
-    fireEvent.click(screen.getByText("✚ New"));
+    fireEvent.click(screen.getByTitle("New session"));
     expect(onCreateSession).toHaveBeenCalledOnce();
   });
 
@@ -99,11 +111,11 @@ describe("Sidebar", () => {
   });
 
   it("highlights the active session", () => {
-    const { container } = renderSidebar({ activeSessionId: 1 });
-    const items = container.querySelectorAll(".sidebar-item");
-    expect(items.length).toBeGreaterThan(0);
-    // First sidebar item should be the active one (session id 1)
-    expect(items[0].classList.contains("active")).toBe(true);
+    renderSidebar({ activeSessionId: 1 });
+    // Current active indication is the title emphasis colour: the active
+    // session title is `text-foreground`, an inactive one `text-secondary`.
+    expect(screen.getByText("Test Session 1").className).toContain("text-foreground");
+    expect(screen.getByText("Research on AI").className).toContain("text-secondary");
   });
 
   it("calls onDeleteSession when delete button is clicked", () => {
@@ -120,8 +132,8 @@ describe("Sidebar", () => {
     const renameBtns = screen.getAllByTitle("Rename");
     fireEvent.click(renameBtns[0]);
     // Should show an input field
-    const renameInput = document.querySelector(".rename-input");
-    expect(renameInput).toBeTruthy();
+    // The rename field is the textbox showing the session's current title.
+    expect(screen.getByDisplayValue("Test Session 1")).toBeTruthy();
   });
 
   it("calls onRenameSession when rename is submitted", async () => {
@@ -132,8 +144,7 @@ describe("Sidebar", () => {
       fireEvent.click(renameBtns[0]);
       await new Promise((r) => setTimeout(r, 20));
     });
-    const renameInput = document.querySelector(".rename-input") as HTMLInputElement;
-    expect(renameInput).toBeTruthy();
+    const renameInput = screen.getByDisplayValue("Test Session 1") as HTMLInputElement;
     // Change the value
     await act(async () => {
       fireEvent.change(renameInput, { target: { value: "Renamed Session" } });
@@ -146,44 +157,49 @@ describe("Sidebar", () => {
     expect(onRenameSession).toHaveBeenCalledWith(1, "Renamed Session");
   });
 
-  it("shows health indicators", () => {
+  it("shows health indicators", async () => {
+    const user = userEvent.setup();
     renderSidebar();
-    expect(screen.getByText("API")).toBeTruthy();
-    expect(screen.getByText("LLM")).toBeTruthy();
-    expect(screen.getByText("All OK")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("API");
+    expect(menu).toHaveTextContent("LLM");
+    expect(menu).toHaveTextContent("DB");
+    expect(menu).toHaveTextContent("3/3");
   });
 
-  it("shows health count when not all services are ok", () => {
+  it("shows health count when not all services are ok", async () => {
     const partialHealth: HealthStatus = {
       backend: "ok",
       chromadb: "error",
       ollama: "ok",
     };
+    const user = userEvent.setup();
     renderSidebar({ health: partialHealth });
-    expect(screen.getByText("2/3")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("2/3");
   });
 
   // ── Search ─────────────────────────────────────────────
 
   it("renders the search input", () => {
     renderSidebar();
-    expect(screen.getByPlaceholderText("Search conversations…")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search conversations")).toBeTruthy();
   });
 
   it("shows clear button when search query is typed", () => {
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     fireEvent.change(searchInput, { target: { value: "AI" } });
-    const clearBtn = document.querySelector(".sidebar-search-clear");
-    expect(clearBtn).toBeTruthy();
+    expect(screen.getByTitle("Clear search")).toBeTruthy();
   });
 
   it("clears search when clear button is clicked", () => {
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     fireEvent.change(searchInput, { target: { value: "AI" } });
-    const clearBtn = document.querySelector(".sidebar-search-clear") as HTMLButtonElement;
-    fireEvent.click(clearBtn);
+    fireEvent.click(screen.getByTitle("Clear search"));
     expect((searchInput as HTMLInputElement).value).toBe("");
   });
 
@@ -197,7 +213,7 @@ describe("Sidebar", () => {
     );
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "xyznonexistent" } });
       vi.advanceTimersByTime(300); // Skip debounce
@@ -229,7 +245,7 @@ describe("Sidebar", () => {
     );
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "AI" } });
       vi.advanceTimersByTime(300); // Skip debounce
@@ -264,7 +280,7 @@ describe("Sidebar", () => {
     const onSelectSession = vi.fn();
     renderSidebar({ onSelectSession });
 
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "AI" } });
       vi.advanceTimersByTime(300); // Skip debounce
@@ -287,15 +303,15 @@ describe("Sidebar", () => {
     vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "AI" } });
       vi.advanceTimersByTime(300); // Skip debounce
       await Promise.resolve();
     });
 
-    const spinner = document.querySelector(".sidebar-search-spinner");
-    expect(spinner).toBeTruthy();
+    // Current in-progress indicator is the visible "Searching…" status text.
+    expect(screen.getByText("Searching…")).toBeTruthy();
   });
 
   it("shows search error on HTTP 500", async () => {
@@ -308,7 +324,7 @@ describe("Sidebar", () => {
     );
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "AI" } });
       vi.advanceTimersByTime(300);
@@ -323,7 +339,7 @@ describe("Sidebar", () => {
     vi.mocked(fetch).mockRejectedValue(new Error("Network error"));
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "AI" } });
       vi.advanceTimersByTime(300);
@@ -335,7 +351,7 @@ describe("Sidebar", () => {
 
   it("clears search on Escape key", () => {
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     fireEvent.change(searchInput, { target: { value: "AI" } });
     // Press Escape
     fireEvent.keyDown(searchInput, { key: "Escape" });
@@ -352,15 +368,15 @@ describe("Sidebar", () => {
     vi.mocked(fetch).mockImplementation(() => fetchPromise);
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "test" } });
       vi.advanceTimersByTime(300);
       await Promise.resolve();
     });
 
-    // Spinner should be visible while fetch is pending
-    expect(document.querySelector(".sidebar-search-spinner")).toBeTruthy();
+    // In-progress indicator while the fetch is pending
+    expect(screen.getByText("Searching…")).toBeTruthy();
 
     // Now resolve the fetch
     await act(async () => {
@@ -374,8 +390,9 @@ describe("Sidebar", () => {
       await Promise.resolve();
     });
 
-    // Spinner should be gone after completion
-    expect(document.querySelector(".sidebar-search-spinner")).toBeNull();
+    // ... and replaced by the empty-results state after completion
+    expect(screen.queryByText("Searching…")).toBeNull();
+    expect(screen.getByText("No results found")).toBeTruthy();
   });
 
   it("passes encodeURIComponent for special characters", async () => {
@@ -392,7 +409,7 @@ describe("Sidebar", () => {
     });
 
     renderSidebar();
-    const searchInput = screen.getByPlaceholderText("Search conversations…");
+    const searchInput = screen.getByPlaceholderText("Search conversations");
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: "c++ & c#" } });
       vi.advanceTimersByTime(300);
