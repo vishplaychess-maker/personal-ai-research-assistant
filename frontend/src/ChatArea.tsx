@@ -189,6 +189,13 @@ interface ChatAreaProps {
 
   // Report Export — transient error surfaced via the existing chat error banner
   onExportError?: (message: string) => void;
+
+  // OpenBot Autonomous Research (Phase 1) — the toggle renders only when the
+  // capability is enabled for this user; when ON, App routes sends to the
+  // /api/agents/openbot/research task queue instead of the chat stream.
+  openbotEnabled?: boolean;
+  autonomousMode?: boolean;
+  onAutonomousModeChange?: (enabled: boolean) => void;
 }
 
 // ── Component ─────────────────────────────────────────────
@@ -242,6 +249,9 @@ export function ChatArea({
   agentProgress = null,
   onPlanCancel,
   onExportError,
+  openbotEnabled = false,
+  autonomousMode = false,
+  onAutonomousModeChange,
 }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingEndRef = useRef<HTMLDivElement>(null);
@@ -326,6 +336,32 @@ export function ChatArea({
 
   // ── Voice output ────────────────────
   const tts = useSpeechSynthesis();
+
+  // OpenBot Autonomous Mode toggle — one definition, rendered next to the
+  // ModeSelector in BOTH composer variants (centered and bottom). Only
+  // present when the user enabled the openbot_research capability.
+  const autonomousToggle = openbotEnabled ? (
+    <button
+      type="button"
+      onClick={() => onAutonomousModeChange?.(!autonomousMode)}
+      aria-pressed={autonomousMode}
+      title={
+        autonomousMode
+          ? "Autonomous Mode is ON — sends go to the OpenBot research agent"
+          : "Autonomous Mode — delegate sends to an isolated OpenBot research agent"
+      }
+      data-testid="autonomous-mode-toggle"
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 self-start rounded-xl border px-3 py-1.5 text-xs font-medium transition-all",
+        autonomousMode
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-white/10 bg-white/5 text-secondary hover:border-primary/20"
+      )}
+    >
+      <Bot className="h-3.5 w-3.5 shrink-0" />
+      Autonomous Mode
+    </button>
+  ) : null;
 
   // ── Document upload helpers ─────────────────
   const activeDoc = documents && documents.length > 0 ? documents[0] : null;
@@ -597,8 +633,9 @@ export function ChatArea({
                       </div>
                     )}
                     {/* MP-3C3D3B — per-message response mode */}
-                    <div className="mb-2 flex items-center px-1">
+                    <div className="mb-2 flex items-center gap-2 px-1">
                       <ModeSelector mode={chatMode} onModeChange={onChatModeChange} disabled={isStreaming} />
+                      {autonomousToggle}
                     </div>
                     <div className="flex items-end gap-2">
                       <textarea
@@ -841,8 +878,9 @@ export function ChatArea({
                   </div>
                 )}
                 {/* MP-3C3D3B — per-message response mode */}
-                <div className="mb-2 flex items-center px-1">
+                <div className="mb-2 flex items-center gap-2 px-1">
                   <ModeSelector mode={chatMode} onModeChange={onChatModeChange} disabled={isStreaming} />
+                  {autonomousToggle}
                 </div>
                 <div className="flex items-end gap-2">
                   <textarea

@@ -558,6 +558,35 @@ class SkillPreference(Base):
         )
 
 
+class OpenbotTask(Base):
+    """OpenBot Autonomous Research Agent task queue (Phase 1).
+
+    One row per delegated research task. ``task_id`` is the public,
+    user-facing identifier (a UUID hex string) — the integer ``id`` is a
+    normal surrogate key. ``status`` is one of ``pending`` / ``running`` /
+    ``completed`` / ``failed``; ``result_text`` is filled in when the agent
+    finishes. Strictly user-scoped: every lookup filters on ``user_id``.
+    """
+
+    __tablename__ = "openbot_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    task_id = Column(String(64), unique=True, nullable=False, index=True)
+    query = Column(Text, nullable=False)
+    status = Column(
+        String(20), nullable=False, default="pending", index=True
+    )
+    result_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<OpenbotTask(id={self.id}, task_id='{self.task_id}', "
+            f"user_id={self.user_id}, status='{self.status}')>"
+        )
+
+
 class GraphEntity(Base):
     """A node in the Knowledge Graph — a concise entity extracted from text.
 

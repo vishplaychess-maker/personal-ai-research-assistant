@@ -37,6 +37,7 @@ const mockAPI = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   listMemories: vi.fn(),
   getMemorySetting: vi.fn(),
+  getCapabilities: vi.fn(),
   listChatModels: vi.fn(),
   updateSessionModel: vi.fn(),
 }));
@@ -123,6 +124,7 @@ beforeEach(() => {
   mockAPI.listDocuments.mockResolvedValue([]);
   mockAPI.listMemories.mockResolvedValue([]);
   mockAPI.getMemorySetting.mockResolvedValue({ enabled: true });
+  mockAPI.getCapabilities.mockResolvedValue([]);
   mockAPI.listChatModels.mockResolvedValue({ models: [], error: null });
 });
 

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+import app.services.capability_registry as capability_registry
 from app.models.models import SkillPreference
 from app.services.desktop_automation import (
     DEFAULT_PERMISSION_LEVEL,
@@ -48,6 +49,27 @@ def get_capability_config(db: Session, user_id: int, skill_id: str) -> Dict[str,
     except (TypeError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def is_capability_enabled(db: Session, user_id: int, skill_id: str) -> bool:
+    """Resolve the user's enabled override, falling back to the catalog default.
+
+    Absence of a stored preference means "use the catalog default" (the
+    registry ships ``openbot_research`` disabled, so this is fail-closed).
+    Unknown capability ids are always disabled.
+    """
+    row = (
+        db.query(SkillPreference)
+        .filter(
+            SkillPreference.user_id == user_id,
+            SkillPreference.skill_id == skill_id,
+        )
+        .first()
+    )
+    if row is not None:
+        return bool(row.enabled)
+    default = capability_registry.get_capability(skill_id)
+    return bool(default["enabled"]) if default is not None else False
 
 
 def get_permission_level(

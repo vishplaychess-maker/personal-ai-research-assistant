@@ -42,6 +42,7 @@ const mockAPI = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   listMemories: vi.fn(),
   getMemorySetting: vi.fn(),
+  getCapabilities: vi.fn(),
   listChatModels: vi.fn(),
   updateSessionModel: vi.fn(),
   getUserSettings: vi.fn(),
@@ -121,6 +122,7 @@ async function renderReady(chatModes: ChatModeCapability[] = ALL_AVAILABLE, seed
   mockAPI.listDocuments.mockResolvedValue([]);
   mockAPI.listMemories.mockResolvedValue([]);
   mockAPI.getMemorySetting.mockResolvedValue({ enabled: true });
+  mockAPI.getCapabilities.mockResolvedValue([]);
   mockAPI.listChatModels.mockResolvedValue({ models: [], error: null });
   mockAPI.getUserSettings.mockResolvedValue(settingsWith(chatModes));
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -261,6 +263,7 @@ describe("App -> ChatArea -> ModeSelector -> startStream (MP-3C3D3B integration)
     mockAPI.listDocuments.mockResolvedValue([]);
     mockAPI.listMemories.mockResolvedValue([]);
     mockAPI.getMemorySetting.mockResolvedValue({ enabled: true });
+    mockAPI.getCapabilities.mockResolvedValue([]);
     mockAPI.listChatModels.mockResolvedValue({ models: [], error: null });
     mockAPI.getUserSettings.mockRejectedValue(new Error("network down"));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));

@@ -20,8 +20,9 @@ from app.config import settings
 from tests.auth_helpers import auth_headers, register_and_login
 
 _CAPABILITY_IDS = {
-    "web_search", "code_executor", "file_reader", "desktop_automation",
-    "github-mcp", "notion-mcp", "postgres-mcp",
+    "web_search", "code_executor", "file_reader",
+    "desktop_automation", "openbot_research", "github-mcp", "notion-mcp",
+    "postgres-mcp",
 }
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
 _MCP_IDS = {"github-mcp", "notion-mcp", "postgres-mcp"}

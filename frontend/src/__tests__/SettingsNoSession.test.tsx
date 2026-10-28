@@ -14,6 +14,7 @@ const mockAPI = vi.hoisted(() => ({
   getHealth: vi.fn(), listSessions: vi.fn(), createSession: vi.fn(),
   updateSession: vi.fn(), deleteSession: vi.fn(), listMessages: vi.fn(),
   listDocuments: vi.fn(), listMemories: vi.fn(), getMemorySetting: vi.fn(),
+  getCapabilities: vi.fn(),
   listChatModels: vi.fn(), listAllProviderModels: vi.fn(),
   updateProvider: vi.fn(), updateSessionModel: vi.fn(),
 }));
@@ -40,6 +41,7 @@ beforeEach(() => {
   mockAPI.listDocuments.mockResolvedValue([]);
   mockAPI.listMemories.mockResolvedValue([]);
   mockAPI.getMemorySetting.mockResolvedValue({ enabled: true });
+  mockAPI.getCapabilities.mockResolvedValue([]);
   mockAPI.listChatModels.mockResolvedValue({ models: [], error: null });
   mockAPI.listAllProviderModels.mockResolvedValue([]);
   mockAPI.updateProvider.mockResolvedValue({ id: 1, is_active: true });

@@ -47,6 +47,7 @@ import type {
   BuiltinSkillCatalog,
   Capability,
   OfficialMcpServer,
+  OpenbotTaskStatus,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -528,6 +529,21 @@ export const API = {
     return request<{ tools: any[]; error: string | null }>(`/api/mcp/servers/${id}/discover`, {
       method: "POST",
     });
+  },
+
+  // ── OpenBot Autonomous Research Agent (Phase 1 task queue) ──
+  // Non-blocking: POST returns the task id immediately; poll GET until the
+  // status is "completed" / "failed".
+  startOpenbotResearch(query: string) {
+    return request<{ task_id: string }>("/api/agents/openbot/research", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
+  },
+  getOpenbotTask(taskId: string) {
+    return request<OpenbotTaskStatus>(
+      `/api/agents/openbot/tasks/${encodeURIComponent(taskId)}`
+    );
   },
 
   // ── Official MCP registry ───────────────────────────────────

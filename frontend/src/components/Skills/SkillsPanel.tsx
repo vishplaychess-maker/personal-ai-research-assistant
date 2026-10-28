@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Brain,
   ChevronDown,
   Database,
   FileText,
@@ -47,6 +48,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   github: GitBranch,
   notebook: NotebookText,
   database: Database,
+  brain: Brain,
 };
 
 type PermissionValue = "ask_every_time" | "auto_approve" | "full_access";

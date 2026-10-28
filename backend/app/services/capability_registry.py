@@ -21,6 +21,14 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
     },
     {
+        "id": "openbot_research",
+        "kind": "capability",
+        "name": "Autonomous Research (OpenBot)",
+        "description": "Delegates complex, multi-step research to an isolated AI agent",
+        "icon": "brain",
+        "enabled": False,
+    },
+    {
         "id": "code_executor",
         "name": "Code Executor",
         "description": "Run snippets in an isolated workspace and return the output.",

@@ -26,6 +26,7 @@ const mockAPI = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   listMemories: vi.fn(),
   getMemorySetting: vi.fn(),
+  getCapabilities: vi.fn(),
   listChatModels: vi.fn(),
   listAllProviderModels: vi.fn(),
   updateProvider: vi.fn(),
@@ -59,6 +60,7 @@ describe("App", () => {
     mockAPI.listDocuments.mockResolvedValue([]);
     mockAPI.listMemories.mockResolvedValue([]);
     mockAPI.getMemorySetting.mockResolvedValue({ enabled: true });
+    mockAPI.getCapabilities.mockResolvedValue([]);
     mockAPI.listChatModels.mockResolvedValue({ models: [], error: null });
     // Current ModelSelector contract: provider-group array from
     // GET /api/providers/models (API.listAllProviderModels).

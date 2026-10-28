@@ -277,6 +277,15 @@ export interface Capability {
   required_config_keys?: string[];
 }
 
+// OpenBot Autonomous Research Agent (Phase 1 task queue)
+export type OpenbotTaskStatusValue = "pending" | "running" | "completed" | "failed";
+export interface OpenbotTaskStatus {
+  task_id: string;
+  status: OpenbotTaskStatusValue;
+  result_text: string | null;
+  created_at: string | null;
+}
+
 // Official MCP server from GET /api/mcp/registry (credentials never included)
 export interface OfficialMcpServer {
   id: string;

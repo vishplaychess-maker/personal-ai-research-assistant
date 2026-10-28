@@ -48,6 +48,16 @@ function App() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string; image_url?: string } | null>(null);
 
+  // OpenBot Autonomous Research (Phase 1) — the toggle only shows when the
+  // user enabled the capability; autonomousMode routes sends to the task
+  // queue instead of the chat stream. Polling is fully async: the composer
+  // and the main chat NEVER block on a running research task.
+  const [openbotEnabled, setOpenbotEnabled] = useState(false);
+  const [autonomousMode, setAutonomousMode] = useState(false);
+  const openbotPollsRef = useRef<
+    Array<{ taskId: string; messageId: number; intervalId: number; pollCount: number }>
+  >([]);
+
   // Citation popup state
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
 
@@ -173,6 +183,9 @@ function App() {
     setChatError(null);
     setSourcesUsedIds(new Set());
     setMemoriesUsedIds(new Set());
+    // OpenBot polls belong to a dead account once logged out — stop them.
+    openbotPollsRef.current.forEach((p) => window.clearInterval(p.intervalId));
+    openbotPollsRef.current = [];
     if (isAuthenticated) {
       loadSessions();
     } else {
@@ -281,6 +294,30 @@ function App() {
       .then((r) => { setMemoryEnabled(r.enabled); })
       .catch(() => { /* backend might not be ready yet */ })
       .finally(() => { setMemorySettingLoaded(true); });
+  }, []);
+
+  // ── OpenBot capability lookup ──────────────────────────
+  // Fetched on login and again when the Settings dialog closes, so a toggle
+  // made in Settings > Skills is reflected in the composer without a reload.
+  useEffect(() => {
+    if (!isAuthenticated) { setOpenbotEnabled(false); return; }
+    let cancelled = false;
+    API.getCapabilities()
+      .then((caps) => {
+        if (!cancelled) {
+          setOpenbotEnabled(
+            caps.some((c) => c.id === "openbot_research" && c.enabled)
+          );
+        }
+      })
+      .catch(() => { if (!cancelled) setOpenbotEnabled(false); });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, user?.id, showSettings]);
+
+  // Stop every OpenBot poll when the component unmounts (no leaked timers).
+  useEffect(() => () => {
+    openbotPollsRef.current.forEach((p) => window.clearInterval(p.intervalId));
+    openbotPollsRef.current = [];
   }, []);
 
   // ── Message loading ────────────────────────────────────
@@ -472,10 +509,95 @@ function App() {
 
   // ── Send message (streaming) ───────────────────────────
 
+  // OpenBot Autonomous Research (Phase 1). Routes the text to the task
+  // queue and shows "Research in progress…" as an ephemeral assistant
+  // message that the 2s poll loop later replaces with the final summary.
+  // Strictly async: this never touches the streaming hook, so the main
+  // chat (including sends of OTHER messages) stays interactive throughout.
+  const startOpenbotResearch = useCallback(async (sessionId: number, text: string) => {
+    const tempUserMsg: Message = {
+      id: -Date.now(),
+      session_id: sessionId,
+      role: "user",
+      content: text,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
+    setInput("");
+    setChatError(null);
+
+    let taskId: string;
+    try {
+      const res = await API.startOpenbotResearch(text);
+      taskId = res.task_id;
+    } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+      setChatError(err instanceof Error ? err.message : "Failed to start the research task");
+      return;
+    }
+
+    const loadingId = -(Date.now()) - 2;
+    const loadingMsg: Message = {
+      id: loadingId,
+      session_id: sessionId,
+      role: "assistant",
+      content: "🤖 Research in progress…",
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, loadingMsg]);
+
+    const finishPoll = (entry: { taskId: string; messageId: number; intervalId: number }) => {
+      window.clearInterval(entry.intervalId);
+      openbotPollsRef.current = openbotPollsRef.current.filter((p) => p !== entry);
+    };
+    const replaceLoading = (updater: (content: string) => string) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === loadingId ? { ...m, content: updater(m.content) } : m))
+      );
+    };
+
+    const entry = { taskId, messageId: loadingId, intervalId: 0, pollCount: 0 };
+    entry.intervalId = window.setInterval(async () => {
+      entry.pollCount += 1;
+      // ~2 min cap (60 polls × 2s) so a stuck task cannot poll forever.
+      if (entry.pollCount > 60) {
+        finishPoll(entry);
+        replaceLoading(() => "⚠️ Research timed out. The task may still finish in the background; please try again later.");
+        return;
+      }
+      try {
+        const task = await API.getOpenbotTask(taskId);
+        if (task.status === "completed") {
+          finishPoll(entry);
+          replaceLoading(() => task.result_text || "Research finished without a summary.");
+        } else if (task.status === "failed") {
+          finishPoll(entry);
+          replaceLoading(() => "⚠️ Autonomous research failed. Try rephrasing your query.");
+        }
+        // pending / running: keep polling silently
+      } catch {
+        // 404/403/5xx — a lost task is surfaced in the bubble, not as a fatal
+        // chat error (the main chat must keep working).
+        finishPoll(entry);
+        replaceLoading(() => "⚠️ Lost track of the research task. Please try again.");
+      }
+    }, 2000);
+    openbotPollsRef.current.push(entry);
+  }, []);
+
   const handleSend = (imageUrl?: string, overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text && !imageUrl) return;
     if (!activeSessionId || isStreaming || togglePending) return;
+
+    // OpenBot routing (Phase 1): when Autonomous Mode is ON and the
+    // capability is enabled, sends become asynchronous research tasks
+    // instead of standard chat turns. Image attachments are not part of
+    // the OpenBot contract yet — text-only.
+    if (autonomousMode && openbotEnabled && text && !imageUrl) {
+      void startOpenbotResearch(activeSessionId, text);
+      return;
+    }
     const originalText = text;
 
     setSending(true);
@@ -762,6 +884,9 @@ function App() {
         onPlanCancel={() => setPlanSteps([])}
         onExportError={(msg) => setChatError(msg)}
         showModelSelector={false}
+        openbotEnabled={openbotEnabled}
+        autonomousMode={autonomousMode}
+        onAutonomousModeChange={setAutonomousMode}
       />
       </AppShell>
 
