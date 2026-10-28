@@ -49,6 +49,7 @@ import type {
   OfficialMcpServer,
   OpenbotTaskStatus,
   BrowserEmbeddability,
+  CustomSkillRunResult,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -474,6 +475,17 @@ export const API = {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  },
+
+  // ── Custom Skill Marketplace (data/custom_skills plugins) ──
+  runCustomSkill(skillId: string, inputs: Record<string, unknown>) {
+    return request<CustomSkillRunResult>(
+      `/api/skills/custom/${encodeURIComponent(skillId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ inputs }),
+      }
+    );
   },
 
   // ── Scheduler ────────────────────────────────────────────

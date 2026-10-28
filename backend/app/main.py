@@ -88,6 +88,7 @@ from app.routes.oauth import router as oauth_router
 from app.routes.desktop import router as desktop_router
 from app.routes.openbot import router as openbot_router  # Phase 1 — Autonomous Research Agent queue
 from app.routes.browser import router as browser_router  # Built-in browser — GET /api/browser/embeddable
+from app.routes.custom_skills import router as custom_skills_router  # Custom skill marketplace - POST /api/skills/custom/{id}
 from app.services import access_guard, setup_service
 from app.static_mount import mount_frontend
 
@@ -1406,6 +1407,26 @@ async def lifespan(app: FastAPI):
             type(exc).__name__,
         )
 
+    # Custom skill marketplace — create data/custom_skills/ and load the
+    # user-defined Python skills. Fully contained: a broken skill or an
+    # unreadable directory only logs a warning, never blocks startup.
+    try:
+        from app.services import custom_skill_loader
+
+        custom_skill_loader.ensure_custom_skills_dir()
+        for entry in custom_skill_loader.scan_and_load_custom_skills():
+            if entry["status"] != "loaded":
+                logger.warning(
+                    "Custom skill '%s' skipped: %s",
+                    entry.get("folder"),
+                    entry.get("reason"),
+                )
+    except Exception as exc:  # noqa: BLE001 — custom skills must never crash startup
+        logger.warning(
+            "Custom skill scan skipped (%s); continuing without custom skills",
+            type(exc).__name__,
+        )
+
     _validate_jwt_secret()
     _warn_ephemeral_sqlite_in_production()
     _migrate_knowledge_graph()
@@ -1601,6 +1622,7 @@ app.include_router(oauth_router)  # Subscription sign-in - /api/oauth/{provider}
 app.include_router(desktop_router)  # Desktop automation - /api/desktop/* (503 unless DESKTOP_AUTOMATION_ENABLED)
 app.include_router(openbot_router)  # OpenBot autonomous research queue - /api/agents/openbot/*
 app.include_router(browser_router)  # Built-in browser - GET /api/browser/embeddable
+app.include_router(custom_skills_router)  # Custom skill marketplace - POST /api/skills/custom/{id}
 
 
 @app.get("/health")

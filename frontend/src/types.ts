@@ -266,6 +266,14 @@ export interface UserSkillDetail extends UserSkill {
 }
 
 // Executable capability toggle (GET/PATCH /api/capabilities)
+// A manifest field of a custom skill's inputs_schema.
+export interface CapabilityInputField {
+  type?: "string" | "text" | "number" | "boolean" | "password";
+  label?: string;
+  required?: boolean;
+  placeholder?: string;
+}
+
 export interface Capability {
   id: string;
   name: string;
@@ -273,8 +281,17 @@ export interface Capability {
   icon: string;
   enabled: boolean;
   config: Record<string, unknown>;
-  kind?: "capability" | "mcp_server";
+  kind?: "capability" | "mcp_server" | "custom";
   required_config_keys?: string[];
+  // Custom skills only — describes the static config fields (e.g. an API key)
+  // the user can save to SkillPreference.config_json.
+  inputs_schema?: Record<string, CapabilityInputField>;
+}
+
+// POST /api/skills/custom/{skill_id} — run a user-defined skill
+export interface CustomSkillRunResult {
+  skill_id: string;
+  result: Record<string, unknown>;
 }
 
 // OpenBot Autonomous Research Agent (Phase 1 task queue)

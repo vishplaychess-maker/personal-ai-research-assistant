@@ -74,14 +74,33 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
 )
 
 
+def _custom_capabilities() -> list[dict[str, Any]]:
+    """Loaded user-defined skills (kind="custom"), or [] when the loader is
+    unavailable. Lazily imported: the loader must never be a hard dependency
+    of the static catalog, and any failure degrades to builtin-only."""
+    try:
+        from app.services.custom_skill_loader import list_custom_capabilities
+
+        return list_custom_capabilities()
+    except Exception:  # noqa: BLE001 — catalog must never crash on custom skills
+        return []
+
+
 def list_capabilities() -> list[dict[str, Any]]:
-    """Return a mutable copy of the catalog, so callers cannot mutate defaults."""
-    return [dict(capability) for capability in CAPABILITIES]
+    """Return a mutable copy of the catalog, so callers cannot mutate defaults.
+
+    Custom skills scanned from ``data/custom_skills/`` are appended with
+    ``kind="custom"`` alongside the built-in entries.
+    """
+    return [dict(capability) for capability in CAPABILITIES] + _custom_capabilities()
 
 
 def get_capability(skill_id: str) -> dict[str, Any] | None:
     """Return a copy of one catalog entry, or ``None`` when it is unknown."""
     for capability in CAPABILITIES:
+        if capability["id"] == skill_id:
+            return dict(capability)
+    for capability in _custom_capabilities():
         if capability["id"] == skill_id:
             return dict(capability)
     return None

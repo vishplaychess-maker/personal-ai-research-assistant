@@ -74,11 +74,13 @@ def test_lists_static_catalog_with_disabled_defaults():
         r = c.get("/api/capabilities", headers=_auth(c))
         assert r.status_code == 200, r.text[:300]
         body = r.json()
-        assert {item["id"] for item in body} == _CAPABILITY_IDS
+        # Custom skills loaded from data/custom_skills (kind="custom") are
+        # appended dynamically; the assertion below pins the BUILT-IN catalog.
+        assert {item["id"] for item in body if item["kind"] != "custom"} == _CAPABILITY_IDS
         for item in body:
             assert set(item) == {
                 "id", "name", "description", "icon", "enabled", "config",
-                "kind", "required_config_keys",
+                "kind", "required_config_keys", "inputs_schema",
             }
             assert item["name"]
             assert item["description"]

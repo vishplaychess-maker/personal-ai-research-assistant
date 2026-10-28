@@ -35,6 +35,9 @@ class CapabilityResponse(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
     kind: str = "capability"
     required_config_keys: List[str] = Field(default_factory=list)
+    # Custom skills only — JSON-schema-ish description of the static config
+    # fields the user can fill in (e.g. an API key).
+    inputs_schema: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class CapabilityUpdate(BaseModel):
@@ -69,6 +72,7 @@ def _merged(default: Dict[str, Any], pref: Optional[SkillPreference]) -> Dict[st
         "config": dict(default.get("config") or {}),
         "kind": kind,
         "required_config_keys": required,
+        "inputs_schema": dict(default.get("inputs_schema") or {}),
     }
     if kind == "mcp_server":
         stored = _parse_config(pref.config_json) if pref is not None else {}
