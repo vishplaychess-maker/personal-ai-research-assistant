@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
-    "groq", "grok", "together", "mistral", "cohere",
+    "groq", "grok", "together", "mistral", "cohere", "venice",
 }
 
 PROVIDER_LABELS = {
@@ -59,6 +59,7 @@ PROVIDER_LABELS = {
     "together": "Together AI",
     "mistral": "Mistral",
     "cohere": "Cohere",
+    "venice": "Venice.ai",
 }
 
 PREFIXES = {
@@ -77,6 +78,9 @@ PREFIXES = {
     "together": "tgp-",
     "mistral": "",
     "cohere": "",
+    # Venice keys have no published fixed prefix, so only the live API can
+    # judge validity; a prefix check would reject valid keys.
+    "venice": "",
 }
 
 

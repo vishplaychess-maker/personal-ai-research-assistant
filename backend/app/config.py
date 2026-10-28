@@ -633,7 +633,7 @@ class Settings(BaseSettings):
     # ── Model / LLM provider settings ───────────────────
     # Provider: "gemini" | "glm" | "ollama" | "openrouter" | "nvidia" |
     #           "huggingface" | "google" | "modelslab" | "groq" | "grok"
-    #           | "together" | "mistral" | "cohere"
+    #           | "together" | "mistral" | "cohere" | "venice"
     # Default is Gemini API (fast, generous free tier). Ollama remains a
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
@@ -723,6 +723,14 @@ class Settings(BaseSettings):
     mistral_model: str = "mistral-small-latest"
     mistral_max_tokens: int = 2048
     mistral_temperature: float = 0.7
+
+    # Venice.ai (OpenAI-compatible API, Bearer API key)
+    # Key is pasted in Settings → Providers; VENICE_API_KEY is only a fallback.
+    venice_api_key: str = ""
+    venice_base_url: str = "https://api.venice.ai/api/v1"
+    venice_model: str = "llama-3.3-70b"
+    venice_max_tokens: int = 2048
+    venice_temperature: float = 0.7
 
     # Cohere (OpenAI-compatible API)
     cohere_api_key: str = ""

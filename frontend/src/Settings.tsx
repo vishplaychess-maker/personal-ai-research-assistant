@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, Clock, Calendar } from "lucide-react";
+import { Plus, Pencil, Trash2, Clock, Calendar, Globe } from "lucide-react";
 import { API } from "./api";
 import {
   Dialog,
@@ -40,6 +40,7 @@ const PROVIDER_OPTIONS = [
   { value: "together", label: "Together AI" },
   { value: "mistral", label: "Mistral" },
   { value: "cohere", label: "Cohere" },
+  { value: "venice", label: "Venice.ai" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -290,6 +291,29 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                       ))}
                     </select>
                   </div>
+
+                  {formProvider === "venice" && (
+                    <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                      <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <div className="min-w-0">
+                        <p>
+                          Base URL:{" "}
+                          <span className="font-mono">https://api.venice.ai/api/v1</span>
+                        </p>
+                        <p className="mt-0.5">
+                          Get your API key from{" "}
+                          <a
+                            href="https://venice.ai/settings/api"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            venice.ai/settings/api
+                          </a>
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label>API Key</Label>

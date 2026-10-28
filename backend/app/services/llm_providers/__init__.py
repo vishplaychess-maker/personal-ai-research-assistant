@@ -81,6 +81,9 @@ def _build_provider(
     elif provider_name == "mistral":
         from app.services.llm_providers.mistral_provider import MistralProvider
         return MistralProvider(api_key=api_key, model=model)
+    elif provider_name == "venice":
+        from app.services.llm_providers.venice_provider import VeniceProvider
+        return VeniceProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -132,6 +135,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "grok": "grok",
             "together": "together ai",
             "mistral": "mistral",
+            "venice": "venice.ai",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:

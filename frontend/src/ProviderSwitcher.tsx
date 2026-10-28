@@ -31,6 +31,7 @@ const BRANDS: Record<string, { mark: string; ring: string }> = {
   together: { mark: "T", ring: "from-teal-500/30 to-teal-500/10 text-teal-300 border-teal-500/30" },
   mistral: { mark: "M", ring: "from-red-500/30 to-red-500/10 text-red-300 border-red-500/30" },
   cohere: { mark: "C", ring: "from-zinc-300/30 to-zinc-300/10 text-zinc-200 border-zinc-300/30" },
+  venice: { mark: "V", ring: "from-rose-500/30 to-amber-500/10 text-rose-300 border-rose-500/30" },
   ollama: { mark: "O", ring: "from-zinc-400/30 to-zinc-400/10 text-zinc-300 border-zinc-400/30" },
   local: { mark: "L", ring: "from-cyan-500/30 to-cyan-500/10 text-cyan-300 border-cyan-500/30" },
 };
@@ -47,6 +48,7 @@ const LABELS: Record<string, string> = {
   together: "Together AI",
   mistral: "Mistral",
   cohere: "Cohere",
+  venice: "Venice.ai",
   ollama: "Ollama",
   local: "Local",
 };
