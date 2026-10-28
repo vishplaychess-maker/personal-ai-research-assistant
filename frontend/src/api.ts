@@ -48,6 +48,7 @@ import type {
   Capability,
   OfficialMcpServer,
   OpenbotTaskStatus,
+  BrowserEmbeddability,
 } from "./types";
 import { getAccessToken, isTokenExpired, refreshAccessToken, getCsrfToken } from "./auth";
 import { apiUrl } from "./apiBase";
@@ -543,6 +544,15 @@ export const API = {
   getOpenbotTask(taskId: string) {
     return request<OpenbotTaskStatus>(
       `/api/agents/openbot/tasks/${encodeURIComponent(taskId)}`
+    );
+  },
+
+  // ── Built-in browser (V1 sandboxed iframe) ──────────────
+  // Header probe for X-Frame-Options / CSP frame-ancestors; turns blocked
+  // sites (google.com etc.) into the panel's friendly fallback screen.
+  checkBrowserEmbeddable(url: string) {
+    return request<BrowserEmbeddability>(
+      `/api/browser/embeddable?url=${encodeURIComponent(url)}`
     );
   },
 

@@ -87,6 +87,7 @@ from app.routes.setup import router as setup_router
 from app.routes.oauth import router as oauth_router
 from app.routes.desktop import router as desktop_router
 from app.routes.openbot import router as openbot_router  # Phase 1 — Autonomous Research Agent queue
+from app.routes.browser import router as browser_router  # Built-in browser — GET /api/browser/embeddable
 from app.services import access_guard, setup_service
 from app.static_mount import mount_frontend
 
@@ -1599,6 +1600,7 @@ app.include_router(setup_router)  # First-run setup - GET /api/setup/status, POS
 app.include_router(oauth_router)  # Subscription sign-in - /api/oauth/{provider}/start|status|refresh|account
 app.include_router(desktop_router)  # Desktop automation - /api/desktop/* (503 unless DESKTOP_AUTOMATION_ENABLED)
 app.include_router(openbot_router)  # OpenBot autonomous research queue - /api/agents/openbot/*
+app.include_router(browser_router)  # Built-in browser - GET /api/browser/embeddable
 
 
 @app.get("/health")

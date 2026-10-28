@@ -286,6 +286,12 @@ export interface OpenbotTaskStatus {
   created_at: string | null;
 }
 
+// Built-in browser (V1) — backend header probe for iframe framability
+export interface BrowserEmbeddability {
+  embeddable: boolean;
+  reason: string | null;
+}
+
 // Official MCP server from GET /api/mcp/registry (credentials never included)
 export interface OfficialMcpServer {
   id: string;

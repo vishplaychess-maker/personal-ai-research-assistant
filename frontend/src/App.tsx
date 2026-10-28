@@ -9,6 +9,7 @@ import { AppShell } from "./shell/AppShell";
 import { Header } from "./shell/Header";
 import { Inspector } from "./shell/Inspector";
 import { ChatArea } from "./ChatArea";
+import { BrowserPanel } from "./components/Browser/BrowserPanel";
 import { ApprovalDialog } from "./components/ApprovalDialog";
 import { CitationPopup } from "./CitationPopup";
 import { DocumentPanel } from "./DocumentPanel";
@@ -57,6 +58,10 @@ function App() {
   const openbotPollsRef = useRef<
     Array<{ taskId: string; messageId: number; intervalId: number; pollCount: number }>
   >([]);
+
+  // Built-in browser (V1) — sidebar Chat/Browser view toggle. Switching
+  // views never touches chat state; the ChatArea simply unmounts/remounts.
+  const [activeView, setActiveView] = useState<"chat" | "browser">("chat");
 
   // Citation popup state
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
@@ -388,6 +393,7 @@ function App() {
 
   const handleSelectSession = (id: number) => {
     setActiveSessionId(id);
+    setActiveView("chat"); // selecting a session always returns to the chat
     setChatError(null);
     loadMessages(id);
     loadDocuments(id);
@@ -815,6 +821,8 @@ function App() {
         loadingSessions={loadingSessions}
         health={health}
         onSelectSession={handleSelectSession}
+        activeView={activeView}
+        onActiveViewChange={setActiveView}
         onCreateSession={handleCreateSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
@@ -831,6 +839,9 @@ function App() {
         }
       >
 
+      {activeView === "browser" ? (
+        <BrowserPanel initialUrl="https://www.wikipedia.org" />
+      ) : (
       <ChatArea
         activeSession={activeSession}
         messages={messages}
@@ -888,6 +899,8 @@ function App() {
         autonomousMode={autonomousMode}
         onAutonomousModeChange={setAutonomousMode}
       />
+      )}
+
       </AppShell>
 
       {/* MP-3C3C — durable MCP approval dialog (only when a durable run parked) */}

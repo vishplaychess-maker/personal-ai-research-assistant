@@ -17,6 +17,7 @@ import {
   Moon,
   Settings as SettingsIcon,
   MessageSquare,
+  Globe,
   Loader2,
   Network,
   SquareTerminal,
@@ -83,6 +84,9 @@ interface SidebarProps {
   onOpenMediaGeneration?: () => void;
   /** Signed-in user's display name (from AuthContext). */
   userName?: string;
+  // Built-in browser (V1) — Chat/Browser view toggle in the sidebar body.
+  activeView?: "chat" | "browser";
+  onActiveViewChange?: (view: "chat" | "browser") => void;
 }
 
 export function Sidebar({
@@ -103,6 +107,8 @@ export function Sidebar({
   onOpenTerminal,
   onOpenMediaGeneration,
   userName,
+  activeView = "chat",
+  onActiveViewChange,
 }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -273,6 +279,36 @@ export function Sidebar({
           )}
         </div>
       </div>
+
+      {/* View toggle — Chat / Built-in Browser (V1) */}
+      {onActiveViewChange && (
+        <div className="flex gap-1 border-b border-white/10 px-2 py-2">
+          {(
+            [
+              { id: "chat" as const, label: "Chat", icon: MessageSquare },
+              { id: "browser" as const, label: "Browser", icon: Globe },
+            ]
+          ).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onActiveViewChange(id)}
+              aria-pressed={activeView === id}
+              title={label === "Browser" ? "Built-in browser" : "Back to chat"}
+              data-testid={`sidebar-view-${id}`}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-all",
+                activeView === id
+                  ? "bg-primary/10 text-primary"
+                  : "text-secondary hover:bg-white/5"
+              )}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* List */}
       <ScrollArea className="flex-1">
