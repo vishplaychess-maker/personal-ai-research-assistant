@@ -760,6 +760,13 @@ class Settings(BaseSettings):
     # bearer credential: never log it or echo it in an error message.
     tavily_api_key: str = ""
 
+    # ── Web scraper (crawl4ai) — capability executors ────────────
+    # Read by app/services/skill_executors/web_scraper.py. Hard wall-clock
+    # bound (seconds) for ONE crawl: crawl4ai gets this as the Playwright
+    # page-op timeout AND as an asyncio guard around crawler.arun(), so a hung
+    # target can never wedge the server past ~crawl4ai_timeout seconds.
+    crawl4ai_timeout: int = 30
+
     # ── Grok (xAI) — subscription sign-in + inference ─────────────
     # Two ways to use Grok: a pay-per-token API key on api.x.ai, or the OAuth
     # device-code flow below, which spends an existing SuperGrok / X Premium+
@@ -865,6 +872,8 @@ class Settings(BaseSettings):
             "research_max_redirects",
             "research_max_response_bytes",
             "research_max_extracted_chars",
+            # Web scraper (crawl4ai) — hard crawl wall-clock bound.
+            "crawl4ai_timeout",
             # Phase 1B.2R MP-3C3D5B — durable multi-agent artifact bounds
             # (int-valued only; the two float timeout/deadline fields, and
             # the ==3 / artifact-byte-cap consistency checks, are validated

@@ -21,6 +21,14 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
     },
     {
+        "id": "web_scraper",
+        "name": "Web Scraper",
+        "description": "Read and summarize full web pages as clean Markdown.",
+        "icon": "globe",
+        "enabled": True,
+        "kind": "capability",
+    },
+    {
         "id": "openbot_research",
         "kind": "capability",
         "name": "Autonomous Research (OpenBot)",

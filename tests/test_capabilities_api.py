@@ -20,12 +20,15 @@ from app.config import settings
 from tests.auth_helpers import auth_headers, register_and_login
 
 _CAPABILITY_IDS = {
-    "web_search", "code_executor", "file_reader",
+    "web_search", "web_scraper", "code_executor", "file_reader",
     "desktop_automation", "openbot_research", "github-mcp", "notion-mcp",
     "postgres-mcp",
 }
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
 _MCP_IDS = {"github-mcp", "notion-mcp", "postgres-mcp"}
+# web_scraper ships enabled (the Deep Dive scraper needs no API key); every
+# other capability stays opt-in.
+_ENABLED_DEFAULT_IDS = {"web_scraper"}
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +82,7 @@ def test_lists_static_catalog_with_disabled_defaults():
             }
             assert item["name"]
             assert item["description"]
-            assert item["enabled"] is False
+            assert item["enabled"] is (item["id"] in _ENABLED_DEFAULT_IDS)
             if item["id"] in _CONFIGURED_IDS:
                 assert item["config"] == {"permission_level": "auto_approve"}
             elif item["id"] in _MCP_IDS:

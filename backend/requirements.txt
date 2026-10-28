@@ -4,9 +4,21 @@ sqlalchemy==2.0.35
 # PostgreSQL driver — production deployments only. The dev SQLite setup does
 # not need it locally; the production image pulls it during build.
 psycopg2-binary==2.9.10
-pydantic==2.9.0
+# Bumped from 2.9.0 for crawl4ai (requires pydantic>=2.10). mcp 1.12.4 still
+# accepts pydantic>=2.8.0,<3.0.0, so this stays compatible with the mcp pin.
+pydantic==2.10.6
 pydantic-settings==2.5.2  # bumped from 2.5.0: mcp 1.12.4 requires pydantic-settings>=2.5.2
 httpx==0.27.2
+# ── Web scraper capability (crawl4ai) ────────────────────────────
+# Used by app/services/skill_executors/web_scraper.py ("Deep Dive" page fetch).
+# Imported lazily by the executor, so the web app runs without it until a
+# scrape is actually executed. 0.4.248 is the last of the >=0.4.0 line and the
+# only one whose httpx pin (httpx==0.27.2) exactly matches this project's
+# httpx pin. Newer litellm releases require openai>=2.8, which conflicts with
+# mem0ai's openai<1.110.0 floor, so litellm and openai are pinned here.
+crawl4ai==0.4.248
+litellm==1.74.15
+openai==1.109.1
 # ── Web search capability (Tavily) ───────────────────────────────
 # Used by app/services/skill_executors/web_search.py (Telegram routed tasks).
 # Imported lazily by the executor, so the web app runs without the extra cost

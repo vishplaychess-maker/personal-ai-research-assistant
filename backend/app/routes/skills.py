@@ -6,6 +6,7 @@ GET    /api/skills/{id}         — Fetch one skill (includes the L2 body)
 PUT    /api/skills/{id}         — Update a skill (owner-scoped)
 DELETE /api/skills/{id}         — Delete a skill (owner-scoped)
 POST   /api/skills/{id}/toggle  — Flip the enabled flag, return the new state
+POST   /api/skills/web_scraper  — Deep Dive: scrape one URL as clean Markdown
 """
 
 from datetime import datetime
@@ -16,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import User, UserSkill
+from app.models.models import SkillPreference, User, UserSkill
 from app.services.auth_service import get_current_user
 from app.services.cookie_service import require_csrf
 from app.services import user_skill_service
@@ -88,6 +89,76 @@ class BuiltinSkillResponse(BaseModel):
 class BuiltinSkillCatalogResponse(BaseModel):
     enabled: bool
     skills: List[BuiltinSkillResponse]
+
+
+# ── Deep Dive web scraper (crawl4ai) ─────────────────────────────
+# Cap for the LLM-visible markdown: a full page can be hundreds of thousands
+# of characters; past ~8k chars the cost of context dwarfs the marginal
+# information for the summarisation the agent then performs.
+MAX_SCRAPER_MARKDOWN_CHARS = 8000
+
+
+class WebScraperRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class WebScraperResponse(BaseModel):
+    success: bool
+    url: str
+    markdown: str
+    error: Optional[str]
+
+
+# NOTE: declared BEFORE the dynamic "/{skill_id}" route on purpose - FastAPI
+# matches in declaration order, so a later "/catalog" would be parsed as an
+# int path param and answered with 422.
+@router.post("/web_scraper", response_model=WebScraperResponse)
+async def run_web_scraper(
+    payload: WebScraperRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
+):
+    """Deep Dive: fetch one URL and return its full page as clean Markdown.
+
+    Gated on the user's ``web_scraper`` capability: the static catalog
+    enables it by default, a stored SkillPreference override wins. Failures
+    (invalid URL, timeout, 403 Forbidden, ...) answer ``success=false`` with a
+    user-safe ``error``; the markdown is truncated to
+    ``MAX_SCRAPER_MARKDOWN_CHARS`` so one scrape cannot flood the LLM context.
+    """
+    from app.services import capability_registry
+    from app.services.skill_executors.web_scraper import scrape_url
+
+    default = capability_registry.get_capability("web_scraper")
+    override = (
+        db.query(SkillPreference)
+        .filter(
+            SkillPreference.user_id == current_user.id,
+            SkillPreference.skill_id == "web_scraper",
+        )
+        .first()
+    )
+    enabled = bool(override.enabled if override is not None else default and default["enabled"])
+    if not enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="The Web Scraper capability is not enabled for this user",
+        )
+
+    result = await scrape_url(payload.url)
+    markdown = result.get("markdown") or ""
+    if len(markdown) > MAX_SCRAPER_MARKDOWN_CHARS:
+        markdown = (
+            markdown[:MAX_SCRAPER_MARKDOWN_CHARS]
+            + f"\n\n[Content truncated at {MAX_SCRAPER_MARKDOWN_CHARS} characters]"
+        )
+    return WebScraperResponse(
+        success=bool(result.get("success", False)),
+        url=str(result.get("url") or payload.url),
+        markdown=markdown,
+        error=result.get("error"),
+    )
 
 
 # NOTE: declared BEFORE the dynamic "/{skill_id}" route on purpose - FastAPI
