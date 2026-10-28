@@ -89,6 +89,7 @@ from app.routes.desktop import router as desktop_router
 from app.routes.openbot import router as openbot_router  # Phase 1 — Autonomous Research Agent queue
 from app.routes.browser import router as browser_router  # Built-in browser — GET /api/browser/embeddable
 from app.routes.custom_skills import router as custom_skills_router  # Custom skill marketplace - POST /api/skills/custom/{id}
+from app.routes.open_interpreter import router as open_interpreter_router  # Open Interpreter - /api/interpreter/* (503 unless installed)
 from app.services import access_guard, setup_service
 from app.static_mount import mount_frontend
 
@@ -1623,6 +1624,7 @@ app.include_router(desktop_router)  # Desktop automation - /api/desktop/* (503 u
 app.include_router(openbot_router)  # OpenBot autonomous research queue - /api/agents/openbot/*
 app.include_router(browser_router)  # Built-in browser - GET /api/browser/embeddable
 app.include_router(custom_skills_router)  # Custom skill marketplace - POST /api/skills/custom/{id}
+app.include_router(open_interpreter_router)  # Open Interpreter - /api/interpreter/* (403 until enabled, 503 unless installed)
 
 
 @app.get("/health")

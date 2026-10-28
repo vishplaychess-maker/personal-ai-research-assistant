@@ -91,7 +91,11 @@ const PERMISSION_LEVELS: {
 ];
 
 /** Capabilities whose execution is governed by a permission level. */
-const PERMISSION_CAPABILITIES = new Set(["code_executor", "desktop_automation"]);
+const PERMISSION_CAPABILITIES = new Set([
+  "code_executor",
+  "desktop_automation",
+  "open_interpreter",
+]);
 
 function permissionLevelOf(capability: Capability): PermissionValue {
   const raw = capability.config?.permission_level;
@@ -541,6 +545,22 @@ export function SkillsPanel() {
                           </p>
                         </div>
                       ) : null}
+                    </div>
+                  )}
+
+                  {capability.enabled && capability.id === "open_interpreter" && (
+                    <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
+                      <p className="text-[11px] text-amber-400">
+                        ⚠️ Open Interpreter allows the AI to execute code on your
+                        machine. Use with caution.
+                      </p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        In “Ask” mode proposed code is shown for your approval
+                        before anything runs. “Auto” runs safe code without
+                        asking; “Full access” runs everything with no
+                        confirmation. Requires the optional{" "}
+                        <code>open-interpreter</code> package on this machine.
+                      </p>
                     </div>
                   )}
 

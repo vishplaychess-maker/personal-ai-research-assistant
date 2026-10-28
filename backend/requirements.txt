@@ -87,3 +87,14 @@ google-generativeai==0.8.6
 # (backend/telegram_bot.py). Imported lazily inside start(), so the web app
 # never needs aiogram and its tests run without it.
 aiogram>=3.4.0
+# ── Open Interpreter (OPTIONAL code-execution backend) ───────────
+# NOT installed by default: app/services/open_interpreter_service.py imports
+# the `interpreter` package lazily and every endpoint answers 503 with install
+# instructions when it is absent — the app never breaks without it.
+# Deliberately NOT pinned here: it pulls its own litellm/openai versions that
+# conflict with this project's pins. Install manually (isolated venv ideal):
+#   pip install open-interpreter
+# License note: the Python package is AGPL-3.0. The actively maintained
+# upstream is the standalone Rust binary (`interpreter` CLI), installable via
+#   irm https://www.openinterpreter.com/install.ps1 | iex   (Windows)
+# which needs no Python dependencies and can be driven as a separate service.

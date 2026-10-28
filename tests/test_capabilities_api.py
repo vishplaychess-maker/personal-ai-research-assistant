@@ -21,10 +21,12 @@ from tests.auth_helpers import auth_headers, register_and_login
 
 _CAPABILITY_IDS = {
     "web_search", "web_scraper", "code_executor", "file_reader",
-    "desktop_automation", "openbot_research", "github-mcp", "notion-mcp",
-    "postgres-mcp",
+    "desktop_automation", "openbot_research", "open_interpreter",
+    "github-mcp", "notion-mcp", "postgres-mcp",
 }
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
+# Open Interpreter ships with the fail-safe Ask level instead of Auto.
+_ASK_LEVEL_IDS = {"open_interpreter"}
 _MCP_IDS = {"github-mcp", "notion-mcp", "postgres-mcp"}
 # web_scraper ships enabled (the Deep Dive scraper needs no API key); every
 # other capability stays opt-in.
@@ -87,6 +89,8 @@ def test_lists_static_catalog_with_disabled_defaults():
             assert item["enabled"] is (item["id"] in _ENABLED_DEFAULT_IDS)
             if item["id"] in _CONFIGURED_IDS:
                 assert item["config"] == {"permission_level": "auto_approve"}
+            elif item["id"] in _ASK_LEVEL_IDS:
+                assert item["config"] == {"permission_level": "ask_every_time"}
             elif item["id"] in _MCP_IDS:
                 assert item["kind"] == "mcp_server"
                 assert item["config"] == {"configured": False}

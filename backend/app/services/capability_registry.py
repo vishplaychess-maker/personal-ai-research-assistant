@@ -45,6 +45,19 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "config": {"permission_level": "auto_approve"},
     },
     {
+        "id": "open_interpreter",
+        "kind": "capability",
+        "name": "Open Interpreter (Code Execution)",
+        "description": (
+            "LLM-powered code execution on this machine via Open Interpreter. "
+            "Optional dependency — the app degrades gracefully when it is not "
+            "installed. Defaults to Ask: proposed code is shown for approval."
+        ),
+        "icon": "terminal",
+        "enabled": False,
+        "config": {"permission_level": "ask_every_time"},
+    },
+    {
         "id": "file_reader",
         "name": "File Reader",
         "description": "Open files from the workspace to summarize or extract text.",
