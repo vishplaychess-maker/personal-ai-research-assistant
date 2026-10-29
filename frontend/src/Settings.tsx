@@ -20,6 +20,7 @@ import { AgentDirectives } from "./AgentDirectives";
 import { SkillsTab } from "./SkillsTab";
 import { SkillsPanel } from "./components/Skills/SkillsPanel";
 import { SettingsSidebar, type SettingsTab } from "./components/Settings/SettingsSidebar";
+import { PluginsPanel } from "./components/Settings/PluginsPanel";
 import { GrokOAuthCard } from "./GrokOAuth";
 import { DesktopAutomation } from "./DesktopAutomation";
 
@@ -171,6 +172,13 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                 <div className="mt-8 border-t border-border/60 pt-8">
                   <SkillsTab />
                 </div>
+              </div>
+            )}
+
+            {/* ── Plugins ── */}
+            {activeTab === "plugins" && (
+              <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-8 sm:py-8">
+                <PluginsPanel onNavigate={setActiveTab} />
               </div>
             )}
 

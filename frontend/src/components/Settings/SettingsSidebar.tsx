@@ -2,6 +2,7 @@ import {
   BookOpen,
   Calendar,
   Monitor,
+  Puzzle,
   Server,
   SlidersHorizontal,
   Sparkles,
@@ -16,6 +17,7 @@ export type SettingsTab =
   | "mcp"
   | "directives"
   | "skills"
+  | "plugins"
   | "desktop";
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
@@ -24,6 +26,7 @@ const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "mcp", label: "MCP Servers", icon: Server },
   { id: "directives", label: "Lessons Learned", icon: BookOpen },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "desktop", label: "Desktop", icon: Monitor },
 ];
 
