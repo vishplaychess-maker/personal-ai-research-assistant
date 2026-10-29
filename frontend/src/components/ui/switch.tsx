@@ -17,8 +17,10 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        checked ? "bg-primary" : "bg-muted",
+        "relative h-6 w-11 shrink-0 rounded-full border transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        checked
+          ? "border-transparent bg-gradient-to-r from-primary to-fuchsia-500 shadow-[0_2px_10px_rgba(99,102,241,0.35)]"
+          : "border-border/70 bg-muted/80 hover:bg-muted",
         disabled && "cursor-not-allowed opacity-50",
         className
       )}
@@ -26,8 +28,8 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
     >
       <span
         className={cn(
-          "absolute top-0.5 h-4 w-4 rounded-full bg-background shadow-sm transition-all",
-          checked ? "left-[22px]" : "left-0.5"
+          "absolute left-[3px] top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow-md transition-transform duration-300",
+          checked ? "translate-x-[20px]" : "translate-x-0"
         )}
       />
     </button>

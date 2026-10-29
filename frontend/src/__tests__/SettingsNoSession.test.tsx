@@ -62,8 +62,11 @@ describe("Settings with no active session", () => {
     render(<ThemeProvider><App /></ThemeProvider>);
     const button = await screen.findByRole("button", { name: /settings/i });
     fireEvent.click(button);
-    // The modal itself must appear: the Providers tab and its actionable control.
-    expect(await screen.findByRole("tab", { name: /providers/i })).toBeTruthy();
-    expect(screen.getByText(/Add Provider/i)).toBeTruthy();
+    // The split-view modal opens on Skills; switching to Providers must expose
+    // its actionable control, proving Settings works before a session exists.
+    const skillsTab = await screen.findByRole("tab", { name: /skills/i });
+    expect(skillsTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: /providers/i }));
+    expect(await screen.findByText(/Add Provider/i)).toBeTruthy();
   });
 });

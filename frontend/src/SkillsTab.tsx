@@ -6,7 +6,15 @@
  * Disabled skills are excluded from prompts entirely.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, Sparkles, CheckCircle2, CircleDashed } from "lucide-react";
+import {
+  BookOpen,
+  CheckCircle2,
+  CircleDashed,
+  Pencil,
+  Plus,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { API } from "./api";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -179,27 +187,35 @@ export function SkillsTab() {
       )}
 
       {builtinsEnabled && builtins.length > 0 && (
-        <div data-testid="builtin-skills" className="mb-5">
-          <div className="mb-1 flex items-center gap-2">
-            <h3 className="text-sm font-medium">Built-in skills</h3>
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              {builtins.length} installed
+        <div data-testid="builtin-skills" className="mb-8">
+          <div className="mb-3 flex items-start gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-violet-500 ring-1 ring-violet-500/20 dark:text-violet-300">
+              <BookOpen className="h-4 w-4" />
             </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold tracking-tight">Built-in skills</h3>
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  {builtins.length} installed
+                </span>
+              </div>
+              <p className="mt-0.5 max-w-2xl text-xs text-muted-foreground">
+                Shipped with Thunder AI. They are listed in the agent
+                available-skills index, and their instructions load on demand when
+                a task matches one. Read-only here — they cannot be edited or
+                disabled.
+              </p>
+            </div>
           </div>
-          <p className="mb-2 text-xs text-muted-foreground">
-            Shipped with Thunder AI. They are listed in the agent available-skills
-            index, and their instructions load on demand when a task matches one.
-            Read-only here - they cannot be edited or disabled.
-          </p>
-          <div className="grid max-h-[30vh] gap-2 overflow-y-auto pr-1">
+          <div className="grid gap-2">
             {builtins.map((b) => (
               <div
                 key={b.name}
                 data-testid="builtin-skill"
-                className="flex items-start gap-3 rounded-xl border border-dashed p-3"
+                className="flex items-start gap-3 rounded-2xl border border-border/60 bg-card/40 p-3.5 transition-colors hover:bg-secondary/30"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-mono text-sm font-medium">{b.name}</span>
                     <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                       Built-in
@@ -210,7 +226,9 @@ export function SkillsTab() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{b.description}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {b.description}
+                  </p>
                 </div>
               </div>
             ))}
@@ -218,29 +236,31 @@ export function SkillsTab() {
         </div>
       )}
 
-      <h3 className="mb-2 text-sm font-medium">Your skills</h3>
+      <h3 className="mb-2 text-base font-semibold tracking-tight">Your skills</h3>
 
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
       {loading ? (
         <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
       ) : skills.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-8 text-center">
-          <Sparkles className="h-8 w-8 text-muted-foreground/60" />
-          <p className="text-sm text-muted-foreground">
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/30 px-6 py-10 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/20">
+            <Sparkles className="h-5 w-5" />
+          </span>
+          <p className="max-w-md text-sm text-muted-foreground">
             No custom skills yet. Create one and it will be offered to the agent
             — skills are injected into agent prompts when relevant, and the full
             instructions load on demand.
           </p>
         </div>
       ) : (
-        <div className="grid max-h-[40vh] gap-2 overflow-y-auto pr-1">
+        <div className="grid gap-2">
           {skills.map((s) => (
             <div
               key={s.id}
               className={cn(
-                "flex items-start gap-3 rounded-xl border p-3",
-                s.enabled && "border-primary/40 bg-primary/5"
+                "flex items-start gap-3 rounded-2xl border border-border/60 bg-card/40 p-3.5 transition-colors hover:bg-secondary/30",
+                s.enabled && "border-primary/40 bg-primary/[0.06]"
               )}
             >
               <div className="min-w-0 flex-1">
