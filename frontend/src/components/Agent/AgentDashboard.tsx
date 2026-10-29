@@ -15,6 +15,7 @@ import {
   ListTree,
   Loader2,
   Play,
+  Sparkles,
   Square,
   Terminal,
   Wrench,
@@ -38,6 +39,7 @@ const EVENT_META: Record<
   plan: { label: "Plan", icon: ListTree, className: "text-indigo-400" },
   tool: { label: "Using tool", icon: Wrench, className: "text-amber-400" },
   output: { label: "Result", icon: Terminal, className: "text-emerald-400" },
+  synthesis: { label: "Synthesizing", icon: Sparkles, className: "text-violet-400" },
   warning: { label: "Warning", icon: AlertTriangle, className: "text-destructive" },
   status: { label: "Status", icon: Activity, className: "text-muted-foreground" },
 };

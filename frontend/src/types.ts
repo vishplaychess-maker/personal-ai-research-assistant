@@ -312,7 +312,7 @@ export interface OpenbotTaskStatus {
 // Live orchestrator frame from GET /api/agents/openbot/tasks/{id}/events (SSE)
 export interface AgentEvent {
   seq: number;
-  type: "thinking" | "plan" | "tool" | "output" | "warning" | "status";
+  type: "thinking" | "plan" | "tool" | "output" | "synthesis" | "warning" | "status";
   agent: string;
   message: string;
   tool: string | null;

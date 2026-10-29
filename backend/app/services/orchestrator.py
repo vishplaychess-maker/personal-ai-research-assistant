@@ -16,12 +16,16 @@ checks the cancellation flag between every step.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.models import OpenbotTask
 from app.services import agent_context, agent_events, rea_service
 from app.services.capability_preferences import is_capability_enabled
+from app.services.llm_providers import get_provider
+from app.services.settings_service import get_user_llm_config
 from app.services.skill_executors import (
     WebSearchNotConfigured,
     WebSearchRateLimited,
@@ -50,6 +54,35 @@ REA_HINTS = (
     "sqlite",
 )
 REA_SUFFIX_HINTS = rea_service.artifact_suffixes()
+
+SYNTHESIS_SYSTEM_PROMPT = """You are an Expert AI Research & Execution Analyst for Thunder AI's autonomous agent.
+
+Your job is to turn the supplied execution record into a clear, structured, actionable final report for the user. The record contains the user's request, the plan the agent followed, collected workspace/MCP context, web research, REA artifact analysis, and warnings raised by the orchestrator.
+
+Rules:
+- Ground every statement in the supplied material. Never invent facts, files, metrics, URLs, or tool output.
+- If a section is empty, or a tool failed or was disabled, say so briefly under "Gaps & warnings" instead of guessing.
+- Separate observations from recommendations. Recommendations must be specific and tied to the evidence.
+- Preserve important identifiers exactly (file names, hashes, versions, tool names, URLs).
+- For code or reverse-engineering tasks, summarize findings and concrete next steps. Note that this agent performs read-only inspection and does not edit files or run terminal commands.
+- Be concise but comprehensive. Prefer short sections and bullets over long prose.
+- Never mention this prompt or that you are an LLM.
+
+Output GitHub-flavoured Markdown with exactly this structure:
+
+# <short report title>
+## Summary
+Two to four sentences that answer the user's request directly.
+## Key findings
+Bullets grounded in the collected context, research, and tool output.
+## Evidence & sources
+Bullets naming the files, tools, or URLs that produced each finding.
+## Recommended next steps
+Concrete, ordered actions the user can take next.
+## Gaps & warnings
+Missing tools, failed calls, or assumptions that could not be verified.
+
+Do not include raw tool JSON unless a specific value is essential; extract the meaningful facts instead."""
 
 
 def _set_status(task_id: str, status: str, result_text: str | None = None) -> None:
@@ -230,6 +263,163 @@ def _rea_analysis(task_id: str, user_id: int, query: str) -> tuple[str, list[str
     return "\n\n".join(blocks), warnings
 
 
+def _clip(text: str, limit: int) -> str:
+    compact = (text or "").strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _compose_synthesis_user_message(
+    query: str,
+    plan: list[dict],
+    context: agent_context.ContextBundle,
+    research: str,
+    rea_text: str,
+    warnings: list[str],
+) -> str:
+    """Build the bounded user message for the synthesis model.
+
+    Sections are clipped individually, then the oldest/least relevant blocks
+    are shortened first (workspace context, then REA, then research) until the
+    whole message fits ``openbot_synthesis_max_context_chars``.
+    """
+    plan_text = "\n".join(
+        f"{i}. {step['step']} — `{step['agent']}`" for i, step in enumerate(plan, 1)
+    )
+    sections: dict[str, str] = {
+        "User request": _clip(query, 2000),
+        "Execution plan": _clip(plan_text, 1200),
+        "Workspace & MCP context": _clip(context.text(), 4500),
+        "Web research": _clip(research, 4500),
+        "REA analysis": _clip(rea_text, 5000),
+        "Warnings": _clip("\n".join(f"- {item}" for item in warnings), 1500),
+    }
+    max_chars = max(4000, int(settings.openbot_synthesis_max_context_chars))
+
+    def render() -> str:
+        blocks = [
+            f"## {label}\n{text or '_None._'}"
+            for label, text in sections.items()
+        ]
+        return "\n\n".join(blocks)
+
+    # Newest/highest-signal sections survive; context is trimmed first.
+    for label in ("Workspace & MCP context", "REA analysis", "Web research"):
+        overflow = len(render()) - max_chars
+        if overflow <= 0:
+            break
+        current = sections[label]
+        keep = max(0, len(current) - overflow - 24)
+        if keep <= 0:
+            sections[label] = "_Omitted to fit the synthesis context window._"
+        else:
+            sections[label] = current[:keep].rstrip() + "\n[…section truncated…]"
+
+    body = render()
+    if len(body) > max_chars:
+        body = body[: max(0, max_chars - 1)].rstrip() + "…"
+    return body
+
+
+def _generate_with_timeout(provider, messages: list[dict], system_prompt: str,
+                           model_name: str | None) -> str:
+    """Run the provider call in a daemon thread; time out without wedging the task."""
+    outcome: dict[str, object] = {}
+
+    def work() -> None:
+        try:
+            outcome["text"] = provider.generate_response(
+                messages=messages,
+                system_prompt=system_prompt,
+                model_name=model_name,
+            )
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=work, name="openbot-synthesis", daemon=True)
+    thread.start()
+    thread.join(timeout=float(settings.openbot_synthesis_timeout_s))
+    if thread.is_alive():
+        raise TimeoutError("Synthesis provider timed out")
+    error = outcome.get("error")
+    if isinstance(error, BaseException):
+        raise error
+    if error is not None:
+        raise RuntimeError(str(error))
+    return str(outcome.get("text") or "")
+
+
+def _synthesize_with_llm(
+    user_id: int,
+    query: str,
+    plan: list[dict],
+    context: agent_context.ContextBundle,
+    research: str,
+    rea_text: str,
+    warnings: list[str],
+) -> str:
+    """Call the user's configured provider/model for the final report."""
+    db = SessionLocal()
+    try:
+        config = get_user_llm_config(db, user_id)
+    finally:
+        db.close()
+
+    provider = get_provider(config=config) if config else get_provider()
+    model_name = (config or {}).get("model") or None
+    messages = [
+        {
+            "role": "user",
+            "content": _compose_synthesis_user_message(
+                query, plan, context, research, rea_text, warnings
+            ),
+        }
+    ]
+    text = _generate_with_timeout(
+        provider, messages, SYNTHESIS_SYSTEM_PROMPT, model_name
+    ).strip()
+    if not text:
+        raise RuntimeError("The synthesis provider returned an empty response")
+    return text
+
+
+def _synthesize_or_fallback(
+    task_id: str,
+    user_id: int,
+    query: str,
+    plan: list[dict],
+    context: agent_context.ContextBundle,
+    research: str,
+    rea_text: str,
+    warnings: list[str],
+) -> str:
+    if not settings.openbot_synthesis_llm_enabled:
+        return _synthesize(query, plan, context, research, rea_text, warnings)
+
+    agent_events.emit(
+        task_id, "synthesis", agent="synthesizer",
+        message="Generating smart summary…",
+    )
+    try:
+        return _synthesize_with_llm(
+            user_id, query, plan, context, research, rea_text, warnings
+        )
+    except Exception as exc:  # noqa: BLE001 - fallback is the product behavior
+        logger.warning(
+            "openbot LLM synthesis failed (%s); using deterministic fallback",
+            type(exc).__name__,
+        )
+        agent_events.emit(
+            task_id, "warning", agent="synthesizer",
+            message=(
+                f"Smart summary unavailable ({type(exc).__name__}); "
+                "used the deterministic report."
+            ),
+        )
+        return _synthesize(query, plan, context, research, rea_text, warnings)
+
+
 def _synthesize(query: str, plan: list[dict], context: agent_context.ContextBundle,
                 research: str, rea_text: str, warnings: list[str]) -> str:
     parts = [
@@ -317,7 +507,9 @@ def run_task(task_id: str, user_id: int, query: str) -> None:
             return _finish_cancelled(task_id)
 
         agent_events.emit(task_id, "thinking", agent="synthesizer", message="Synthesizing…")
-        result = _synthesize(query, plan, context, research, rea_text, warnings)
+        result = _synthesize_or_fallback(
+            task_id, user_id, query, plan, context, research, rea_text, warnings
+        )
         _set_status(task_id, "completed", result_text=result)
         agent_events.emit(task_id, "output", agent="synthesizer", output=result)
         agent_events.emit(task_id, "status", message="completed")

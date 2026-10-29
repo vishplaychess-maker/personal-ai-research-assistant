@@ -81,6 +81,10 @@ TEST_DB_PATH = _configure_test_database()
 # harness must never do that (individual tests mock the Mem0 seams instead).
 os.environ["MEM0_WARMUP_ENABLED"] = "false"
 
+# OpenBot's LLM synthesis must never hit a real provider during the suite.
+# Synthesis-specific tests opt back in and mock the provider.
+os.environ["OPENBOT_SYNTHESIS_LLM_ENABLED"] = "false"
+
 
 def assert_test_database_is_isolated() -> None:
     """Fail fast when the engine would touch the repo's real database.
