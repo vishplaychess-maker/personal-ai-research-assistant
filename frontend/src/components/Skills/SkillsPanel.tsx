@@ -2,9 +2,9 @@
  * SkillsPanel — capability grid for Settings > Skills.
  *
  * Phase 2: preferences are stored per user via /api/capabilities (the static
- * catalog lives on the server). Execution is still not wired — the panel says
- * so — this only persists the enabled flag and, for executable capabilities,
- * the permission level (ask / auto / full).
+ * catalog lives on the server). OpenBot and REA read execution honor these
+ * flags; the remaining executable capabilities still persist the flag and the
+ * permission level (ask / auto / full) for their integrations.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -316,8 +316,8 @@ export function SkillsPanel() {
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             Turn individual capabilities on or off. Executable capabilities also
-            take a permission level; wiring is still in progress, and changes are
-            saved to your account.
+            take a permission level. Changes are saved to your account and used
+            by the agent where the integration is available.
           </p>
         </div>
         <div className="relative w-full shrink-0 sm:w-56">

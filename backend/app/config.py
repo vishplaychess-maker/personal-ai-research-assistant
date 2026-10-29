@@ -207,6 +207,20 @@ class Settings(BaseSettings):
     mcp_call_timeout_s: int = 30
     mcp_discovery_timeout_s: int = 20
 
+    # ── REA reverse-engineering MCP (opt-in) ─────────────
+    # When on, the OpenBot orchestrator may call the local REA MCP server
+    # (rea-agents) for read-only artifact analysis. Every path argument is
+    # confined to workspace_dir; only the read-only allowlist in
+    # app.services.rea_service is reachable. Off by default: with this false
+    # the orchestrator records a warning and never spawns the server.
+    rea_mcp_enabled: bool = False
+    # Empty -> auto-detect the `rea` shim on PATH. An explicit command is
+    # useful for packaged installs; `rea_mcp_args` is shlex-split.
+    rea_mcp_command: str = ""
+    rea_mcp_args: str = "mcp"
+    rea_mcp_timeout_s: int = 60
+    rea_max_output_chars: int = 4000
+
     # ── Approval gateway (Phase 1B.2) ────────────────────
     # Required by default for enabled MCP execution: when enable_mcp_tool is on
     # and this is true, MCP calls route through the trusted approval gateway
@@ -1061,6 +1075,14 @@ class Settings(BaseSettings):
                     )
         if self.grok_oauth_poll_interval_s < 1:
             raise ValueError("grok_oauth_poll_interval_s must be at least 1 second")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rea_mcp(self) -> "Settings":
+        if not 5 <= self.rea_mcp_timeout_s <= 300:
+            raise ValueError("rea_mcp_timeout_s must be between 5 and 300 seconds")
+        if not 500 <= self.rea_max_output_chars <= 20000:
+            raise ValueError("rea_max_output_chars must be between 500 and 20000")
         return self
 
     @model_validator(mode="after")

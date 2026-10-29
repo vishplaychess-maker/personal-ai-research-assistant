@@ -11,50 +11,25 @@ stays responsive. The whole pipeline is asynchronous by construction:
   and it filters on ``user_id`` so a task id belonging to another account is
   indistinguishable from a nonexistent one (no existence leak).
 
-Phase 1 uses a mock/local execution path: the worker sleeps for a short,
-configurable delay (default 5 seconds) and writes a deterministic summary.
-The row schema and the status contract stay identical when the real agent
-lands behind this seam.
+The worker runs ``orchestrator.run_task``: plan -> read-only context (workspace,
+git, enabled MCP providers) -> optional web research -> deterministic synthesis.
+Progress frames are published to an in-memory event bus for the SSE route.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-import time
 import uuid
 
 from app.database import SessionLocal
 from app.models.models import OpenbotTask
+from app.services import agent_events, orchestrator
 
 logger = logging.getLogger(__name__)
 
-#: Simulated agent runtime for the Phase 1 mock execution path. Read at
-#: worker execution time, so tests can shrink it (monkeypatch this constant).
-MOCK_COMPLETION_SECONDS = 5.0
-
 #: The closed status set persisted in ``openbot_tasks.status``.
-VALID_STATUSES = ("pending", "running", "completed", "failed")
-
-# Phase 1 mock output — a fixed, query-independent placeholder summary. The
-# real agent will replace this; deliberately not including the raw query text
-# so it can never be mistaken for authoritative research.
-_MOCK_SUMMARY = """## Autonomous Research Summary
-
-**Status:** Phase 1 mock execution — the autonomous agent runtime is not yet
-wired in, so this is a placeholder result proving the task queue round-trip.
-
-**What happened:**
-1. Your request was accepted and queued (`pending`).
-2. An isolated worker picked it up and marked it `running`.
-3. After the simulated research interval the task was marked `completed`
-   and this summary was persisted.
-
-**What lands next (Phase 2):** the isolated OpenBot agent runtime — real
-multi-step planning, tool use, and sourced synthesis — will execute inside
-this exact same status contract and this same row, so today's polling UI and
-API need no changes.
-"""
+VALID_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 
 
 def start_research_task(user_id: int, query: str) -> str:
@@ -82,7 +57,7 @@ def start_research_task(user_id: int, query: str) -> str:
     finally:
         db.close()
 
-    _spawn_mock_worker(task_id, user_id)
+    _spawn_worker(task_id, user_id, query)
     return task_id
 
 
@@ -116,52 +91,39 @@ def get_task_status(task_id: str, user_id: int) -> dict | None:
         db.close()
 
 
-# ── Phase 1 mock execution path ─────────────────────────────
+# ── execution path ──────────────────────────────────────────
 
 
-def _spawn_mock_worker(task_id: str, user_id: int) -> None:
-    """Hand the task to a short-lived daemon thread (Celery-free local path).
+def _spawn_worker(task_id: str, user_id: int, query: str) -> None:
+    """Run the orchestrator on a daemon thread (Celery-free local worker).
 
-    Daemon threads keep a test/dev process free-exiting; the durable,
-    acknowledged queue becomes the run engine in a later phase.
+    The HTTP response never waits for the pipeline. Progress frames go to the
+    in-memory event bus; the DB row remains the durable status/result source.
     """
     thread = threading.Thread(
-        target=_run_mock_research,
-        args=(task_id, user_id),
-        name=f"openbot-mock-{task_id[:8]}",
+        target=orchestrator.run_task,
+        args=(task_id, user_id, query),
+        name=f"openbot-{task_id[:8]}",
         daemon=True,
     )
     thread.start()
 
 
-def _set_status(task_id: str, status: str, result_text: str | None = None) -> None:
-    db = SessionLocal()
-    try:
-        task = (
-            db.query(OpenbotTask)
-            .filter(OpenbotTask.task_id == task_id)
-            .first()
-        )
-        if task is None:
-            return
-        task.status = status
-        if result_text is not None:
-            task.result_text = result_text
-        db.commit()
-    except Exception:  # noqa: BLE001 - a mock worker must never crash the app
-        db.rollback()
-        logger.exception("openbot mock worker could not set status=%s", status)
-    finally:
-        db.close()
+def get_task_events(
+    task_id: str, user_id: int, since: int = 0
+) -> list[dict] | None:
+    """Progress frames for an owned task, or ``None`` for a 404."""
+    if get_task_status(task_id, user_id) is None:
+        return None
+    return agent_events.events_since(task_id, since)
 
 
-def _run_mock_research(task_id: str, user_id: int) -> None:
-    """pending -> running -> (sleep) -> completed with a mock summary."""
-    _set_status(task_id, "running")
-    try:
-        delay = max(0.0, float(MOCK_COMPLETION_SECONDS))
-    except (TypeError, ValueError):
-        delay = MOCK_COMPLETION_SECONDS
-    time.sleep(delay)
-    _set_status(task_id, "completed", result_text=_MOCK_SUMMARY)
-    logger.info("openbot task %s completed (mock, %.1fs)", task_id, delay)
+def cancel_task(task_id: str, user_id: int) -> dict | None:
+    """Request cancellation; the worker stops at its next checkpoint."""
+    status = get_task_status(task_id, user_id)
+    if status is None:
+        return None
+    if status["status"] in ("completed", "failed", "cancelled"):
+        return status
+    agent_events.request_cancel(task_id)
+    return status

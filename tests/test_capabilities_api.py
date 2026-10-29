@@ -22,7 +22,7 @@ from tests.auth_helpers import auth_headers, register_and_login
 _CAPABILITY_IDS = {
     "web_search", "web_scraper", "code_executor", "file_reader",
     "desktop_automation", "openbot_research", "open_interpreter",
-    "github-mcp", "notion-mcp", "postgres-mcp",
+    "rea_tools", "github-mcp", "notion-mcp", "postgres-mcp",
 }
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
 # Open Interpreter ships with the fail-safe Ask level instead of Auto.

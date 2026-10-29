@@ -107,11 +107,18 @@ async def _discover_async(cfg: MCPServerCfg) -> list[dict]:
     return await _with_session(cfg, go)
 
 
-async def _call_async(cfg: MCPServerCfg, tool: str, arguments: dict) -> tuple[str, bool]:
+async def _call_async(
+    cfg: MCPServerCfg,
+    tool: str,
+    arguments: dict,
+    timeout_s: float | None = None,
+) -> tuple[str, bool]:
     async def go(session: ClientSession) -> tuple[str, bool]:
         res = await session.call_tool(
             tool, arguments or {},
-            read_timeout_seconds=timedelta(seconds=settings.mcp_call_timeout_s),
+            read_timeout_seconds=timedelta(
+                seconds=timeout_s if timeout_s is not None else settings.mcp_call_timeout_s
+            ),
         )
         parts = []
         for block in getattr(res, "content", []) or []:
@@ -129,8 +136,13 @@ def discover_tools(cfg: MCPServerCfg) -> list[dict]:
     return run_coro_sync(lambda: _discover_async(cfg))
 
 
-def call_tool(cfg: MCPServerCfg, tool: str, arguments: dict) -> tuple[str, bool]:
-    return run_coro_sync(lambda: _call_async(cfg, tool, arguments))
+def call_tool(
+    cfg: MCPServerCfg,
+    tool: str,
+    arguments: dict,
+    timeout_s: float | None = None,
+) -> tuple[str, bool]:
+    return run_coro_sync(lambda: _call_async(cfg, tool, arguments, timeout_s))
 
 
 if __name__ == "__main__":

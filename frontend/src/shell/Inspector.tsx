@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Blocks, Database, FileCode, Loader2, RefreshCw, X } from "lucide-react";
+import { Activity, Blocks, Bot, Database, FileCode, Loader2, RefreshCw, X } from "lucide-react";
 import { API } from "../api";
+import { AgentDashboard } from "../components/Agent/AgentDashboard";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -26,10 +27,11 @@ import { cn } from "../lib/utils";
  * Code canvas : /api/desktop/tree + /api/desktop/read, and a clear "disabled"
  *               state when the server reports desktop automation off.
  */
-type Tab = "trace" | "mcp" | "canvas";
+type Tab = "trace" | "agent" | "mcp" | "canvas";
 
 const TABS: { id: Tab; label: string; icon: typeof Activity }[] = [
   { id: "trace", label: "Execution", icon: Activity },
+  { id: "agent", label: "Agent", icon: Bot },
   { id: "mcp", label: "MCP & Vector DB", icon: Database },
   { id: "canvas", label: "Code Canvas", icon: FileCode },
 ];
@@ -236,6 +238,10 @@ export function Inspector({
               No agent frames for this turn. Simple answers produce none.
             </p>
           )
+        ) : null}
+
+        {tab === "agent" ? (
+          <AgentDashboard turnMeta={turnMeta} />
         ) : null}
 
         {tab === "mcp" ? (

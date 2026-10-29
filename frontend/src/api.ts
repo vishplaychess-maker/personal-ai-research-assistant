@@ -48,6 +48,7 @@ import type {
   Capability,
   OfficialMcpServer,
   OpenbotTaskStatus,
+  AgentEvent,
   BrowserEmbeddability,
   CustomSkillRunResult,
 } from "./types";
@@ -557,6 +558,59 @@ export const API = {
     return request<OpenbotTaskStatus>(
       `/api/agents/openbot/tasks/${encodeURIComponent(taskId)}`
     );
+  },
+  cancelOpenbotTask(taskId: string) {
+    return request<OpenbotTaskStatus>(
+      `/api/agents/openbot/tasks/${encodeURIComponent(taskId)}/cancel`,
+      { method: "POST" }
+    );
+  },
+  /** Tail the task's SSE progress frames using a Bearer-authenticated fetch. */
+  async streamOpenbotEvents(
+    taskId: string,
+    onEvent: (event: AgentEvent) => void,
+    options: { signal?: AbortSignal; since?: number } = {}
+  ): Promise<void> {
+    const token = await getValidToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const since = options.since ?? 0;
+    const res = await fetch(
+      apiUrl(
+        `/api/agents/openbot/tasks/${encodeURIComponent(taskId)}/events?since=${since}`
+      ),
+      { headers, credentials: "include", signal: options.signal }
+    );
+    if (!res.ok) {
+      throw new Error(res.status === 403 ? "OpenBot is not enabled" : "Event stream failed");
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("Event stream is unavailable");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("");
+        if (data) {
+          try {
+            onEvent(JSON.parse(data) as AgentEvent);
+          } catch {
+            // ignore a malformed frame; a live stream must not die on it
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
   },
 
   // ── Built-in browser (V1 sandboxed iframe) ──────────────

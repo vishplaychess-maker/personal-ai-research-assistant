@@ -65,6 +65,18 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
     },
     {
+        "id": "rea_tools",
+        "kind": "capability",
+        "name": "REA Reverse Engineering",
+        "description": (
+            "Analyze binaries, packages, and SQLite/WASM artifacts in the "
+            "workspace with the local REA MCP server. Read-only: tools are "
+            "allowlisted and every path is confined to the workspace."
+        ),
+        "icon": "terminal",
+        "enabled": False,
+    },
+    {
         "id": "desktop_automation",
         "name": "Desktop Automation",
         "description": "Read and write workspace files and run sandboxed commands on this computer.",

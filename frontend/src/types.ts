@@ -295,12 +295,29 @@ export interface CustomSkillRunResult {
 }
 
 // OpenBot Autonomous Research Agent (Phase 1 task queue)
-export type OpenbotTaskStatusValue = "pending" | "running" | "completed" | "failed";
+export type OpenbotTaskStatusValue =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
 export interface OpenbotTaskStatus {
   task_id: string;
   status: OpenbotTaskStatusValue;
   result_text: string | null;
   created_at: string | null;
+}
+
+// Live orchestrator frame from GET /api/agents/openbot/tasks/{id}/events (SSE)
+export interface AgentEvent {
+  seq: number;
+  type: "thinking" | "plan" | "tool" | "output" | "warning" | "status";
+  agent: string;
+  message: string;
+  tool: string | null;
+  output: string | null;
+  at: number;
 }
 
 // Built-in browser (V1) — backend header probe for iframe framability
