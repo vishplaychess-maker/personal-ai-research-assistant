@@ -8,6 +8,7 @@ DELETE /api/documents/{document_id}          — Delete a document + chunks + ve
 """
 
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -37,6 +38,7 @@ import app.services.embeddings_client as embeddings_client
 from app.services.chromadb_client import add_chunks, delete_chunks, delete_collection
 
 router = APIRouter(tags=["documents"])
+logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────
 
@@ -256,8 +258,13 @@ async def upload_document(
                     ids=[cid],
                     metadatas=[chroma_metadatas[i]],
                 )
-        except Exception:
-            pass  # Non-critical update, chunks are already indexed
+        except Exception as exc:  # noqa: BLE001 - retrieval has a DB fallback
+            logger.warning(
+                "Document %s: ChromaDB chunk metadata update failed (%s); "
+                "retrieval will fall back to SQLite",
+                doc.id,
+                type(exc).__name__,
+            )
 
         # Knowledge graph: extract entities from the document (fire-and-forget,
         # own thread + session — never blocks or fails the upload).
@@ -288,11 +295,19 @@ async def upload_document(
 
     except Exception as exc:
         db.rollback()
-        # Mark document as failed
+        # Mark document as failed and keep a user-visible reason.
         doc.status = DocumentStatus.failed.value
         doc.error_message = str(exc)[:500]
         db.commit()
         db.refresh(doc)
+        logger.warning(
+            "Document %s (%s, %s) processing failed (%s): %s",
+            doc.id,
+            doc.filename,
+            doc.content_type or "unknown",
+            type(exc).__name__,
+            str(exc)[:200],
+        )
 
         return UploadResponse(
             document=DocumentResponse.model_validate(doc),

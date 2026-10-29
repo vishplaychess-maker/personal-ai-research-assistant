@@ -128,7 +128,7 @@ interface ChatAreaProps {
 
   input: string;
   onInputChange: (value: string) => void;
-  onSend: (imageUrl?: string) => void;
+  onSend: (imageUrl?: string, imageContext?: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   inputRef: React.RefObject<HTMLTextAreaElement> | React.MutableRefObject<HTMLTextAreaElement | null>;
 
@@ -175,7 +175,7 @@ interface ChatAreaProps {
 
   // Local Vision (ZERO API cost) — the raw File is handed up so the app can
   // describe it via the local vision route (bounded notice on failure).
-  onImageAttached?: (file: File) => void;
+  onImageAttached?: (file: File) => Promise<string | null> | string | null | void;
 
   // Tool approval (MCP / terminal)
   pendingToolApproval?: { tool: string; args: any; server?: string } | null;
@@ -258,6 +258,7 @@ export function ChatArea({
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);  // Base64 image data URL
+  const [attachedImageContext, setAttachedImageContext] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const [providerRefreshKey, setProviderRefreshKey] = useState(0);
@@ -388,7 +389,14 @@ export function ChatArea({
     const reader = new FileReader();
     reader.onload = () => {
       setAttachedImage(reader.result as string);
-      onImageAttached?.(file);
+      const analysis = onImageAttached?.(file);
+      if (analysis instanceof Promise) {
+        analysis
+          .then((context) => setAttachedImageContext(context || null))
+          .catch(() => setAttachedImageContext(null));
+      } else {
+        setAttachedImageContext(analysis || null);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -624,7 +632,10 @@ export function ChatArea({
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => setAttachedImage(null)}
+                          onClick={() => {
+                            setAttachedImage(null);
+                            setAttachedImageContext(null);
+                          }}
                           className="h-6 w-6 rounded-lg hover:bg-white/5"
                           title="Remove image"
                         >
@@ -711,8 +722,12 @@ export function ChatArea({
 <Button
                       className="h-11 w-11 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
                       onClick={() => {
-                        onSend(attachedImage || undefined);
+                        onSend(
+                          attachedImage || undefined,
+                          attachedImageContext || undefined
+                        );
                         setAttachedImage(null);
+                        setAttachedImageContext(null);
                       }}
                       disabled={!input.trim() || isStreaming}
                       title="Send message"
@@ -969,8 +984,12 @@ export function ChatArea({
                     <Button
                       className="h-10 w-10 shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
                       onClick={() => {
-                        onSend(attachedImage || undefined);
+                        onSend(
+                          attachedImage || undefined,
+                          attachedImageContext || undefined
+                        );
                         setAttachedImage(null);
+                        setAttachedImageContext(null);
                       }}
                       disabled={!input.trim() || isStreaming}
                       title="Send message"

@@ -47,7 +47,7 @@ function App() {
   const [chatMode, setChatMode] = useState<UIChatMode>("auto");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string; image_url?: string } | null>(null);
+  const [retryTarget, setRetryTarget] = useState<{ message: string; errorDetail: string; image_url?: string; image_context?: string } | null>(null);
 
   // OpenBot Autonomous Research (Phase 1) — the toggle only shows when the
   // user enabled the capability; autonomousMode routes sends to the task
@@ -417,8 +417,15 @@ function App() {
     setUploading(true);
     setUploadError(null);
     try {
-      await API.uploadDocument(activeSessionId, file);
-      loadDocuments(activeSessionId);
+      const result = await API.uploadDocument(activeSessionId, file);
+      await loadDocuments(activeSessionId);
+      if (result.document.status !== "ready") {
+        setUploadError(
+          result.document.error_message ||
+            result.message ||
+            "Document processing failed"
+        );
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -431,8 +438,15 @@ function App() {
     setUploading(true);
     setUploadError(null);
     try {
-      await API.uploadDocument(activeSessionId, file);
-      loadDocuments(activeSessionId);
+      const result = await API.uploadDocument(activeSessionId, file);
+      await loadDocuments(activeSessionId);
+      if (result.document.status !== "ready") {
+        setUploadError(
+          result.document.error_message ||
+            result.message ||
+            "Document processing failed"
+        );
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -591,7 +605,11 @@ function App() {
     openbotPollsRef.current.push(entry);
   }, []);
 
-  const handleSend = (imageUrl?: string, overrideText?: string) => {
+  const handleSend = (
+    imageUrl?: string,
+    overrideText?: string,
+    imageContext?: string
+  ) => {
     const text = (overrideText ?? input).trim();
     if (!text && !imageUrl) return;
     if (!activeSessionId || isStreaming || togglePending) return;
@@ -605,6 +623,9 @@ function App() {
       return;
     }
     const originalText = text;
+    // Text-only models cannot see image_url. When local vision produced a
+    // description, send it with the message so every provider can answer.
+    const modelText = imageContext ? `${text}\n\n${imageContext}` : text;
 
     setSending(true);
     setChatError(null);
@@ -628,7 +649,7 @@ function App() {
     const modeSnapshot = chatMode === "auto" ? undefined : chatMode;
 
     durableRunTerminalRef.current = false;
-    startStream(activeSessionId, text, imageUrl, {
+    startStream(activeSessionId, modelText, imageUrl, {
       onStart: () => {
         setGenerationStopped(false); setPendingToolApproval(null);
         setDurableApproval(null); setPlanSteps([]);
@@ -681,7 +702,12 @@ function App() {
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
         // do not offer a one-click retry for transient durable-availability errors
         if (error.code !== "DURABLE_UNAVAILABLE" && error.code !== "RATE_LIMITED") {
-          setRetryTarget({ message: originalText, errorDetail: error.detail || "Failed to send message", image_url: imageUrl });
+          setRetryTarget({
+            message: originalText,
+            errorDetail: error.detail || "Failed to send message",
+            image_url: imageUrl,
+            image_context: imageContext,
+          });
         }
         setSending(false);
         setGenerationStopped(false);
@@ -707,7 +733,7 @@ function App() {
   // Local Vision (ZERO API cost) — describe an attached image with the local
   // Ollama model and surface the result via the shared transient notice.
   // Fail-closed: a vision failure NEVER blocks attach/send.
-  const handleImageAttached = useCallback(async (file: File) => {
+  const handleImageAttached = useCallback(async (file: File): Promise<string | null> => {
     try {
       const res = await API.describeImage(file);
       if (res && res.status === "ok" && res.description) {
@@ -715,26 +741,30 @@ function App() {
           ? res.description.slice(0, 280).trimEnd() + "\u2026"
           : res.description;
         setAppNotice({ kind: "info", message: text, timeoutMs: 8000 });
-      } else {
-        setAppNotice({
-          kind: "warning",
-          message: (res && res.notice)
-            || "I could not analyze the image. The chat will continue normally.",
-          timeoutMs: 6000,
-        });
+        // Carried into the next send so text-only models receive the image
+        // analysis even though they cannot read image_url.
+        return res.context || res.description;
       }
+      setAppNotice({
+        kind: "warning",
+        message: (res && res.notice)
+          || "I could not analyze the image. The chat will continue normally.",
+        timeoutMs: 6000,
+      });
+      return null;
     } catch {
       setAppNotice({
         kind: "warning",
         message: "I could not analyze the image. The chat will continue normally.",
         timeoutMs: 6000,
       });
+      return null;
     }
   }, []);
 
   const handleRetry = useCallback(() => {
     if (!retryTarget || !activeSessionId || isStreaming) return;
-    handleSend(retryTarget.image_url, retryTarget.message);
+    handleSend(retryTarget.image_url, retryTarget.message, retryTarget.image_context);
   }, [retryTarget, activeSessionId, isStreaming]);
 
   const handleToolApprove = useCallback(() => {
@@ -850,7 +880,9 @@ function App() {
         onCitationClick={(citation: Citation) => setSelectedCitation(citation)}
         input={input}
         onInputChange={setInput}
-        onSend={(imageUrl) => handleSend(imageUrl)}
+        onSend={(imageUrl, imageContext) =>
+          handleSend(imageUrl, undefined, imageContext)
+        }
         onKeyDown={(e: React.KeyboardEvent) => {
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
         }}

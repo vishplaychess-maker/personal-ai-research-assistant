@@ -8,6 +8,7 @@ Orchestrates:
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session as DBSession
@@ -15,6 +16,8 @@ from sqlalchemy.orm import Session as DBSession
 from app.models.models import Document, DocumentChunk, DocumentStatus
 from app.services.embeddings_client import generate_embedding
 from app.services.chromadb_client import query_similar_chunks, collection_exists
+
+logger = logging.getLogger(__name__)
 
 
 # ── Constants ──────────────────────────────────────────────
@@ -86,13 +89,23 @@ def retrieve_chunks(
     # Embed the question
     try:
         embedding = generate_embedding(question)
-    except (ConnectionError, TimeoutError, RuntimeError):
+    except (ConnectionError, TimeoutError, RuntimeError) as exc:
+        logger.warning(
+            "RAG embedding failed for session %s (%s); answering without documents",
+            session_id,
+            type(exc).__name__,
+        )
         return []
 
     # Query ChromaDB
     try:
         results = query_similar_chunks(session_id, embedding, top_k=TOP_K)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - chat must continue without RAG
+        logger.warning(
+            "RAG query failed for session %s (%s); answering without documents",
+            session_id,
+            type(exc).__name__,
+        )
         return []
 
     if not results:
@@ -100,17 +113,40 @@ def retrieve_chunks(
 
     # Enrich with document metadata
     retrieved: List[RetrievedChunk] = []
+    skipped = 0
     for r in results:
         meta = r.get("metadata", {})
         doc_id = meta.get("document_id")
-        chunk_db_id = meta.get("chunk_db_id")
-        if not doc_id or not chunk_db_id:
+        if not doc_id:
+            skipped += 1
             continue
 
-        # Get document and chunk info from SQLite
-        doc = db.query(Document).filter(Document.id == doc_id).first()
+        # Get document and chunk info from SQLite.
+        doc = (
+            db.query(Document)
+            .filter(
+                Document.id == doc_id,
+                Document.session_id == session_id,
+            )
+            .first()
+        )
         if not doc:
+            skipped += 1
             continue
+
+        chunk_db_id = meta.get("chunk_db_id")
+        if not chunk_db_id:
+            # The upload's Chroma metadata update is best-effort. Fall back to
+            # the SQLite chunk row instead of silently dropping the document.
+            chunk_row = (
+                db.query(DocumentChunk)
+                .filter(
+                    DocumentChunk.document_id == doc.id,
+                    DocumentChunk.chunk_index == meta.get("chunk_index"),
+                )
+                .first()
+            )
+            chunk_db_id = chunk_row.id if chunk_row else 0
 
         retrieved.append({
             "text": r.get("text", ""),
@@ -122,6 +158,12 @@ def retrieve_chunks(
             "distance": r.get("distance"),
         })
 
+    if skipped:
+        logger.warning(
+            "RAG session %s: skipped %d chunk(s) with missing/foreign metadata",
+            session_id,
+            skipped,
+        )
     return retrieved
 
 

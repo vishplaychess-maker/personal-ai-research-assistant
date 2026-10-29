@@ -679,6 +679,10 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"
     default_model: str = "glm-5.3-flash"
     ollama_tags_timeout: int = 5
+    # Context window for local Ollama chat calls. The previous default (~2k)
+    # silently truncated retrieved-document context; this covers the base
+    # prompt plus the injected RAG and MCP blocks.
+    ollama_num_ctx: int = 8192
 
     # ── Secrets encryption at rest (Phase — security overhaul) ──
     # URL-safe base64 Fernet key (32 bytes) used to encrypt API keys before
@@ -1085,6 +1089,12 @@ class Settings(BaseSettings):
                     )
         if self.grok_oauth_poll_interval_s < 1:
             raise ValueError("grok_oauth_poll_interval_s must be at least 1 second")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ollama_context(self) -> "Settings":
+        if not 512 <= self.ollama_num_ctx <= 131072:
+            raise ValueError("ollama_num_ctx must be between 512 and 131072")
         return self
 
     @model_validator(mode="after")

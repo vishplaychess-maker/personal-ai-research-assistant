@@ -6,6 +6,7 @@ Supports:
   - PDF files (pypdf with page numbers)
 """
 
+import zipfile
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -51,6 +52,36 @@ def extract_text_from_pdf(file_path: str) -> List[Dict]:
     return pages
 
 
+def _looks_like_pdf(file_path: str, content_type: str) -> bool:
+    """Identify a PDF from its MIME type, extension, or magic bytes.
+
+    Browsers and Electron drag-drop do not always send ``application/pdf``;
+    some send ``application/octet-stream`` or an empty type. Falling back to
+    plain-text extraction for those uploads indexed binary PDF bytes as
+    "ready" text, so the model received garbage instead of the document.
+    """
+    if content_type == "application/pdf":
+        return True
+    if Path(file_path).suffix.lower() == ".pdf":
+        return True
+    try:
+        with open(file_path, "rb") as handle:
+            return handle.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
+def _looks_like_docx(file_path: str, content_type: str) -> bool:
+    if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return True
+    if Path(file_path).suffix.lower() == ".docx":
+        return True
+    try:
+        return zipfile.is_zipfile(file_path) and Path(file_path).suffix.lower() == ".docx"
+    except OSError:
+        return False
+
+
 def extract_text(file_path: str, content_type: str) -> List[Dict]:
     """
     Extract text from a file.
@@ -65,10 +96,9 @@ def extract_text(file_path: str, content_type: str) -> List[Dict]:
     Raises:
         ValueError: If extraction fails or content_type unsupported.
     """
-    if content_type == "application/pdf":
+    if _looks_like_pdf(file_path, content_type):
         return extract_text_from_pdf(file_path)
-    elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        # DOCX - try python-docx, fallback to txt
+    elif _looks_like_docx(file_path, content_type):
         try:
             from docx import Document as DocxDocument
             doc = DocxDocument(file_path)
@@ -76,10 +106,14 @@ def extract_text(file_path: str, content_type: str) -> List[Dict]:
             if not text.strip():
                 raise ValueError("DOCX is empty")
             return [{"text": text, "page_number": None}]
-        except ImportError:
-            return extract_text_from_txt(file_path)
-        except Exception:
-            return extract_text_from_txt(file_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                "python-docx is not installed. Add it to requirements.txt."
+            ) from exc
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not extract text from DOCX: {type(exc).__name__}") from exc
     elif content_type == "text/plain" or content_type.startswith("text/") or content_type in ("application/json", "application/x-yaml", "application/xml", "application/x-yaml", "application/xml", "application/x-toml") or content_type in ("text/markdown", "application/msword"):
         return extract_text_from_txt(file_path)
     else:

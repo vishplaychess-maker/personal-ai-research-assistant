@@ -248,7 +248,10 @@ def prepare_chat_context(
         if chunks:
             context_block = format_rag_context(chunks)
             citations = build_citation_list(chunks)
-            system_parts.append(context_block)
+            # Put document context immediately after the base prompt. Appending
+            # it after memories/directives/skills pushed it past small-context
+            # models' windows, so the model answered without reading the file.
+            system_parts.insert(1, context_block)
             sources_used = True
         else:
             system_parts.append("If you don't know something, say so.")

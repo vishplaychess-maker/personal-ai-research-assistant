@@ -848,10 +848,11 @@ def _build_system_prompt(state: WorkflowState) -> str:
         except Exception as exc:
             logger.warning("Directive prompt injection failed (non-fatal): %s", exc)
 
-    # RAG context
+    # RAG context: keep it directly after the base prompt so small-context
+    # models do not lose it behind memory/directive/skill blocks.
     retrieved_context = state.get("retrieved_context", "")
     if retrieved_context:
-        system_parts.append(retrieved_context)
+        system_parts.insert(1, retrieved_context)
     else:
         system_parts.append("If you don't know something, say so.")
 
@@ -968,20 +969,25 @@ def generate_answer(state: WorkflowState) -> WorkflowState:
         provider_config = dict(provider_config)
         provider_config["model"] = model_name
 
-    # Ensure the latest user message is in the history
-    # If there's an image, create a multimodal message
-    if not history or history[-1].get("content") != user_input:
-        if image_url:
-            # Multimodal message: text + image
-            history.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_input},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]
-            })
-        else:
-            history.append({"role": "user", "content": user_input})
+    # Ensure the latest user message is in the history. The stored Message
+    # keeps image_url in a separate column, so the text comparison below would
+    # treat the turn as "already present" and never build a multimodal block.
+    if image_url:
+        if (
+            history
+            and history[-1].get("role") == "user"
+            and history[-1].get("content") == user_input
+        ):
+            history.pop()
+        history.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_input},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ]
+        })
+    elif not history or history[-1].get("content") != user_input:
+        history.append({"role": "user", "content": user_input})
 
     # If resuming from approval and NOT regenerating, return the existing
     # placeholder response so we flow straight to ask_terminal_approval.

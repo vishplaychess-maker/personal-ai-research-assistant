@@ -451,3 +451,43 @@ def test_rag_context_empty_when_no_docs():
     """When no documents are ready, format_rag_context returns empty string."""
     from app.services.rag_service import format_rag_context
     assert format_rag_context([]) == ""
+
+
+# ── Extraction must not trust the browser MIME type ─────────
+
+
+def _write_pdf(path, text: str = "Hello Thunder AI") -> None:
+    from reportlab.pdfgen import canvas
+
+    pdf = canvas.Canvas(str(path))
+    pdf.drawString(100, 750, text)
+    pdf.save()
+
+
+def test_pdf_extracts_by_magic_bytes_when_mime_is_generic(tmp_path):
+    """A real PDF uploaded as octet-stream must not be read as plain text.
+
+    Browsers/Electron can send a generic or empty MIME type; reading those
+    bytes as UTF-8 produced 'ready' documents full of binary garbage.
+    """
+    from app.services.document_processor import extract_text
+
+    path = tmp_path / "upload.bin"
+    _write_pdf(path)
+
+    pages = extract_text(str(path), "application/octet-stream")
+
+    assert len(pages) == 1
+    assert "Hello Thunder AI" in pages[0]["text"]
+    assert "%PDF-" not in pages[0]["text"]
+
+
+def test_pdf_extracts_by_extension_when_mime_is_empty(tmp_path):
+    from app.services.document_processor import extract_text
+
+    path = tmp_path / "report.pdf"
+    _write_pdf(path)
+
+    pages = extract_text(str(path), "")
+
+    assert "Hello Thunder AI" in pages[0]["text"]

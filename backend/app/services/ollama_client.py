@@ -122,6 +122,7 @@ def generate_response(
         "options": {
             "num_predict": 2048,
             "temperature": 0.7,
+            "num_ctx": settings.ollama_num_ctx,
         },
     }
 
@@ -181,6 +182,7 @@ def generate_json_response(
         "options": {
             "num_predict": 512,
             "temperature": 0.1,  # low temp for structured output
+            "num_ctx": settings.ollama_num_ctx,
         },
     }
 
@@ -251,6 +253,7 @@ async def generate_stream_async(
         "options": {
             "num_predict": 2048,
             "temperature": 0.7,
+            "num_ctx": settings.ollama_num_ctx,
         },
     }
 
