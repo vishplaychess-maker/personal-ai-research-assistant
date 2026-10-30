@@ -163,4 +163,4 @@ Notes:
 - **Application code**: MIT.
 - **OpenViking sidecar**: the upstream `openviking` server is licensed **AGPL-3.0**. Thunder AI talks to it over HTTP as a separate process (`D:\openviking` venv) and does not link against it; review the upstream license before redistributing the sidecar with a packaged build.
 
-No `LICENSE` file is currently checked in — add one matching the declaration above if you plan to publish or distribute.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
