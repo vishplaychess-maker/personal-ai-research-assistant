@@ -3,6 +3,7 @@ import {
   Bot,
   Brain,
   ChevronRight,
+  Database,
   Globe,
   Microscope,
   Puzzle,
@@ -68,6 +69,15 @@ const PLUGINS: PluginDef[] = [
     icon: Microscope,
     accent: "bg-rose-500/10 text-rose-600 ring-rose-500/20 dark:text-rose-300",
     capabilityId: "rea_tools",
+  },
+  {
+    id: "openviking-memory",
+    name: "OpenViking Memory",
+    description:
+      "Self-evolving context database for long-term agent memory and skill registry (Extraction disabled for local 1B models).",
+    icon: Database,
+    accent: "bg-cyan-500/10 text-cyan-600 ring-cyan-500/20 dark:text-cyan-300",
+    capabilityId: "openviking_memory",
   },
   {
     id: "open-interpreter",

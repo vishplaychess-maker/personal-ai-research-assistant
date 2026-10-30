@@ -23,7 +23,13 @@ from datetime import datetime
 from app.config import settings
 from app.database import SessionLocal
 from app.models.models import OpenbotTask
-from app.services import agent_context, agent_events, custom_skill_service, rea_service
+from app.services import (
+    agent_context,
+    agent_events,
+    custom_skill_service,
+    openviking_service,
+    rea_service,
+)
 from app.services.capability_preferences import is_capability_enabled
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_user_llm_config
@@ -38,6 +44,7 @@ logger = logging.getLogger(__name__)
 RESEARCH_HINTS = ("search", "news", "latest", "compare", "research", "find", "look up")
 CODE_HINTS = ("refactor", "implement", "fix", "bug", "code", "test", "migrate")
 REA_CAPABILITY_ID = "rea_tools"
+OPENVIKING_CAPABILITY_ID = "openviking_memory"
 REA_HINTS = (
     "reverse engineer",
     "reverse-engineer",
@@ -250,6 +257,36 @@ def _workspace_search(task_id: str, query: str) -> tuple[str, list[str]]:
         f"{len(results)} result(s)):\n{text}",
         [],
     )
+
+
+def _openviking_context(task_id: str, user_id: int, query: str) -> tuple[str, list[str]]:
+    """Fetch the user's long-term structured context from OpenViking.
+
+    Opt-in twice (server flag AND per-user capability) and strictly
+    fail-open: the service degrades every error to {} with a warning log,
+    so this helper only ever adds context blocks, never warnings that
+    abort work.
+    """
+    if not openviking_service.is_enabled():
+        return "", []
+
+    db = SessionLocal()
+    try:
+        enabled = is_capability_enabled(db, user_id, OPENVIKING_CAPABILITY_ID)
+    finally:
+        db.close()
+    if not enabled:
+        return "", []
+
+    agent_events.emit(
+        task_id, "tool", agent="context", tool="openviking_find",
+        message="Querying OpenViking long-term context…",
+    )
+    context = openviking_service.get_structured_context_sync(user_id, query)
+    block = openviking_service.format_context_block(context)
+    if block:
+        agent_events.emit(task_id, "output", agent="context", output=block)
+    return block, []
 
 
 def _custom_skills(task_id: str, user_id: int, query: str) -> tuple[str, list[str]]:
@@ -580,6 +617,14 @@ def run_task(task_id: str, user_id: int, query: str) -> None:
             task_id, "thinking", agent="context",
             message=f"Context collected ({len(context.tools)} tool result(s))",
         )
+
+        openviking_block, openviking_warnings = _openviking_context(
+            task_id, user_id, query
+        )
+        warnings.extend(openviking_warnings)
+        if openviking_block:
+            context.blocks.append(openviking_block)
+            context.tools.append("openviking_find")
 
         if any(step["agent"] == "workspace" for step in plan):
             search_text, search_warnings = _workspace_search(task_id, query)

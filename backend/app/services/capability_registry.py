@@ -77,6 +77,19 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
     },
     {
+        "id": "openviking_memory",
+        "kind": "capability",
+        "name": "OpenViking Memory",
+        "description": (
+            "Self-evolving context database for long-term agent memory and "
+            "skill registry (Extraction disabled for local 1B models). "
+            "Requires the local openviking-server sidecar; silently falls "
+            "back to the standard context pipeline when unavailable."
+        ),
+        "icon": "database",
+        "enabled": False,
+    },
+    {
         "id": "desktop_automation",
         "name": "Desktop Automation",
         "description": "Read and write workspace files and run sandboxed commands on this computer.",
