@@ -29,6 +29,7 @@ from app.services import (
     custom_skill_service,
     openviking_service,
     rea_service,
+    swarm_manager,
 )
 from app.services.capability_preferences import is_capability_enabled
 from app.services.llm_providers import get_provider
@@ -590,10 +591,42 @@ def _synthesize(query: str, plan: list[dict], context: agent_context.ContextBund
     return "\n".join(parts)
 
 
-def run_task(task_id: str, user_id: int, query: str) -> None:
+def _run_swarm(task_id: str, user_id: int, query: str) -> bool:
+    """Try the multi-agent swarm; True when it produced the final result.
+
+    Every failure — provider error, timeout, empty output — is contained
+    here: the caller falls through to the single-agent pipeline, so a task
+    can never fail merely because the swarm did.
+    """
+    agent_events.emit(
+        task_id, "thinking", agent="swarm",
+        message="Starting the Planner → Researcher → Synthesizer swarm…",
+    )
+    try:
+        result = swarm_manager.run_swarm_task(task_id, query, user_id)
+        if not (result or "").strip():
+            raise swarm_manager.SwarmError("Swarm returned an empty result")
+    except Exception:  # noqa: BLE001 - fallback is the product behavior
+        logger.warning("Swarm execution failed, falling back to single agent.")
+        agent_events.emit(
+            task_id, "warning", agent="swarm",
+            message="Swarm execution failed, falling back to single agent.",
+        )
+        return False
+
+    _set_status(task_id, "completed", result_text=result)
+    agent_events.emit(task_id, "status", message="completed")
+    return True
+
+
+def run_task(task_id: str, user_id: int, query: str, use_swarm: bool = False) -> None:
     """pending -> running -> completed/failed/cancelled (real Phase 1 pipeline)."""
     _set_status(task_id, "running")
     agent_events.emit(task_id, "status", message="running")
+
+    if use_swarm and _run_swarm(task_id, user_id, query):
+        return
+
     agent_events.emit(task_id, "thinking", message="Decomposing the request into steps…")
     plan = build_plan(query)
     agent_events.emit(

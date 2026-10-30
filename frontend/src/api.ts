@@ -548,10 +548,10 @@ export const API = {
   // ── OpenBot Autonomous Research Agent (Phase 1 task queue) ──
   // Non-blocking: POST returns the task id immediately; poll GET until the
   // status is "completed" / "failed".
-  startOpenbotResearch(query: string) {
+  startOpenbotResearch(query: string, useSwarm = false) {
     return request<{ task_id: string }>("/api/agents/openbot/research", {
       method: "POST",
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, use_swarm: useSwarm }),
     });
   },
   getOpenbotTask(taskId: string) {

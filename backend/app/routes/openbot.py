@@ -40,6 +40,8 @@ OPENBOT_CAPABILITY_ID = "openbot_research"
 
 class ResearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
+    #: Planner → Researcher → Synthesizer swarm; falls back to single-agent.
+    use_swarm: bool = False
 
 
 class ResearchStartResponse(BaseModel):
@@ -72,7 +74,9 @@ def start_research(
 ):
     """Queue a delegated research task. Non-blocking by design."""
     _require_openbot_enabled(db, current_user.id)
-    task_id = openbot_service.start_research_task(current_user.id, payload.query)
+    task_id = openbot_service.start_research_task(
+        current_user.id, payload.query, use_swarm=payload.use_swarm
+    )
     return {"task_id": task_id}
 
 

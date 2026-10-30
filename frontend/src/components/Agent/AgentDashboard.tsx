@@ -15,9 +15,11 @@ import {
   ListTree,
   Loader2,
   Play,
+  Search,
   Sparkles,
   Square,
   Terminal,
+  Users,
   Wrench,
 } from "lucide-react";
 import { API } from "../../api";
@@ -44,6 +46,37 @@ const EVENT_META: Record<
   status: { label: "Status", icon: Activity, className: "text-muted-foreground" },
 };
 
+/** Swarm roles get their own icon + accent so handoffs are scannable. */
+const ROLE_META: Record<
+  string,
+  { label: string; icon: typeof Activity; className: string; chip: string }
+> = {
+  planner: {
+    label: "Planner",
+    icon: Brain,
+    className: "text-indigo-400",
+    chip: "bg-indigo-500/10 text-indigo-500 ring-indigo-500/20 dark:text-indigo-300",
+  },
+  researcher: {
+    label: "Researcher",
+    icon: Search,
+    className: "text-teal-400",
+    chip: "bg-teal-500/10 text-teal-600 ring-teal-500/20 dark:text-teal-300",
+  },
+  synthesizer: {
+    label: "Synthesizer",
+    icon: Sparkles,
+    className: "text-violet-400",
+    chip: "bg-violet-500/10 text-violet-500 ring-violet-500/20 dark:text-violet-300",
+  },
+  swarm: {
+    label: "Swarm",
+    icon: Users,
+    className: "text-fuchsia-400",
+    chip: "bg-fuchsia-500/10 text-fuchsia-500 ring-fuchsia-500/20 dark:text-fuchsia-300",
+  },
+};
+
 function statusClass(status: OpenbotTaskStatusValue | "idle") {
   if (status === "completed") return "bg-emerald-500/10 text-emerald-500";
   if (status === "running" || status === "pending")
@@ -61,6 +94,7 @@ export function AgentDashboard({ turnMeta }: { turnMeta?: TurnMetaLike }) {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
+  const [swarm, setSwarm] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -76,7 +110,7 @@ export function AgentDashboard({ turnMeta }: { turnMeta?: TurnMetaLike }) {
     setStatus("pending");
     setTaskId(null);
     try {
-      const { task_id } = await API.startOpenbotResearch(prompt);
+      const { task_id } = await API.startOpenbotResearch(prompt, swarm);
       setTaskId(task_id);
       setStatus("running");
       setLaunching(false);
@@ -111,7 +145,7 @@ export function AgentDashboard({ turnMeta }: { turnMeta?: TurnMetaLike }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, query]);
+  }, [launching, query, swarm]);
 
   const stop = useCallback(async () => {
     if (!taskId) return;
@@ -157,6 +191,18 @@ export function AgentDashboard({ turnMeta }: { turnMeta?: TurnMetaLike }) {
           />
           <Button
             size="sm"
+            variant={swarm ? "default" : "outline"}
+            onClick={() => setSwarm((value) => !value)}
+            disabled={launching || running}
+            aria-pressed={swarm}
+            title="Planner → Researcher → Synthesizer (falls back to single agent on failure)"
+            className="shrink-0 gap-1.5"
+          >
+            <Users className="h-3.5 w-3.5" />
+            Swarm
+          </Button>
+          <Button
+            size="sm"
             onClick={() => void launch()}
             disabled={!query.trim() || launching || running}
             className="shrink-0"
@@ -196,17 +242,30 @@ export function AgentDashboard({ turnMeta }: { turnMeta?: TurnMetaLike }) {
             {events.map((event) => {
               const meta = EVENT_META[event.type] ?? EVENT_META.status;
               const Icon = meta.icon;
+              const role = ROLE_META[event.agent];
+              const RoleIcon = role?.icon;
               return (
                 <div
                   key={event.seq}
                   className="rounded-lg border border-border bg-card p-2.5"
                 >
                   <div className="flex items-center gap-1.5 text-[11px] font-medium">
+                    {role && RoleIcon ? (
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ring-1",
+                          role.chip
+                        )}
+                      >
+                        <RoleIcon className="h-3 w-3" />
+                        {role.label}
+                      </span>
+                    ) : null}
                     <Icon className={cn("h-3.5 w-3.5", meta.className)} />
                     <span className={meta.className}>{meta.label}</span>
                     <span className="truncate text-muted-foreground">
-                      {event.agent}
-                      {event.tool ? ` · ${event.tool}` : ""}
+                      {role ? "" : event.agent}
+                      {event.tool ? `${role ? "" : " · "}${event.tool}` : ""}
                     </span>
                   </div>
                   {event.message ? (

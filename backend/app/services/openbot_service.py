@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 VALID_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 
 
-def start_research_task(user_id: int, query: str) -> str:
+def start_research_task(user_id: int, query: str, use_swarm: bool = False) -> str:
     """Create a queued research task and return its public id immediately.
 
     Nothing here blocks on the (mock) research itself: the background worker
@@ -57,7 +57,7 @@ def start_research_task(user_id: int, query: str) -> str:
     finally:
         db.close()
 
-    _spawn_worker(task_id, user_id, query)
+    _spawn_worker(task_id, user_id, query, use_swarm)
     return task_id
 
 
@@ -94,7 +94,9 @@ def get_task_status(task_id: str, user_id: int) -> dict | None:
 # ── execution path ──────────────────────────────────────────
 
 
-def _spawn_worker(task_id: str, user_id: int, query: str) -> None:
+def _spawn_worker(
+    task_id: str, user_id: int, query: str, use_swarm: bool = False
+) -> None:
     """Run the orchestrator on a daemon thread (Celery-free local worker).
 
     The HTTP response never waits for the pipeline. Progress frames go to the
@@ -103,6 +105,7 @@ def _spawn_worker(task_id: str, user_id: int, query: str) -> None:
     thread = threading.Thread(
         target=orchestrator.run_task,
         args=(task_id, user_id, query),
+        kwargs={"use_swarm": use_swarm},
         name=f"openbot-{task_id[:8]}",
         daemon=True,
     )
