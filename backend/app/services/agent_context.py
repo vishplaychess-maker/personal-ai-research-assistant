@@ -12,8 +12,11 @@ a bounded warning, never an exception.
 
 from __future__ import annotations
 
+import ast
+import fnmatch
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +34,14 @@ MAX_FILE_ENTRIES = 30
 MAX_GIT_LINES = 25
 MAX_BLOCK_CHARS = 1800
 HTTP_TIMEOUT_S = 8.0
+MAX_SEARCH_RESULTS = 100
+MAX_SEARCH_DEPTH = 6
+MAX_SUMMARY_CHARS = 180
+
+_SYSTEM_PREFIXES = ("c:/windows", "c:/program files", "c:/programdata")
+_USER_PROFILE_RE = re.compile(
+    r"^[a-z]:/users/[^/]+/(appdata|documents|desktop|downloads|onedrive)"
+)
 
 #: Never surface these names (or Secret-looking files) in agent context.
 _SKIP_DIRS = {
@@ -52,6 +63,119 @@ def _is_safe_entry(name: str) -> bool:
 def _is_safe_git_line(line: str) -> bool:
     lowered = line.lower()
     return not any(token in lowered for token in _SENSITIVE_TOKENS)
+
+
+def _workspace_search_root() -> Path:
+    """Resolved workspace root for the recursive search tool."""
+    raw = (settings.workspace_dir or "").strip()
+    if not raw:
+        raise ValueError("workspace_dir is not configured")
+    root = Path(raw).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("workspace_dir is not a directory")
+    normalized = str(root).lower().replace("\\", "/")
+    for prefix in _SYSTEM_PREFIXES:
+        if normalized == prefix or normalized.startswith(prefix + "/"):
+            raise ValueError("workspace_dir must not point at a system directory")
+    if _USER_PROFILE_RE.match(normalized):
+        raise ValueError("workspace_dir must not point at a user profile folder")
+    return root
+
+
+def _module_summary(path: Path) -> str:
+    """First docstring line (or first meaningful line) of a Python file."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(8192)
+        text = raw.decode("utf-8", errors="replace")
+        try:
+            doc = ast.get_docstring(ast.parse(text))
+        except (SyntaxError, ValueError):
+            doc = None
+        if doc:
+            first = " ".join(doc.strip().splitlines()[0].split())
+        else:
+            first = ""
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    first = stripped
+                    break
+        return first[:MAX_SUMMARY_CHARS]
+    except OSError:
+        return ""
+
+
+def search_workspace_files(
+    directory: str = ".",
+    pattern: str = "*",
+    max_results: int = MAX_SEARCH_RESULTS,
+) -> List[dict]:
+    """List files under a workspace directory, confined and read-only.
+
+    Security:
+    * the workspace root is re-validated on every call and cannot be a system
+      or user-profile directory;
+    * relative directories resolve against the workspace and absolute
+      directories are accepted only when their real path stays inside it;
+    * ``..``, symlink escapes, glob path separators, and sensitive file names
+      are rejected/skipped;
+    * traversal is depth- and result-bounded, and only a short docstring line
+      is read from Python files.
+    """
+    root = _workspace_search_root()
+    raw_dir = (directory or ".").strip()
+    if "\x00" in raw_dir:
+        raise ValueError("invalid directory")
+    candidate = Path(raw_dir)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve(strict=True)
+    if resolved != root and not resolved.is_relative_to(root):
+        raise ValueError("directory is outside the workspace")
+    if not resolved.is_dir():
+        raise ValueError("directory is not a directory")
+
+    clean_pattern = (pattern or "*").strip()
+    if (
+        not clean_pattern
+        or ".." in clean_pattern
+        or "/" in clean_pattern
+        or "\\" in clean_pattern
+        or clean_pattern.startswith("~")
+    ):
+        raise ValueError("pattern must be a file-name glob without path separators")
+
+    limit = max(1, min(int(max_results), MAX_SEARCH_RESULTS))
+    results: List[dict] = []
+    for dirpath, dirnames, filenames in os.walk(resolved):
+        current = Path(dirpath)
+        depth = len(current.relative_to(resolved).parts)
+        if depth >= MAX_SEARCH_DEPTH:
+            dirnames[:] = []
+        else:
+            dirnames[:] = sorted(
+                name for name in dirnames
+                if _is_safe_entry(name) and not name.startswith(".")
+            )
+        for name in sorted(filenames):
+            if not _is_safe_entry(name):
+                continue
+            if not fnmatch.fnmatch(name.lower(), clean_pattern.lower()):
+                continue
+            path = current / name
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            results.append({
+                "path": path.relative_to(root).as_posix(),
+                "size": stat.st_size,
+                "description": _module_summary(path) if path.suffix.lower() == ".py" else "",
+            })
+            if len(results) >= limit:
+                return results
+    return results
 
 Emitter = Callable[..., Any]
 

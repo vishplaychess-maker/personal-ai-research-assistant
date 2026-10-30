@@ -16,13 +16,14 @@ checks the cancellation flag between every step.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from datetime import datetime
 
 from app.config import settings
 from app.database import SessionLocal
 from app.models.models import OpenbotTask
-from app.services import agent_context, agent_events, rea_service
+from app.services import agent_context, agent_events, custom_skill_service, rea_service
 from app.services.capability_preferences import is_capability_enabled
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_user_llm_config
@@ -54,6 +55,12 @@ REA_HINTS = (
     "sqlite",
 )
 REA_SUFFIX_HINTS = rea_service.artifact_suffixes()
+WORKSPACE_SEARCH_HINTS = (
+    "list all", "list files", "find files", "files in", "directory",
+    "folder", "python files", "workspace files",
+)
+CUSTOM_SKILL_HINTS = ("custom skill", "custom skills", "run the", "execute the")
+_PATH_TOKEN_RE = re.compile(r"(?<![\w/.-])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)")
 
 SYNTHESIS_SYSTEM_PROMPT = """You are an Expert AI Research & Execution Analyst for Thunder AI's autonomous agent.
 
@@ -116,6 +123,20 @@ def build_plan(query: str) -> list[dict]:
                 "agent": "code",
             }
         )
+    if any(hint in text for hint in WORKSPACE_SEARCH_HINTS):
+        plan.append(
+            {
+                "step": "Search workspace files (read-only)",
+                "agent": "workspace",
+            }
+        )
+    if any(hint in text for hint in CUSTOM_SKILL_HINTS):
+        plan.append(
+            {
+                "step": "Run the requested custom skill",
+                "agent": "custom_skill",
+            }
+        )
     if any(hint in text for hint in REA_HINTS) or any(
         suffix in text for suffix in REA_SUFFIX_HINTS
     ):
@@ -176,6 +197,87 @@ def _research(task_id: str, query: str) -> tuple[str, list[str]]:
     text = "\n".join(lines)
     agent_events.emit(task_id, "output", agent="research", output=text)
     return text, []
+
+
+def _workspace_query_parts(query: str) -> tuple[str, str]:
+    text = query or ""
+    match = _PATH_TOKEN_RE.search(text)
+    directory = match.group(1).rstrip(".,;:") if match else "."
+    lowered = text.lower()
+    pattern = "*"
+    if "*.py" in lowered or "python files" in lowered or "python file" in lowered:
+        pattern = "*.py"
+    elif "*.js" in lowered or "javascript files" in lowered:
+        pattern = "*.js"
+    elif "*.ts" in lowered or "typescript files" in lowered:
+        pattern = "*.ts"
+    elif "*.md" in lowered or "markdown files" in lowered:
+        pattern = "*.md"
+    explicit = re.search(r"\*\.[A-Za-z0-9]{1,8}\b", text)
+    if explicit:
+        pattern = explicit.group(0)
+    return directory, pattern
+
+
+def _workspace_search(task_id: str, query: str) -> tuple[str, list[str]]:
+    directory, pattern = _workspace_query_parts(query)
+    agent_events.emit(
+        task_id, "tool", agent="workspace", tool="search_workspace_files",
+        message=f"Searching {directory} for {pattern}",
+    )
+    try:
+        results = agent_context.search_workspace_files(directory, pattern)
+    except (ValueError, OSError) as exc:
+        message = f"Workspace search refused: {exc}"
+        agent_events.emit(task_id, "warning", agent="workspace", message=message)
+        return "", [message]
+
+    if not results:
+        message = f"No files matched {pattern} under {directory}."
+        agent_events.emit(task_id, "warning", agent="workspace", message=message)
+        return "", [message]
+
+    lines = []
+    for item in results:
+        line = f"- {item['path']} ({item['size']} bytes)"
+        if item.get("description"):
+            line += f" — {item['description']}"
+        lines.append(line)
+    text = "\n".join(lines)
+    agent_events.emit(task_id, "output", agent="workspace", output=text)
+    return (
+        f"Workspace file search ({directory}, pattern `{pattern}`, "
+        f"{len(results)} result(s)):\n{text}",
+        [],
+    )
+
+
+def _custom_skills(task_id: str, user_id: int, query: str) -> tuple[str, list[str]]:
+    """Expose enabled custom skills and execute an explicit invocation."""
+    db = SessionLocal()
+    try:
+        catalog = custom_skill_service.catalog_block(db, user_id)
+        invocation = custom_skill_service.match_invocation(db, user_id, query)
+        if invocation is None:
+            return catalog, []
+        agent_events.emit(
+            task_id, "tool", agent="custom_skill", tool="execute_custom_skill",
+            message=f"Executing {invocation.skill.name}",
+        )
+        block = custom_skill_service.prompt_execution_block(invocation, user_id)
+        if "Execution Failed" in block:
+            agent_events.emit(
+                task_id, "warning", agent="custom_skill",
+                message=f"{invocation.skill.name} execution failed.",
+            )
+            return block, [f"{invocation.skill.name} execution failed."]
+        agent_events.emit(task_id, "output", agent="custom_skill", output=block)
+        return "\n\n".join(part for part in (catalog, block) if part), []
+    except Exception as exc:  # noqa: BLE001 - custom skills are optional
+        logger.warning("Custom skill context failed (%s)", type(exc).__name__)
+        return "", ["Custom skills are unavailable for this task."]
+    finally:
+        db.close()
 
 
 def _rea_warning(task_id: str, message: str) -> None:
@@ -478,6 +580,22 @@ def run_task(task_id: str, user_id: int, query: str) -> None:
             task_id, "thinking", agent="context",
             message=f"Context collected ({len(context.tools)} tool result(s))",
         )
+
+        if any(step["agent"] == "workspace" for step in plan):
+            search_text, search_warnings = _workspace_search(task_id, query)
+            warnings.extend(search_warnings)
+            if search_text:
+                context.blocks.append(search_text)
+                context.tools.append("search_workspace_files")
+
+        if _cancelled(task_id):
+            return _finish_cancelled(task_id)
+
+        custom_block, custom_warnings = _custom_skills(task_id, user_id, query)
+        warnings.extend(custom_warnings)
+        if custom_block:
+            context.blocks.append(custom_block)
+            context.tools.append("custom_skills")
 
         if _cancelled(task_id):
             return _finish_cancelled(task_id)

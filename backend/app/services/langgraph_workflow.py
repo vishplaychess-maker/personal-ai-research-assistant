@@ -72,7 +72,7 @@ from app.services.memory_service import (
     MemoryExtractionResult,
 )
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
-from app.services import tool_registry
+from app.services import custom_skill_service, tool_registry
 from app.tools.web_scraper import extract_urls, web_scraper
 from app.tools.deep_research import run_deep_research
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
@@ -829,6 +829,30 @@ def _build_system_prompt(state: WorkflowState) -> str:
     )
 
     system_parts = [base_prompt]
+
+    # Enabled custom skills: expose the catalog and execute an explicit request.
+    if state.get("db") is not None:
+        try:
+            user_id = state.get("user_id", 1)
+            custom_catalog = custom_skill_service.catalog_block(state["db"], user_id)
+            invocation = custom_skill_service.match_invocation(
+                state["db"], user_id, state.get("user_input", "")
+            )
+            custom_block = custom_catalog
+            if invocation is not None:
+                execution_block = custom_skill_service.prompt_execution_block(
+                    invocation, user_id
+                )
+                custom_block = "\n\n".join(
+                    part for part in (custom_catalog, execution_block) if part
+                )
+            if custom_block:
+                system_parts.append(custom_block)
+        except Exception as exc:  # noqa: BLE001 - never break chat
+            logger.warning(
+                "Custom skill prompt injection failed (non-fatal): %s",
+                type(exc).__name__,
+            )
 
     # Memory context
     memory_context = state.get("memory_context", "")

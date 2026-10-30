@@ -32,7 +32,7 @@ from app.services.memory_service import (
 )
 from app.services.rag_service import retrieve_chunks, format_rag_context, build_citation_list
 from app.services.settings_service import get_memory_enabled, get_user_llm_config
-from app.services import tool_registry
+from app.services import custom_skill_service, tool_registry
 from app.services.system_prompts import build_base_prompt, build_mcp_tools_block
 from app.config import settings
 from app.tools.youtube_summarizer import youtube_summarizer, is_youtube_url
@@ -239,6 +239,28 @@ def prepare_chat_context(
             directives_block = directive_block
     except Exception as exc:
         logger.warning("Directive prompt injection failed (non-fatal): %s", exc)
+
+    # 5c. Enabled custom skills: list them and execute an explicit request.
+    # This is how the chat model learns about user-installed skills; without
+    # it they were enabled in Settings but invisible to every chat turn.
+    try:
+        custom_catalog = custom_skill_service.catalog_block(db, user_id)
+        invocation = custom_skill_service.match_invocation(db, user_id, user_input)
+        custom_block = custom_catalog
+        if invocation is not None:
+            execution_block = custom_skill_service.prompt_execution_block(
+                invocation, user_id
+            )
+            custom_block = "\n\n".join(
+                part for part in (custom_catalog, execution_block) if part
+            )
+        if custom_block:
+            system_parts.insert(1, custom_block)
+    except Exception as exc:  # noqa: BLE001 - custom skills must never break chat
+        logger.warning(
+            "Custom skill prompt injection failed (non-fatal): %s",
+            type(exc).__name__,
+        )
 
     # 6. Retrieve RAG context (if documents exist)
     sources_used = False
