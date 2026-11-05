@@ -184,7 +184,13 @@ def reset_provider() -> None:
 # Deliberately NOT a general cross-provider chain.
 
 _FALLBACK_FREE_PROVIDERS = ("openrouter", "groq")
-_OLLAMA_FALLBACK_MODEL = "dolphin-mistral"
+#: Configurable via OLLAMA_FALLBACK_MODEL; never hardcode a model that may
+#: not exist on the user's machine (dolphin-mistral caused 404 last resorts).
+_DEFAULT_OLLAMA_FALLBACK = "llama3.2:1b"
+
+
+def _ollama_fallback_model() -> str:
+    return (getattr(settings, "ollama_fallback_model", "") or _DEFAULT_OLLAMA_FALLBACK).strip()
 
 
 def build_fallback_chain(provider_config: Optional[dict] = None) -> List[Optional[dict]]:
@@ -195,7 +201,7 @@ def build_fallback_chain(provider_config: Optional[dict] = None) -> List[Optiona
     2. GLM 5.3 Flash (free local router) — unless it already IS the primary.
     3. A globally-configured free cloud provider (OpenRouter/Groq), if the
        global default points at one and it is not already the primary.
-    4. Ollama ``dolphin-mistral`` — last resort.
+    4. Ollama with the configured ``OLLAMA_FALLBACK_MODEL`` — last resort.
     """
     primary_name = (
         (provider_config or {}).get("provider") or settings.llm_provider
@@ -213,7 +219,7 @@ def build_fallback_chain(provider_config: Optional[dict] = None) -> List[Optiona
         chain.append({"provider": settings.llm_provider})
 
     if primary_name != "ollama":
-        chain.append({"provider": "ollama", "model": _OLLAMA_FALLBACK_MODEL})
+        chain.append({"provider": "ollama", "model": _ollama_fallback_model()})
 
     return chain
 

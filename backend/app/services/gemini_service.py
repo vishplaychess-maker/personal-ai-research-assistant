@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_VISION_PROMPT = "Describe this image factually in up to 150 words."
 
 
-class GeminiAPIError(Exception):
+class GeminiAPIError(RuntimeError):
     """A Gemini call failed. Carries NO API text, key or content.
 
     code is a bounded slug: "gemini_sdk_missing", "gemini_not_configured",

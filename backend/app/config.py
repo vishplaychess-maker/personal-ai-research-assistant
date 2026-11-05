@@ -171,6 +171,10 @@ class Settings(BaseSettings):
     # Log output format: "text" (default, current behavior) or "json"
     # (structured one-JSON-per-line logging for cloud log drains).
     log_format: str = "text"
+    # Root log level: "INFO" (default) or "DEBUG" to surface the RAG/chunk
+    # diagnostics. uvicorn only configures its own loggers, so the root stays
+    # at WARNING otherwise and logger.debug(...) never reaches the console.
+    log_level: str = "INFO"
 
     # ── Terminal tool (Phase 9 — Agent Tools) ─────────────
     # Enable the terminal executor tool for the AI agent.
@@ -713,6 +717,11 @@ class Settings(BaseSettings):
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
     default_model: str = "glm-5.3-flash"
+    #: Last-resort model used when the free-tier fallback chain reaches
+    #: Ollama. It must be a model actually pulled on this machine; the old
+    #: hardcoded "dolphin-mistral" was never installed and 404'd.
+    #: Override with OLLAMA_FALLBACK_MODEL (set "" to use llama3.2:1b).
+    ollama_fallback_model: str = "llama3.2:1b"
     ollama_tags_timeout: int = 5
     # Context window for local Ollama chat calls. The previous default (~2k)
     # silently truncated retrieved-document context; this covers the base

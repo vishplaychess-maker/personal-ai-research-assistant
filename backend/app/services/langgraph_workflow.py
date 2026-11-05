@@ -313,6 +313,11 @@ def retrieve_context(state: WorkflowState) -> WorkflowState:
     state["retrieved_context"] = format_rag_context(chunks)
     state["citations"] = build_citation_list(chunks)
     state["sources_used"] = True
+    # Metrics only — the prompt and chunk text are never logged.
+    logger.debug(
+        "Workflow RAG: session=%s chunks=%d injected=True context_chars=%d",
+        session_id, len(chunks), len(state["retrieved_context"]),
+    )
     return state
 
 
@@ -1879,9 +1884,21 @@ def run_research_workflow(
                         "CAG pre-workflow cache hit (kind=%s) for session %s",
                         cache_kind, session_id,
                     )
+                    # Persist the replayed answer like the normal path does:
+                    # callers (nonstream route, scheduler) require an
+                    # assistant_message_id and 500'd on the old None here.
+                    from app.models.models import Message, MessageRole
+                    replay_msg = Message(
+                        session_id=session_id,
+                        role=MessageRole.assistant,
+                        content=label + cached,
+                    )
+                    db.add(replay_msg)
+                    db.commit()
+                    db.refresh(replay_msg)
                     return {
                         "response": label + cached,
-                        "assistant_message_id": None,
+                        "assistant_message_id": replay_msg.id,
                         "citations": [],
                         "sources_used": False,
                         "memories_used": False,

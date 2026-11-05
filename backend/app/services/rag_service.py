@@ -108,6 +108,19 @@ def retrieve_chunks(
         )
         return []
 
+    logger.debug(
+        "RAG session %s: chroma returned %d chunk(s), distances=%s",
+        session_id,
+        len(results or []),
+        [
+            (
+                round(float(r["distance"]), 4)
+                if isinstance(r, dict) and isinstance(r.get("distance"), (int, float))
+                else None
+            )
+            for r in (results or [])
+        ],
+    )
     if not results:
         return []
 

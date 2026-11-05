@@ -267,6 +267,7 @@ def prepare_chat_context(
     citations = []
     try:
         chunks = retrieve_chunks(session_id, user_input, db)
+        context_chars = 0
         if chunks:
             context_block = format_rag_context(chunks)
             citations = build_citation_list(chunks)
@@ -275,8 +276,14 @@ def prepare_chat_context(
             # models' windows, so the model answered without reading the file.
             system_parts.insert(1, context_block)
             sources_used = True
+            context_chars = len(context_block)
         else:
             system_parts.append("If you don't know something, say so.")
+        # Metrics only — the prompt and chunk text are never logged.
+        logger.debug(
+            "Chat RAG: session=%s chunks=%d injected=%s context_chars=%d",
+            session_id, len(chunks), sources_used, context_chars,
+        )
     except Exception as exc:
         logger.warning("RAG retrieval failed (non-fatal): %s", exc)
         system_parts.append("If you don't know something, say so.")

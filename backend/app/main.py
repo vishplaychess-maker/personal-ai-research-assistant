@@ -40,22 +40,34 @@ class _JsonLogFormatter(logging.Formatter):
 
 
 def _configure_logging():
-    """Apply JSON logging when LOG_FORMAT=json; no-op otherwise.
+    """Make app log records reach the console and honour LOG_LEVEL/LOG_FORMAT.
 
     Runs at import time — uvicorn configures its loggers *before* importing
     the app, so overriding the uvicorn.* handlers here is safe and final.
     """
-    if settings.log_format.strip().lower() != "json":
-        return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_JsonLogFormatter())
     root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        uvicorn_logger = logging.getLogger(name)
-        uvicorn_logger.handlers = [handler]
-        uvicorn_logger.propagate = False
+    root.setLevel(
+        getattr(logging, settings.log_level.strip().upper(), logging.INFO)
+    )
+    if settings.log_format.strip().lower() == "json":
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(_JsonLogFormatter())
+        root.handlers = [handler]
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            uvicorn_logger = logging.getLogger(name)
+            uvicorn_logger.handlers = [handler]
+            uvicorn_logger.propagate = False
+        return
+    # uvicorn attaches handlers only to its own "uvicorn*" loggers, so app
+    # records reach a handler-less root and fall through to logging.lastResort,
+    # which prints WARNING+ only. Without this handler every logger.debug(...)
+    # (RAG chunk counts, distances, injected context) is silently dropped.
+    if not root.handlers:
+        plain = logging.StreamHandler(sys.stdout)
+        plain.setFormatter(
+            logging.Formatter("%(levelname)s: %(name)s: %(message)s")
+        )
+        root.addHandler(plain)
 
 
 _configure_logging()
