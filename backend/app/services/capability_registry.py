@@ -90,6 +90,22 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "enabled": False,
     },
     {
+        "id": "agent_desktop",
+        "kind": "capability",
+        "name": "Desktop Automation (agent-desktop)",
+        "description": (
+            "OS-level computer use via Vercel Labs' agent-desktop CLI: the "
+            "agent sees and operates desktop apps through the accessibility "
+            "tree (headless refs, no screenshots). WARNING: grants real OS "
+            "access. Only apps on your explicit allowlist can be touched, "
+            "physical input is never allowed, and every call obeys your "
+            "Ask/Auto/Full level (Ask = nothing runs)."
+        ),
+        "icon": "monitor",
+        "enabled": False,
+        "config": {"permission_level": "ask_every_time"},
+    },
+    {
         "id": "desktop_automation",
         "name": "Desktop Automation",
         "description": "Read and write workspace files and run sandboxed commands on this computer.",

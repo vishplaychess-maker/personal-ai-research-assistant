@@ -6,6 +6,7 @@ import {
   Database,
   Globe,
   Microscope,
+  Monitor,
   Puzzle,
   RefreshCw,
   Sparkles,
@@ -78,6 +79,15 @@ const PLUGINS: PluginDef[] = [
     icon: Database,
     accent: "bg-cyan-500/10 text-cyan-600 ring-cyan-500/20 dark:text-cyan-300",
     capabilityId: "openviking_memory",
+  },
+  {
+    id: "agent-desktop",
+    name: "Desktop Automation (agent-desktop)",
+    description:
+      "OS-level computer use via Vercel Labs agent-desktop (accessibility-tree refs, headless). WARNING: lets the agent see and operate desktop apps — only explicitly allowlisted apps, never physical input, gated by your Ask/Auto/Full level.",
+    icon: Monitor,
+    accent: "bg-red-500/10 text-red-600 ring-red-500/20 dark:text-red-300",
+    capabilityId: "agent_desktop",
   },
   {
     id: "open-interpreter",

@@ -22,12 +22,12 @@ from tests.auth_helpers import auth_headers, register_and_login
 _CAPABILITY_IDS = {
     "web_search", "web_scraper", "code_executor", "file_reader",
     "desktop_automation", "openbot_research", "open_interpreter",
-    "rea_tools", "openviking_memory", "github-mcp", "notion-mcp",
+    "rea_tools", "openviking_memory", "agent_desktop", "github-mcp", "notion-mcp",
     "postgres-mcp",
 }
 _CONFIGURED_IDS = {"code_executor", "desktop_automation"}
 # Open Interpreter ships with the fail-safe Ask level instead of Auto.
-_ASK_LEVEL_IDS = {"open_interpreter"}
+_ASK_LEVEL_IDS = {"open_interpreter", "agent_desktop"}
 _MCP_IDS = {"github-mcp", "notion-mcp", "postgres-mcp"}
 # web_scraper ships enabled (the Deep Dive scraper needs no API key); every
 # other capability stays opt-in.

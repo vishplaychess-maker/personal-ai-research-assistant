@@ -15,6 +15,7 @@ checks the cancellation flag between every step.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -27,11 +28,16 @@ from app.services import (
     agent_context,
     agent_events,
     custom_skill_service,
+    desktop_agent_service,
     openviking_service,
     rea_service,
     swarm_manager,
 )
-from app.services.capability_preferences import is_capability_enabled
+from app.services.capability_preferences import (
+    get_capability_config,
+    is_capability_enabled,
+    parse_permission_level,
+)
 from app.services.llm_providers import get_provider
 from app.services.settings_service import get_user_llm_config
 from app.services.skill_executors import (
@@ -46,6 +52,7 @@ RESEARCH_HINTS = ("search", "news", "latest", "compare", "research", "find", "lo
 CODE_HINTS = ("refactor", "implement", "fix", "bug", "code", "test", "migrate")
 REA_CAPABILITY_ID = "rea_tools"
 OPENVIKING_CAPABILITY_ID = "openviking_memory"
+AGENT_DESKTOP_CAPABILITY_ID = "agent_desktop"
 REA_HINTS = (
     "reverse engineer",
     "reverse-engineer",
@@ -288,6 +295,58 @@ def _openviking_context(task_id: str, user_id: int, query: str) -> tuple[str, li
     if block:
         agent_events.emit(task_id, "output", agent="context", output=block)
     return block, []
+
+
+def _agent_desktop_context(task_id: str, user_id: int) -> tuple[str, list[str]]:
+    """Optional agent-desktop read pass over the allowed apps (Auto/Full only).
+
+    Disabled by default at three layers (server flag + app allowlist, user
+    capability, permission level). Reads happen only at Auto/Full because an
+    accessibility snapshot can expose private desktop content; acting commands
+    are never invoked from the background pipeline — they stay on the
+    request-scoped approval-gated routes.
+    """
+    if not desktop_agent_service.is_enabled():
+        return "", []
+
+    db = SessionLocal()
+    try:
+        enabled = is_capability_enabled(db, user_id, AGENT_DESKTOP_CAPABILITY_ID)
+        level = parse_permission_level(
+            get_capability_config(db, user_id, AGENT_DESKTOP_CAPABILITY_ID).get(
+                "permission_level"
+            )
+        )
+    finally:
+        db.close()
+    if not enabled:
+        return "", []
+    if level is None or level.value == "ask_every_time":
+        message = (
+            "agent-desktop is enabled but set to Ask every time — the agent "
+            "will not read or operate the desktop in background tasks."
+        )
+        agent_events.emit(task_id, "warning", agent="desktop", message=message)
+        return "", [message]
+
+    desktop_agent_service.reset_snapshot_ids()
+    blocks: list[str] = []
+    warnings: list[str] = []
+    for app in desktop_agent_service._allowed_apps()[:3]:
+        agent_events.emit(
+            task_id, "tool", agent="desktop", tool="agent_desktop_read_ui",
+            message=f"Reading {app} via the accessibility tree…",
+        )
+        try:
+            result = desktop_agent_service.read_ui(app, permission_level=level)
+        except desktop_agent_service.DesktopAgentError as exc:
+            message = f"agent-desktop read failed for {app}: {exc}"
+            warnings.append(message)
+            agent_events.emit(task_id, "warning", agent="desktop", message=message)
+            continue
+        tree = json.dumps(result.data, ensure_ascii=False)[:1500]
+        blocks.append(f"agent-desktop snapshot ({app}):\n{tree}")
+    return "\n\n".join(blocks), warnings
 
 
 def _custom_skills(task_id: str, user_id: int, query: str) -> tuple[str, list[str]]:
@@ -658,6 +717,12 @@ def run_task(task_id: str, user_id: int, query: str, use_swarm: bool = False) ->
         if openviking_block:
             context.blocks.append(openviking_block)
             context.tools.append("openviking_find")
+
+        desktop_block, desktop_warnings = _agent_desktop_context(task_id, user_id)
+        warnings.extend(desktop_warnings)
+        if desktop_block:
+            context.blocks.append(desktop_block)
+            context.tools.append("agent_desktop_read_ui")
 
         if any(step["agent"] == "workspace" for step in plan):
             search_text, search_warnings = _workspace_search(task_id, query)
