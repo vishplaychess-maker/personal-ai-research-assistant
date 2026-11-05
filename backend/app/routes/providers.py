@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
-    "token_harbor", "infron", "zro",
+    "token_harbor", "infron", "zro", "experiential",
 }
 
 PROVIDER_LABELS = {
@@ -65,6 +65,7 @@ PROVIDER_LABELS = {
     "token_harbor": "Token Harbor",
     "infron": "Infron AI",
     "zro": "Zro (MoonMath)",
+    "experiential": "Experiential Labs",
 }
 
 PREFIXES = {
@@ -98,6 +99,10 @@ PREFIXES = {
     "infron": "",
     # Zro keys are user-generated with no documented prefix; same reasoning.
     "zro": "",
+    # Experiential keys are documented as "xpl_" + 40 hex chars — a published
+    # contract — but a prefix check stays off for consistency with the other
+    # gateways; the live /models call (health_check) judges validity.
+    "experiential": "",
 }
 
 

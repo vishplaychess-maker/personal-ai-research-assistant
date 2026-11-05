@@ -98,6 +98,11 @@ def _build_provider(
     elif provider_name == "zro":
         from app.services.llm_providers.zro_provider import ZroProvider
         return ZroProvider(api_key=api_key, model=model)
+    elif provider_name == "experiential":
+        from app.services.llm_providers.experiential_provider import (
+            ExperientialProvider,
+        )
+        return ExperientialProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -154,6 +159,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "token_harbor": "token harbor",
             "infron": "infron ai",
             "zro": "zro",
+            "experiential": "experiential labs",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:

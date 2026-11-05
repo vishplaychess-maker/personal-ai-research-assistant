@@ -693,7 +693,7 @@ class Settings(BaseSettings):
     # Provider: "gemini" | "glm" | "ollama" | "openrouter" | "nvidia" |
     #           "huggingface" | "google" | "modelslab" | "groq" | "grok"
     #           | "together" | "mistral" | "cohere" | "venice" | "yeta"
-    #           | "token_harbor" | "infron" | "zro"
+    #           | "token_harbor" | "infron" | "zro" | "experiential"
     # Default is Gemini API (fast, generous free tier). Ollama remains a
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
@@ -839,6 +839,19 @@ class Settings(BaseSettings):
     zro_default_model: str = "deepseek-v4.1-flash"
     zro_max_tokens: int = 2048
     zro_temperature: float = 0.7
+
+    # Experiential Labs (api.experientiallabs.ai — open-source AI gateway,
+    # hosted/BYOK/local models behind one OpenAI-compatible endpoint at 0%
+    # markup, with a free core tier on GPT-6 Luna, DeepSeek V4.1 Flash and
+    # Clef). Strictly optional: nothing is called unless a user adds an
+    # "experiential" provider row or sets LLM_PROVIDER=experiential.
+    # EXPERIENTIAL_API_KEY is a fallback for the key pasted in Settings →
+    # Providers (keys are "xpl_" + 40 hex chars).
+    experiential_api_key: str = ""
+    experiential_base_url: str = "https://api.experientiallabs.ai/v1"
+    experiential_default_model: str = "clef-flash"
+    experiential_max_tokens: int = 2048
+    experiential_temperature: float = 0.7
 
     # Cohere (OpenAI-compatible API)
     cohere_api_key: str = ""

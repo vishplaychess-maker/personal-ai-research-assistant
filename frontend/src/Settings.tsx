@@ -41,6 +41,7 @@ const PROVIDER_OPTIONS = [
   { value: "token_harbor", label: "Token Harbor" },
   { value: "infron", label: "Infron AI" },
   { value: "zro", label: "Zro (MoonMath)" },
+  { value: "experiential", label: "Experiential Labs" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -418,6 +419,36 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                               (deepseek-v4.1-flash, glm-5.3-flash) with zero
                               prompt/completion retention; the catalog loads from{" "}
                               <code>/models</code> once the key is saved.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "experiential" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">
+                                https://api.experientiallabs.ai/v1
+                              </span>
+                            </p>
+                            <p className="mt-0.5">
+                              Open-source gateway: hosted, bring-your-own-key and
+                              local models behind one endpoint at 0% markup, with a
+                              free core tier (GPT-6 Luna, DeepSeek V4.1 Flash, Clef).
+                              Mint an <code>xpl_…</code> key at{" "}
+                              <a
+                                href="https://platform.experientiallabs.ai/settings/api-keys"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                platform.experientiallabs.ai
+                              </a>
+                              ; the org catalog loads from <code>/models</code> once
+                              the key is saved.
                             </p>
                           </div>
                         </div>
