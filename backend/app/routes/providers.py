@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
-    "token_harbor", "infron",
+    "token_harbor", "infron", "zro",
 }
 
 PROVIDER_LABELS = {
@@ -64,6 +64,7 @@ PROVIDER_LABELS = {
     "yeta": "Yeta AI",
     "token_harbor": "Token Harbor",
     "infron": "Infron AI",
+    "zro": "Zro (MoonMath)",
 }
 
 PREFIXES = {
@@ -95,6 +96,8 @@ PREFIXES = {
     # Infron keys have no published fixed prefix; the live /models call
     # (health_check) is the only validity judge.
     "infron": "",
+    # Zro keys are user-generated with no documented prefix; same reasoning.
+    "zro": "",
 }
 
 

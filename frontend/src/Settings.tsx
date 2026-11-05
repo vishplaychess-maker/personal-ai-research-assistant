@@ -40,6 +40,7 @@ const PROVIDER_OPTIONS = [
   { value: "yeta", label: "Yeta AI" },
   { value: "token_harbor", label: "Token Harbor" },
   { value: "infron", label: "Infron AI" },
+  { value: "zro", label: "Zro (MoonMath)" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -390,6 +391,33 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                               <code>qwen/qwen3.8-27b:free</code>) draw on the standing
                               free tier; their catalog is public, so the model list
                               loads even before a key is saved.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "zro" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">https://zro.moonmath.ai/v1</span>
+                            </p>
+                            <p className="mt-0.5">
+                              Create an API key at{" "}
+                              <a
+                                href="https://zro.moonmath.ai/sign-up"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                zro.moonmath.ai
+                              </a>
+                              . Free daily tier on open-weight models
+                              (deepseek-v4.1-flash, glm-5.3-flash) with zero
+                              prompt/completion retention; the catalog loads from{" "}
+                              <code>/models</code> once the key is saved.
                             </p>
                           </div>
                         </div>

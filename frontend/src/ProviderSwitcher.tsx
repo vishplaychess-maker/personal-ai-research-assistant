@@ -35,6 +35,7 @@ const BRANDS: Record<string, { mark: string; ring: string }> = {
   yeta: { mark: "Y", ring: "from-emerald-500/30 to-lime-500/10 text-emerald-300 border-emerald-500/30" },
   token_harbor: { mark: "TH", ring: "from-sky-500/30 to-blue-500/10 text-sky-300 border-sky-500/30" },
   infron: { mark: "IN", ring: "from-orange-500/30 to-amber-500/10 text-orange-300 border-orange-500/30" },
+  zro: { mark: "Z", ring: "from-violet-500/30 to-indigo-500/10 text-violet-300 border-violet-500/30" },
   ollama: { mark: "O", ring: "from-zinc-400/30 to-zinc-400/10 text-zinc-300 border-zinc-400/30" },
   local: { mark: "L", ring: "from-cyan-500/30 to-cyan-500/10 text-cyan-300 border-cyan-500/30" },
 };
@@ -55,6 +56,7 @@ const LABELS: Record<string, string> = {
   yeta: "Yeta AI",
   token_harbor: "Token Harbor",
   infron: "Infron AI",
+  zro: "Zro (MoonMath)",
   ollama: "Ollama",
   local: "Local",
 };

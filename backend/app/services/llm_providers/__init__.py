@@ -95,6 +95,9 @@ def _build_provider(
     elif provider_name == "infron":
         from app.services.llm_providers.infron_provider import InfronProvider
         return InfronProvider(api_key=api_key, model=model)
+    elif provider_name == "zro":
+        from app.services.llm_providers.zro_provider import ZroProvider
+        return ZroProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -150,6 +153,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "yeta": "yeta ai",
             "token_harbor": "token harbor",
             "infron": "infron ai",
+            "zro": "zro",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:
