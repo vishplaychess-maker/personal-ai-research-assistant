@@ -1,0 +1,63 @@
+name: Thunder AI CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # ── Frontend — typecheck + production build ─────────────────────────────
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build:local
+
+  # ── Backend — targeted, hermetic suites ─────────────────────────────────
+  # These suites mock every external service (providers, OpenViking sidecar,
+  # swarm LLM calls) and rely on tests/conftest.py, which pins a throwaway
+  # SQLite DB, disables Mem0 warm-up, and forces deterministic OpenBot
+  # synthesis. Ollama/Chroma/Docker-dependent suites (executor, live media,
+  # deep-research e2e) are intentionally NOT run here.
+  backend-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Core test suites
+        run: >-
+          python -m pytest -v
+          tests/test_openviking_service.py
+          tests/test_swarm_manager.py
+          tests/test_yeta_provider.py
+          tests/test_token_harbor_provider.py
+          tests/test_infron_provider.py
+          tests/test_zro_provider.py
+          tests/test_experiential_provider.py
+          tests/test_custom_skill_service.py
+          tests/test_workspace_search.py
+          tests/test_capabilities_api.py
