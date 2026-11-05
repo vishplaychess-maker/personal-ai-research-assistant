@@ -84,6 +84,14 @@ def _build_provider(
     elif provider_name == "venice":
         from app.services.llm_providers.venice_provider import VeniceProvider
         return VeniceProvider(api_key=api_key, model=model)
+    elif provider_name == "yeta":
+        from app.services.llm_providers.yeta_provider import YetaProvider
+        return YetaProvider(api_key=api_key, model=model)
+    elif provider_name == "token_harbor":
+        from app.services.llm_providers.token_harbor_provider import (
+            TokenHarborProvider,
+        )
+        return TokenHarborProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -136,6 +144,8 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "together": "together ai",
             "mistral": "mistral",
             "venice": "venice.ai",
+            "yeta": "yeta ai",
+            "token_harbor": "token harbor",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:

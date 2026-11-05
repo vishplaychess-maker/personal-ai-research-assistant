@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
-    "groq", "grok", "together", "mistral", "cohere", "venice",
+    "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
+    "token_harbor",
 }
 
 PROVIDER_LABELS = {
@@ -60,6 +61,8 @@ PROVIDER_LABELS = {
     "mistral": "Mistral",
     "cohere": "Cohere",
     "venice": "Venice.ai",
+    "yeta": "Yeta AI",
+    "token_harbor": "Token Harbor",
 }
 
 PREFIXES = {
@@ -81,6 +84,13 @@ PREFIXES = {
     # Venice keys have no published fixed prefix, so only the live API can
     # judge validity; a prefix check would reject valid keys.
     "venice": "",
+    # Yeta keys are gateway-issued with no documented prefix either; the live
+    # /models call (health_check) is the only validity judge.
+    "yeta": "",
+    # Token Harbor keys are commonly "thk_live_…" but the format is a display
+    # convention in their 401 message, not a published contract; a prefix
+    # check could reject valid keys, so the live /models call judges validity.
+    "token_harbor": "",
 }
 
 

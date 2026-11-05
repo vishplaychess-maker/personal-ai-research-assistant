@@ -37,6 +37,8 @@ const PROVIDER_OPTIONS = [
   { value: "mistral", label: "Mistral" },
   { value: "cohere", label: "Cohere" },
   { value: "venice", label: "Venice.ai" },
+  { value: "yeta", label: "Yeta AI" },
+  { value: "token_harbor", label: "Token Harbor" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -309,6 +311,57 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                               >
                                 venice.ai/settings/api
                               </a>
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "yeta" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">https://platform.yeta.ai/v1</span>
+                            </p>
+                            <p className="mt-0.5">
+                              OpenAI-compatible gateway. Create an access token at{" "}
+                              <a
+                                href="https://platform.yeta.ai"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                platform.yeta.ai
+                              </a>{" "}
+                              — the model list loads live from <code>/models</code> once the
+                              key is saved.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "token_harbor" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">https://tokenharbor.ai/v1</span>
+                            </p>
+                            <p className="mt-0.5">
+                              Create a <code>thk_live_…</code> key from the dashboard at{" "}
+                              <a
+                                href="https://tokenharbor.ai"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                tokenharbor.ai
+                              </a>
+                              . Models whose ids end in <code>:free</code> draw on the
+                              standing free tier and never charge your balance; the full
+                              catalog loads from <code>/models</code> once the key is saved.
                             </p>
                           </div>
                         </div>

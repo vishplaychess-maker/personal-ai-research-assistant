@@ -692,7 +692,8 @@ class Settings(BaseSettings):
     # ── Model / LLM provider settings ───────────────────
     # Provider: "gemini" | "glm" | "ollama" | "openrouter" | "nvidia" |
     #           "huggingface" | "google" | "modelslab" | "groq" | "grok"
-    #           | "together" | "mistral" | "cohere" | "venice"
+    #           | "together" | "mistral" | "cohere" | "venice" | "yeta"
+    #           | "token_harbor"
     # Default is Gemini API (fast, generous free tier). Ollama remains a
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
@@ -794,6 +795,27 @@ class Settings(BaseSettings):
     venice_model: str = "llama-3.3-70b"
     venice_max_tokens: int = 2048
     venice_temperature: float = 0.7
+
+    # Yeta AI (platform.yeta.ai — OpenAI-compatible gateway, Bearer API key).
+    # Strictly optional: nothing is called unless a user adds a "yeta" provider
+    # row or sets LLM_PROVIDER=yeta. YETA_API_KEY is only a fallback for the
+    # key pasted in Settings → Providers.
+    yeta_api_key: str = ""
+    yeta_base_url: str = "https://platform.yeta.ai/v1"
+    yeta_model: str = "glm-5.3-flash"
+    yeta_max_tokens: int = 2048
+    yeta_temperature: float = 0.7
+
+    # Token Harbor (tokenharbor.ai — OpenAI-compatible gateway, Bearer key with
+    # a standing free tier on models whose ids end in ":free"). Strictly
+    # optional: nothing is called unless a user adds a "token_harbor" provider
+    # row or sets LLM_PROVIDER=token_harbor. TOKEN_HARBOR_API_KEY is a fallback
+    # for the key pasted in Settings → Providers.
+    token_harbor_api_key: str = ""
+    token_harbor_base_url: str = "https://tokenharbor.ai/v1"
+    token_harbor_default_model: str = "deepseek-v4.1-flash:free"
+    token_harbor_max_tokens: int = 2048
+    token_harbor_temperature: float = 0.7
 
     # Cohere (OpenAI-compatible API)
     cohere_api_key: str = ""
