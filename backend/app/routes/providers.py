@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
-    "token_harbor",
+    "token_harbor", "infron",
 }
 
 PROVIDER_LABELS = {
@@ -63,6 +63,7 @@ PROVIDER_LABELS = {
     "venice": "Venice.ai",
     "yeta": "Yeta AI",
     "token_harbor": "Token Harbor",
+    "infron": "Infron AI",
 }
 
 PREFIXES = {
@@ -91,6 +92,9 @@ PREFIXES = {
     # convention in their 401 message, not a published contract; a prefix
     # check could reject valid keys, so the live /models call judges validity.
     "token_harbor": "",
+    # Infron keys have no published fixed prefix; the live /models call
+    # (health_check) is the only validity judge.
+    "infron": "",
 }
 
 

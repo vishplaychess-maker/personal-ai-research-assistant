@@ -39,6 +39,7 @@ const PROVIDER_OPTIONS = [
   { value: "venice", label: "Venice.ai" },
   { value: "yeta", label: "Yeta AI" },
   { value: "token_harbor", label: "Token Harbor" },
+  { value: "infron", label: "Infron AI" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -362,6 +363,33 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                               . Models whose ids end in <code>:free</code> draw on the
                               standing free tier and never charge your balance; the full
                               catalog loads from <code>/models</code> once the key is saved.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "infron" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">https://api.infron.ai/v1</span>
+                            </p>
+                            <p className="mt-0.5">
+                              Create an API key from the dashboard at{" "}
+                              <a
+                                href="https://infron.ai"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                infron.ai
+                              </a>
+                              . Models whose ids end in <code>:free</code> (e.g.{" "}
+                              <code>qwen/qwen3.8-27b:free</code>) draw on the standing
+                              free tier; their catalog is public, so the model list
+                              loads even before a key is saved.
                             </p>
                           </div>
                         </div>

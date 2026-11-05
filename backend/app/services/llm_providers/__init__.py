@@ -92,6 +92,9 @@ def _build_provider(
             TokenHarborProvider,
         )
         return TokenHarborProvider(api_key=api_key, model=model)
+    elif provider_name == "infron":
+        from app.services.llm_providers.infron_provider import InfronProvider
+        return InfronProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -146,6 +149,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "venice": "venice.ai",
             "yeta": "yeta ai",
             "token_harbor": "token harbor",
+            "infron": "infron ai",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:
