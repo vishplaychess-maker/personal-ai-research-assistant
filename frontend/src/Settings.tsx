@@ -42,6 +42,7 @@ const PROVIDER_OPTIONS = [
   { value: "infron", label: "Infron AI" },
   { value: "zro", label: "Zro (MoonMath)" },
   { value: "experiential", label: "Experiential Labs" },
+  { value: "wusrouter", label: "WusRouter" },
   { value: "ollama", label: "Ollama" },
 ];
 
@@ -449,6 +450,36 @@ export function Settings({ onClose, sessions, activeSessionId }: SettingsProps) 
                               </a>
                               ; the org catalog loads from <code>/models</code> once
                               the key is saved.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {formProvider === "wusrouter" && (
+                        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                          <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p>
+                              Base URL:{" "}
+                              <span className="font-mono">
+                                https://api.wusrouter.com/v1
+                              </span>
+                            </p>
+                            <p className="mt-0.5">
+                              Free unified gateway with 70+ models (GLM, DeepSeek,
+                              Kimi) and standing free tiers. Create an API key from
+                              the dashboard at{" "}
+                              <a
+                                href="https://wusrouter.com"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                wusrouter.com
+                              </a>
+                              . Models whose ids end in <code>:free</code> never
+                              charge your balance; their catalog is public, so the
+                              model list loads even before a key is saved.
                             </p>
                           </div>
                         </div>

@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 KNOWN_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
-    "token_harbor", "infron", "zro", "experiential",
+    "token_harbor", "infron", "zro", "experiential", "wusrouter",
 }
 
 PROVIDER_LABELS = {
@@ -66,6 +66,7 @@ PROVIDER_LABELS = {
     "infron": "Infron AI",
     "zro": "Zro (MoonMath)",
     "experiential": "Experiential Labs",
+    "wusrouter": "WusRouter",
 }
 
 PREFIXES = {
@@ -103,6 +104,8 @@ PREFIXES = {
     # contract — but a prefix check stays off for consistency with the other
     # gateways; the live /models call (health_check) judges validity.
     "experiential": "",
+    # WusRouter keys have no published fixed prefix; same reasoning.
+    "wusrouter": "",
 }
 
 

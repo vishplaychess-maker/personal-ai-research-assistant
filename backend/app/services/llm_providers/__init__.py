@@ -103,6 +103,9 @@ def _build_provider(
             ExperientialProvider,
         )
         return ExperientialProvider(api_key=api_key, model=model)
+    elif provider_name == "wusrouter":
+        from app.services.llm_providers.wusrouter_provider import WusRouterProvider
+        return WusRouterProvider(api_key=api_key, model=model)
     elif provider_name == "cohere":
         from app.services.llm_providers.cohere_provider import CohereProvider
         return CohereProvider(api_key=api_key, model=model)
@@ -160,6 +163,7 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
             "infron": "infron ai",
             "zro": "zro",
             "experiential": "experiential labs",
+            "wusrouter": "wusrouter",
             "cohere": "cohere",
         }
         if alias_map.get(provider_name, provider_name) != expected:

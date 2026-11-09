@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 VALID_PROVIDERS = {
     "glm", "ollama", "openrouter", "nvidia", "huggingface", "google", "modelslab",
     "groq", "grok", "together", "mistral", "cohere", "venice", "yeta",
-    "token_harbor", "infron", "zro", "experiential",
+    "token_harbor", "infron", "zro", "experiential", "wusrouter",
 }
 
 

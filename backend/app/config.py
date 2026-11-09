@@ -713,6 +713,7 @@ class Settings(BaseSettings):
     #           "huggingface" | "google" | "modelslab" | "groq" | "grok"
     #           | "together" | "mistral" | "cohere" | "venice" | "yeta"
     #           | "token_harbor" | "infron" | "zro" | "experiential"
+    #           | "wusrouter"
     # Default is Gemini API (fast, generous free tier). Ollama remains a
     # fully supported local fallback (see the ollama_* keys below).
     llm_provider: str = "gemini"
@@ -876,6 +877,17 @@ class Settings(BaseSettings):
     experiential_default_model: str = "clef-flash"
     experiential_max_tokens: int = 2048
     experiential_temperature: float = 0.7
+
+    # WusRouter (api.wusrouter.com — free unified AI gateway, 70+ hosted and
+    # community models with standing :free tiers). Strictly optional: nothing
+    # is called unless a user adds a "wusrouter" provider row or sets
+    # LLM_PROVIDER=wusrouter. WUSROUTER_API_KEY is a fallback for the key
+    # pasted in Settings → Providers.
+    wusrouter_api_key: str = ""
+    wusrouter_base_url: str = "https://api.wusrouter.com/v1"
+    wusrouter_default_model: str = "glm-5.3-flash"
+    wusrouter_max_tokens: int = 2048
+    wusrouter_temperature: float = 0.7
 
     # Cohere (OpenAI-compatible API)
     cohere_api_key: str = ""
